@@ -1,9 +1,9 @@
 """The PDF builder writes exactly the structure it is told to write.
 
 The builder produces the inputs of most tests, so its own correctness is
-checked here against the bytes it writes. Two tests open the files with the
-engines, to show that the files are valid; the engines are never the source
-of an expected value.
+checked here against the bytes it writes. A few tests open the files with the
+engines, to show that the files are valid and that the encrypted ones need
+what they should; the engines are never the source of an expected value.
 """
 
 from __future__ import annotations

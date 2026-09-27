@@ -14,8 +14,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 HEADER = b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n"
-# Every page uses this font under the resource name /F1. It is one of the 14
-# standard fonts and is not embedded, so no font file is needed.
+# The default font of document(), which every page knows as /F1. It is one of
+# the 14 standard fonts and is not embedded, so no font file is needed.
 FONT = b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
 
 # Object numbers in a file made by document().
