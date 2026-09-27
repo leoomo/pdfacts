@@ -11,8 +11,6 @@ from collections.abc import Mapping
 from enum import StrEnum
 from types import MappingProxyType
 
-from pdfacts.core.errors import UnsupportedError
-
 
 class Capability(StrEnum):
     PAGE_GEOMETRY = "page-geometry"
@@ -43,7 +41,14 @@ def capabilities() -> Mapping[Capability, bool]:
     return _TABLE
 
 
-def require(capability: Capability) -> None:
-    """Raise UnsupportedError when `capability` is not available."""
-    if not _TABLE[capability]:
-        raise UnsupportedError(capability=capability)
+def require(capability: Capability | str) -> None:
+    """Raise UnsupportedError when `capability` is not available.
+
+    A name that is not a capability at all raises ValueError.
+    """
+    # Imported here: the errors module imports this one.
+    from pdfacts.core.errors import UnsupportedError
+
+    member = Capability(capability)
+    if not _TABLE[member]:
+        raise UnsupportedError(capability=member)

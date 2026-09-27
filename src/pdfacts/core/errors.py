@@ -7,20 +7,23 @@ them. MemoryError is never caught and never wrapped.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-if TYPE_CHECKING:
-    from pdfacts.core.capabilities import Capability
-    from pdfacts.core.values import Unknown
+from pdfacts.core.capabilities import Capability
+from pdfacts.core.values import Unknown
 
 # PDFium accepts up to 1024 bytes before "%PDF-", and refuses 1025 (measured);
 # the header is looked for in the first 1024 + len(b"%PDF-") bytes.
 HEADER_SEARCH_BYTES = 1029
 
 
-def _rebuild(cls: type[PdfactsError], message: str, fields: dict[str, Any]) -> PdfactsError:
+def _with_detail(text: str, detail: str) -> str:
+    return f"{text}: {detail}" if detail else text
+
+
+def _rebuild(cls: type[PdfactsError], message: str) -> PdfactsError:
     error = cls.__new__(cls)
-    PdfactsError.__init__(error, message, **fields)
+    Exception.__init__(error, message)
     return error
 
 
@@ -29,14 +32,14 @@ class PdfactsError(Exception):
 
     def __init__(self, message: str, **fields: Any) -> None:
         super().__init__(message)
-        self._fields = fields
         for name, value in fields.items():
             setattr(self, name, value)
 
     def __reduce__(self) -> tuple[Any, ...]:
         # The attributes are keyword-only, which the default pickling cannot
-        # pass back; errors have to cross process boundaries intact.
-        return (_rebuild, (type(self), str(self), self._fields))
+        # pass back to __init__. The message is passed, and every attribute,
+        # including notes added with add_note(), travels as state.
+        return (_rebuild, (type(self), str(self)), dict(vars(self)))
 
 
 class InputError(PdfactsError):
@@ -59,7 +62,9 @@ class DamagedFileError(InputError):
     detail: str
 
     def __init__(self, *, detail: str) -> None:
-        super().__init__(f"the file has a PDF header but cannot be read: {detail}", detail=detail)
+        super().__init__(
+            _with_detail("the file has a PDF header but cannot be read", detail), detail=detail
+        )
 
 
 class PasswordRequiredError(PdfactsError):
@@ -75,6 +80,9 @@ class LimitError(PdfactsError):
 
     limit: str
     allowed: int | float
+
+    def __init__(self, message: str, *, limit: str, allowed: int | float, **fields: Any) -> None:
+        super().__init__(message, limit=limit, allowed=allowed, **fields)
 
 
 class LimitExceededError(LimitError):
@@ -95,10 +103,11 @@ class LimitUncheckedError(LimitError):
     reason: Unknown
 
     def __init__(self, *, limit: str, allowed: int | float, reason: Unknown) -> None:
-        detail = f": {reason.detail}" if reason.detail else ""
+        if not isinstance(reason, Unknown):
+            raise TypeError(f"reason must be an Unknown, not {type(reason).__name__}")
         super().__init__(
-            f"limit {limit} ({allowed} allowed) could not be checked, "
-            f"the value is unknown ({reason.reason.value}{detail})",
+            f"limit {limit} ({allowed} allowed) could not be checked: "
+            + _with_detail(f"the value is unknown ({reason.reason})", reason.detail),
             limit=limit,
             allowed=allowed,
             reason=reason,
@@ -109,17 +118,16 @@ class RecoveryFailedError(PdfactsError):
     detail: str
 
     def __init__(self, *, detail: str) -> None:
-        super().__init__(f"the file could not be recovered: {detail}", detail=detail)
+        super().__init__(_with_detail("the file could not be recovered", detail), detail=detail)
 
 
 class UnsupportedError(PdfactsError):
     capability: Capability
 
-    def __init__(self, *, capability: Capability) -> None:
-        super().__init__(
-            f"this version of pdfacts does not support {capability.value}",
-            capability=capability,
-        )
+    def __init__(self, *, capability: Capability | str) -> None:
+        # Capability(...) accepts a member or its value and rejects anything else.
+        member = Capability(capability)
+        super().__init__(f"this version of pdfacts does not support {member}", capability=member)
 
 
 class ClosedError(PdfactsError):
@@ -141,4 +149,4 @@ class EngineError(PdfactsError):
     detail: str
 
     def __init__(self, *, engine: str, detail: str) -> None:
-        super().__init__(f"{engine} failed: {detail}", engine=engine, detail=detail)
+        super().__init__(_with_detail(f"{engine} failed", detail), engine=engine, detail=detail)

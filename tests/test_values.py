@@ -51,6 +51,18 @@ def test_an_unknown_value_is_not_absent():
     assert value != None  # noqa: E711 - the comparison itself is under test
 
 
+def test_the_reason_can_be_given_by_its_value_and_nothing_else():
+    assert Unknown("unreadable").reason is UnknownReason.UNREADABLE
+    for bad in ("garbage", None, 3):
+        with pytest.raises(ValueError):
+            Unknown(bad)  # type: ignore[arg-type]
+
+
+def test_the_detail_has_to_be_text():
+    with pytest.raises(TypeError):
+        Unknown(UnknownReason.UNREADABLE, None)  # type: ignore[arg-type]
+
+
 def test_the_detail_is_optional_and_empty_by_default():
     assert Unknown(UnknownReason.UNREADABLE).detail == ""
 

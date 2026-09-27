@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pickle
+import typing
 
 import pytest
 
@@ -120,11 +121,50 @@ def test_the_password_message_says_whether_a_password_was_given():
     assert "needed" in str(PasswordRequiredError(password_was_given=False))
 
 
-def test_the_attributes_are_keyword_only():
+@pytest.mark.parametrize(
+    ("error", "attributes"),
+    [(error, attributes) for error, attributes in INSTANCES if attributes],
+    ids=lambda e: type(e).__name__,
+)
+def test_the_attributes_are_keyword_only(error, attributes):
     with pytest.raises(TypeError):
-        DamagedFileError("no cross-reference table")  # type: ignore[misc]
+        type(error)(*attributes.values())
+
+
+def test_a_limit_error_needs_its_limit_and_allowed_value():
     with pytest.raises(TypeError):
-        LimitExceededError("max_pages", 30, 31)  # type: ignore[misc]
+        LimitError("a limit was hit")  # type: ignore[call-arg]
+    error = LimitError("a limit was hit", limit="max_pages", allowed=3)
+    assert (error.limit, error.allowed) == ("max_pages", 3)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        DamagedFileError(detail=""),
+        RecoveryFailedError(detail=""),
+        EngineError(engine="qpdf", detail=""),
+    ],
+    ids=lambda e: type(e).__name__,
+)
+def test_an_empty_detail_leaves_no_dangling_colon(error):
+    assert not str(error).rstrip().endswith(":")
+
+
+def test_a_capability_can_be_given_by_its_value_and_nothing_else():
+    assert UnsupportedError(capability="rendering").capability is Capability.RENDERING
+    with pytest.raises(ValueError):
+        UnsupportedError(capability="bogus")
+
+
+def test_the_reason_of_an_unchecked_limit_has_to_be_an_unknown_value():
+    with pytest.raises(TypeError):
+        LimitUncheckedError(limit="max_objects", allowed=10, reason="unreadable")  # type: ignore[arg-type]
+
+
+def test_the_annotations_of_the_errors_resolve():
+    for error, _ in HIERARCHY:
+        typing.get_type_hints(error)
 
 
 @pytest.mark.parametrize(("error", "attributes"), INSTANCES, ids=lambda e: type(e).__name__)
@@ -135,6 +175,31 @@ def test_every_error_survives_pickling(error, attributes):
     assert str(copy) == str(error)
     for name, value in attributes.items():
         assert getattr(copy, name) == value
+
+
+def test_notes_and_extra_attributes_survive_pickling():
+    error = DamagedFileError(detail="no cross-reference table")
+    error.add_note("page 3 was being read")
+    error.file_name = "form.pdf"
+    copy = pickle.loads(pickle.dumps(error))
+    assert copy.__notes__ == ["page 3 was being read"]
+    assert copy.file_name == "form.pdf"
+    assert copy.detail == "no cross-reference table"
+
+
+def test_a_subclass_of_a_later_change_survives_pickling():
+    copy = pickle.loads(pickle.dumps(_LaterError()))
+    assert type(copy) is _LaterError
+    assert str(copy) == "a later error"
+    assert copy.extra == 1
+
+
+class _LaterError(InputError):
+    """Stands for an error a later change adds: no fields, one attribute set directly."""
+
+    def __init__(self) -> None:
+        Exception.__init__(self, "a later error")
+        self.extra = 1
 
 
 def test_every_error_is_exported():
