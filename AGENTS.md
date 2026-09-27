@@ -30,6 +30,13 @@ uv run python tools/check_architecture.py
 uv build
 ```
 
+All of these, plus a test of the built wheel, in one run and on three
+platforms:
+
+```bash
+python3 tools/checks.py --all
+```
+
 Dependencies are managed with uv only. Python 3.13 or newer.
 
 ## Rules
@@ -100,6 +107,18 @@ passed only when it was run and the result was recorded.
 
 One issue, one branch, one pull request. A pull request is merged when the
 checks pass and a second agent has reviewed it.
+
+"The checks" are `tools/checks.py`; there is no hosted continuous
+integration, so nothing checks `main` after a merge. Before the final run:
+
+1. `git fetch`, then bring the current `main` into the branch.
+2. Commit everything.
+3. Run `python3 tools/checks.py --all`.
+
+Put its output into the pull request: the line that names the commit, which
+has to say "working tree clean" and "contains origin/main as last fetched",
+and the summary of each platform. A result for a commit other than the one
+that is merged does not count.
 
 Pull requests that touch one of the following are merged by the maintainer,
 not by an agent:
