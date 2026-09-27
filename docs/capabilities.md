@@ -90,11 +90,26 @@ glyphs). These are findings about the engines, not features of pdfacts.
 
 ## Corpus
 
-`bench/corpus/manifest.csv` lists 104 forms with size and SHA-256. 91 have a
-source address. The files themselves are not part of the repository.
+`bench/corpus/manifest.csv` lists 104 forms with size and SHA-256. The files
+themselves are not part of the repository.
 
 | Check | Result on 2026-09-27 |
 | --- | --- |
 | all 104 local files match the manifest | yes |
-| download of four entries (09, 20, 60, 95) | all four matched the manifest |
-| download of the remaining 87 entries with a source | not run |
+| every source downloaded and compared with the manifest | 98 served exactly the listed bytes |
+| sources that serve other bytes now | 5: entries 35, 61, 70, 71, 77b |
+| entries without any published source | 1: entry 01; the local file is a re-saved copy of the published form and differs from it in size and hash |
+
+Notes on the sources
+
+| Observation | Entries |
+| --- | --- |
+| the address needs its query string; without it the host answers with a web page | 07, 35 to 43, 70, 78, 97 |
+| the host that serves the listed bytes is not the publisher of the form | 03b, 11 |
+| the edition printed on the form is several years old | 03b (November 2019), 11 (January 2018) |
+| one host answered with status 429 when asked every 1.5 seconds and served every file when asked every 15 seconds | entries on `berlin.de` |
+
+A corpus that depends on addresses stays reproducible only as long as the
+publishers keep the files. Five entries were lost that way between collection
+and this check. The durable copy of the corpus is kept privately by the
+maintainer.
