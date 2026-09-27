@@ -58,8 +58,8 @@ def stream(data: bytes, entries: bytes = b"") -> bytes:
 @dataclass(frozen=True)
 class PageSpec:
     # Written into the page dictionary as they are, for example
-    # b"/MediaBox [0 0 400 300] /Rotate 90".
-    entries: bytes = b"/MediaBox [0 0 400 300]"
+    # b"/MediaBox [0 0 400 300] /Rotate 90". Nothing is added.
+    entries: bytes
     content: bytes = b""
 
 
@@ -68,11 +68,19 @@ def page_object(index: int) -> int:
     return FIRST_PAGE + 2 * index
 
 
-def document(pages: Sequence[PageSpec], *, pages_entries: bytes = b"") -> bytes:
-    """A file with the given pages; `pages_entries` go into the page tree node."""
+def size_of_document(page_count: int) -> int:
+    """The /Size of a file made by document(): its highest object number plus 1."""
+    return page_object(page_count - 1) + 2 if page_count else FIRST_PAGE
+
+
+def document(pages: Sequence[PageSpec], *, pages_entries: bytes = b"", font: bytes = FONT) -> bytes:
+    """A file with the given pages; `pages_entries` go into the page tree node.
+
+    `font` is the dictionary of the font that every page knows as /F1.
+    """
     objects = {
         CATALOG: b"<< /Type /Catalog /Pages %d 0 R >>" % PAGE_TREE,
-        FONT_OBJECT: FONT,
+        FONT_OBJECT: font,
     }
     kids = []
     for index, page in enumerate(pages):
