@@ -105,8 +105,8 @@ passed only when it was run and the result was recorded.
 
 ## Workflow
 
-One issue, one branch, one pull request. A pull request is merged when the
-checks pass and a second agent has reviewed it.
+One issue, one branch, one pull request. When a pull request may be merged,
+and by whom, is set out at the end of this section.
 
 "The checks" are `tools/checks.py`; there is no hosted continuous
 integration, so nothing checks `main` after a merge. Before the final run:
@@ -120,27 +120,34 @@ has to say "working tree clean" and "contains origin/main as last fetched",
 and the summary of each platform. A result for a commit other than the one
 that is merged does not count.
 
-Pull requests that touch one of the following are merged by the maintainer,
-not by an agent:
+The agent that owns the work decides whether to merge, as a senior architect
+would; the maintainer delegated this on 2026-09-28 and can take it back at any
+time. A pull request is merged only when all of these hold:
+
+| Condition | Meaning |
+| --- | --- |
+| checks | the final `--all` run above passed |
+| review | a second agent reviewed the pull request and found nothing blocking; what it found is answered in the description |
+| description | the pull request states what was run and where it differs from its issue |
+| changelog | a change to the public interface or to a convention has an entry in [CHANGELOG.md](CHANGELOG.md) |
+
+These areas get the review's particular attention, because a mistake there is
+expensive to undo:
 
 | Area | Examples |
 | --- | --- |
 | public interface | anything exported from `pdfacts`, fact structures, error types |
 | conventions | `docs/conventions.md`, `docs/architecture.md`, `ROADMAP.md` |
-| dependency versions | `pyproject.toml`, `uv.lock` |
+| dependency versions | `pyproject.toml`, `uv.lock`; an engine upgrade is a pull request of its own |
 | architecture check | `tools/check_architecture.py` and its tests |
 
-One exception, granted by the maintainer on 2026-09-27: a pull request may be
-merged by an agent when both of the following hold.
+One kind of change still needs the maintainer's consent before the merge: a
+change to an existing convention in `docs/conventions.md` (decision of
+2026-09-27, stated at the top of that document). Ask before merging, and
+record the answer in the pull request. Adding a convention that an issue
+already specifies is not such a change.
 
-| Condition | Meaning |
-| --- | --- |
-| it changes documents only | no file under `src/`, `tests/`, `tools/` or `bench/`, and neither `pyproject.toml` nor `uv.lock` |
-| it records a decision | every change writes down something the maintainer has explicitly decided; the pull request names the decision |
-
-The agent tells the maintainer after the merge. A document change that
-contains a proposal of the agent's own is not covered and waits for the
-maintainer.
+Merge with a merge commit, not a squash. Tell the maintainer after each merge.
 
 Until version 1.0 the interface may change in ways that break callers. Every
 such change, and every change to a convention, gets an entry in
