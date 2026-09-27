@@ -34,6 +34,9 @@ QPDF 12.4.1.
 
 Not run: Windows, musl-based Linux, native x86_64 hardware.
 
+The minimum Python version was raised to 3.13 after this run. The 3.11 row is
+kept as a record of what was run.
+
 ## What the engines provide
 
 Measured before the first implementation, on 109 files (104 official German
@@ -82,6 +85,8 @@ glyphs). These are findings about the engines, not features of pdfacts.
 | Paths and widgets | identical on macOS arm64, Linux arm64 and Linux x86_64 for all 104 forms |
 | Glyphs with host fonts in use | different for the 28 forms that contain fonts which are not embedded |
 | Glyphs with host fonts ignored | identical for all 104 forms, compared at 0.001 pt |
+| Unrounded values, Linux arm64 against Linux x86_64 | glyph, path and widget digests identical for all 104 forms |
+| Unrounded values, macOS against Linux | paths and widgets identical for all 104 forms; glyphs not measured with host fonts ignored |
 
 ## Corpus
 

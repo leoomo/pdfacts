@@ -3,7 +3,7 @@ name = "pdfacts"
 version = "0.0.1"
 description = "Structured, verifiable facts from PDF files: text, paths, images, annotations and forms with explicit geometry."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 # Engine versions are pinned exactly: extracted facts depend on the engine
 # build, so an engine upgrade is a reviewed change, never a side effect.
 dependencies = [
@@ -15,8 +15,6 @@ classifiers = [
     "Private :: Do Not Upload",
     "Development Status :: 1 - Planning",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Typing :: Typed",
 ]
@@ -35,7 +33,7 @@ build-backend = "hatchling.build"
 packages = ["src/pdfacts"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src", "tests", "tools", "docs", "README.md", "ROADMAP.md", "THIRD_PARTY.md"]
+include = ["src", "tests", "tools", "docs", "README.md", "ROADMAP.md", "THIRD_PARTY.md", "CHANGELOG.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -43,7 +41,7 @@ addopts = "-ra"
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py313"
 src = ["src", "tests", "tools", "bench"]
 
 [tool.ruff.lint]
