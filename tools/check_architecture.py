@@ -1,13 +1,17 @@
-"""Import-boundary check for the pdfacts source tree.
+"""Import-boundary check for the pdfacts repository.
 
 Rules:
   engine-boundary  pypdfium2 only in backends/pdfium.py, pikepdf only in
                    backends/qpdf.py
-  forbidden        MuPDF bindings are never imported by the library
+  forbidden        MuPDF bindings are never imported by the library, its
+                   tests or its tools; bench/ is not checked
   core-isolation   pdfacts.core does not import feature packages
 
+The library is SOURCE_ROOT/pdfacts; tests/ and tools/ are next to SOURCE_ROOT.
+
 Usage: python tools/check_architecture.py [SOURCE_ROOT]
-Exit status is 1 when a rule is violated.
+Exit status is 1 when a rule is violated, 2 when a directory to check is
+missing.
 """
 
 from __future__ import annotations
@@ -100,15 +104,44 @@ def find_violations(source_root: Path) -> list[Violation]:
     return violations
 
 
+def find_forbidden(root: Path, directories: tuple[str, ...]) -> list[Violation]:
+    """Imports of MuPDF bindings in the given directories below `root`.
+
+    Paths in the result are relative to `root`. A directory that does not
+    exist raises FileNotFoundError: a check that looked at nothing must not
+    pass.
+    """
+    violations: list[Violation] = []
+    for directory in directories:
+        base = root / directory
+        if not base.is_dir():
+            raise FileNotFoundError(f"no directory {base}")
+        for path in sorted(base.rglob("*.py")):
+            relative = path.relative_to(root).as_posix()
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            seen: set[tuple[int, str]] = set()
+            for line, module in _imports(tree, ()):
+                top = module.split(".")[0]
+                if top in FORBIDDEN and (line, top) not in seen:
+                    seen.add((line, top))
+                    violations.append(Violation("forbidden", relative, line, top))
+    return violations
+
+
 def main(argv: list[str]) -> int:
     root = Path(argv[1]) if len(argv) > 1 else Path(__file__).resolve().parent.parent / "src"
     if not (root / "pdfacts").is_dir():
         print(f"no pdfacts package under {root}", file=sys.stderr)
         return 2
-    violations = find_violations(root)
+    repository = root.parent
+    try:
+        violations = find_violations(root) + find_forbidden(repository, ("tests", "tools"))
+    except FileNotFoundError as error:
+        print(error, file=sys.stderr)
+        return 2
     for violation in violations:
         print(violation)
-    print(f"{len(violations)} violation(s) in {root}")
+    print(f"{len(violations)} violation(s) in {root}, and in tests/ and tools/ of {repository}")
     return 1 if violations else 0
 
 
