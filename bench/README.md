@@ -12,13 +12,41 @@ files are fetched from their sources and are never committed.
 uv run python bench/corpus/fetch.py                 # verify what is present, fetch the rest
 uv run python bench/corpus/fetch.py --verify-only   # no network access
 uv run python bench/corpus/fetch.py --from DIR      # copy matching files from a local folder
+uv run python bench/corpus/fetch.py --check-sources # download every verified source and compare; writes nothing
 ```
 
-13 entries have no source address yet. They can only be supplied with `--from`.
+The manifest states for every entry what is known about its source:
+
+| `source_state` | Meaning | Entries on 2026-09-27 |
+| --- | --- | --- |
+| `verified` | the source served exactly the listed bytes on the date in `source_checked` | 98 |
+| `changed` | the publisher serves other bytes now | 5 |
+| `local-only` | no published file has these bytes | 1 |
+
+Only a verified source is downloaded. The six other entries can only be
+supplied with `--from`.
 
 A form that was revised by its publisher is reported as `changed` and kept
 next to the expected name with the suffix `.changed`. It is never accepted in
-place of the listed file.
+place of the listed file. When the revised form is wanted in the corpus, it is
+added as a new entry; the old entry stays.
+
+### How the script behaves towards the hosts
+
+Some publishers state conditions for automated clients. The script keeps them
+for every host:
+
+| Behaviour | Detail |
+| --- | --- |
+| it names itself | the `User-Agent` header starts with `pdfacts-corpus-fetch` |
+| it reads `robots.txt` first | an address that the host disallows is not fetched |
+| `robots.txt` cannot be read | nothing is fetched from that host; a missing file (status 404) means the host has no rules |
+| spacing | three seconds between two requests to one host, or the crawl delay the host states, whichever is longer |
+| status 429 | it waits 20 seconds and tries again, then 60 seconds, then reports the failure; a longer wait asked for by the host is kept, up to 120 seconds; the slower pace stays for the rest of the run |
+
+A run over all sources sends 132 requests to 34 hosts. Do not repeat it
+several times a day: one host answered with status 429 after three such runs
+on 2026-09-27.
 
 ## Referees
 
