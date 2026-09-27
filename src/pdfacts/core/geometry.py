@@ -18,8 +18,18 @@ from pdfacts.core.values import Unknown
 ROTATIONS = (0, 90, 180, 270)
 
 
+def _is_number(value: object) -> bool:
+    # bool is an int in Python; a flag is not a coordinate.
+    return isinstance(value, int | float) and not isinstance(value, bool)
+
+
 def _coordinate(value: float, name: str) -> float:
-    number = float(value)
+    if not _is_number(value):
+        raise TypeError(f"{name} must be a number, not {type(value).__name__}")
+    try:
+        number = float(value)
+    except OverflowError:
+        raise ValueError(f"{name} is too large to be a coordinate") from None
     if not math.isfinite(number):
         raise ValueError(f"{name} must be finite, not {number}")
     return number + 0.0  # turns -0.0 into 0.0
@@ -102,8 +112,10 @@ class Matrix:
 
     def inverse(self) -> Matrix:
         determinant = self.a * self.d - self.b * self.c
-        if determinant == 0:
-            raise ValueError(f"{self} has no inverse: its determinant is 0")
+        if determinant == 0 or not math.isfinite(determinant):
+            raise ValueError(
+                f"{self} has no inverse that can be computed: determinant {determinant}"
+            )
         return Matrix(
             self.d / determinant,
             -self.b / determinant,
@@ -114,7 +126,7 @@ class Matrix:
         )
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class PageGeometry:
     """Where a page is visible, how it is turned, and the transforms to show it."""
 
@@ -127,11 +139,21 @@ class PageGeometry:
     user_unit: float | Unknown
 
     def __post_init__(self) -> None:
+        if not isinstance(self.index, int) or isinstance(self.index, bool):
+            raise TypeError(f"index must be an int, not {type(self.index).__name__}")
         if self.index < 0:
             raise ValueError(f"a page index starts at 0, not {self.index}")
+        if not isinstance(self.visible_box, Rect):
+            raise TypeError(f"visible_box must be a Rect, not {type(self.visible_box).__name__}")
+        if not isinstance(self.rotation, int) or isinstance(self.rotation, bool):
+            raise TypeError(f"rotation must be an int, not {type(self.rotation).__name__}")
         if self.rotation not in ROTATIONS:
             raise ValueError(f"rotation must be one of {ROTATIONS}, not {self.rotation}")
         if not isinstance(self.user_unit, Unknown):
+            if not _is_number(self.user_unit):
+                raise TypeError(
+                    f"user_unit must be a number or Unknown, not {type(self.user_unit).__name__}"
+                )
             value = float(self.user_unit)
             if not (math.isfinite(value) and value > 0):
                 raise ValueError(f"user_unit must be a positive number, not {value}")

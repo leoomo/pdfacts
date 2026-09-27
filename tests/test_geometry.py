@@ -1,10 +1,12 @@
 """Geometry types and the transform between user space and display space.
 
 The expected numbers are typed in as literals: hand-computed values, and the
-positions where PDFium and an independent renderer drew a rectangle on
-constructed pages. They are never computed by the code under test, and never
-by applying a matrix and its inverse to each other: two mistakes of the same
-kind would cancel out in a round trip.
+positions where a rectangle on constructed pages was drawn. Each position was
+measured with PDFium 153.0.7999.0 and with macOS Quick Look (PDFKit), a
+renderer independent of both engines; the two agreed within 0.1 pt. The
+numbers are never computed by the code under test, and never by applying a
+matrix and its inverse to each other: two mistakes of the same kind would
+cancel out in a round trip.
 
 The page of the measurements has the visible box (0, 0, 400, 300) and one
 filled rectangle at (50, 40, 110, 60) in user space.
@@ -90,6 +92,14 @@ def test_then_applies_the_first_matrix_first():
     assert double.then(move).apply(Point(1, 1)) == Point(7, 2)
 
 
+def test_then_composes_two_full_matrices():
+    # Hand-computed: a = 7*1 + 9*2, b = 8*1 + 10*2, c = 7*3 + 9*4, d = 8*3 + 10*4,
+    # e = 7*5 + 9*6 + 11, f = 8*5 + 10*6 + 12.
+    assert Matrix(1, 2, 3, 4, 5, 6).then(Matrix(7, 8, 9, 10, 11, 12)) == Matrix(
+        25, 28, 57, 64, 100, 112
+    )
+
+
 def test_apply_rect_gives_the_bounding_box_of_the_four_corners():
     turn = Matrix(0, 1, -1, 0, 0, 0)  # 90 degrees counterclockwise about the origin
     assert corners(turn.apply_rect(Rect(1, 2, 3, 5))) == (-5, 1, -2, 3)
@@ -104,6 +114,44 @@ def test_the_inverse_of_a_matrix():
 def test_a_singular_matrix_has_no_inverse():
     with pytest.raises(ValueError):
         Matrix(1, 2, 2, 4, 0, 0).inverse()
+
+
+def test_an_inverse_whose_determinant_overflows_is_refused():
+    # 1e200 squared is inf; dividing by it would give a zero matrix.
+    with pytest.raises(ValueError):
+        Matrix(1e200, 0, 0, 1e200, 0, 0).inverse()
+
+
+def test_a_number_too_large_for_a_float_is_refused():
+    with pytest.raises(ValueError):
+        Point(10**400, 0)
+
+
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda: Point("1", 2),
+        lambda: Point(True, 0),
+        lambda: Rect(0, 0, "400", 300),
+        lambda: Matrix(1, 0, 0, 1, None, 0),
+        lambda: page(user_unit="2"),
+        lambda: page(user_unit=True),
+        lambda: page(rotation=90.0),
+        lambda: page(rotation=False),
+        lambda: PageGeometry(index=0.5, visible_box=Rect(0, 0, 1, 1), rotation=0, user_unit=1.0),
+        lambda: PageGeometry(index=True, visible_box=Rect(0, 0, 1, 1), rotation=0, user_unit=1.0),
+        lambda: PageGeometry(index=0, visible_box=(0, 0, 400, 300), rotation=0, user_unit=1.0),
+    ],
+)
+def test_a_value_of_the_wrong_type_is_refused(make):
+    # A reader has to turn text or a flag from a file into Unknown itself.
+    with pytest.raises(TypeError):
+        make()
+
+
+def test_a_page_geometry_takes_keywords_only():
+    with pytest.raises(TypeError):
+        PageGeometry(0, Rect(0, 0, 1, 1), 0, 1.0)  # type: ignore[misc]
 
 
 # PageGeometry: the measured positions
@@ -126,7 +174,12 @@ def test_each_rotation_puts_the_rectangle_where_it_was_drawn(rotation, size, on_
 
 @pytest.mark.parametrize(
     ("rotation", "size", "on_display"),
-    [(0, (360, 280), (30, 30, 90, 50)), (90, (280, 360), (30, 270, 50, 330))],
+    [
+        (0, (360, 280), (30, 30, 90, 50)),
+        (90, (280, 360), (30, 270, 50, 330)),
+        (180, (360, 280), (270, 230, 330, 250)),
+        (270, (280, 360), (230, 30, 250, 90)),
+    ],
 )
 def test_a_crop_box_moves_the_origin_to_its_corner(rotation, size, on_display):
     geometry = page(box=(20, 10, 380, 290), rotation=rotation)
@@ -163,6 +216,8 @@ def test_an_unknown_user_unit_is_kept_and_the_transforms_still_work():
         ((0, 0, 400, 300), 270, (240, 50, 260, 110)),
         ((20, 10, 380, 290), 0, (30, 30, 90, 50)),
         ((20, 10, 380, 290), 90, (30, 270, 50, 330)),
+        ((20, 10, 380, 290), 180, (270, 230, 330, 250)),
+        ((20, 10, 380, 290), 270, (230, 30, 250, 90)),
         ((30, 20, 430, 320), 0, (20, 20, 80, 40)),
     ],
 )
@@ -171,12 +226,23 @@ def test_to_user_brings_each_measured_rectangle_back(box, rotation, on_display):
     assert corners(geometry.to_user.apply_rect(Rect(*on_display))) == (50, 40, 110, 60)
 
 
+# Hand-computed for the box (20.25, 10.5, 380.75, 290.125): to_display and to_user.
+EXACT = {
+    0: (Matrix(1, 0, 0, 1, -20.25, -10.5), Matrix(1, 0, 0, 1, 20.25, 10.5)),
+    90: (Matrix(0, -1, 1, 0, -10.5, 380.75), Matrix(0, 1, -1, 0, 380.75, 10.5)),
+    180: (Matrix(-1, 0, 0, -1, 380.75, 290.125), Matrix(-1, 0, 0, -1, 380.75, 290.125)),
+    270: (Matrix(0, 1, -1, 0, 290.125, -20.25), Matrix(0, -1, 1, 0, 20.25, 290.125)),
+}
+
+
 @pytest.mark.parametrize("rotation", [0, 90, 180, 270])
-def test_the_transforms_carry_no_rounding_from_trigonometry(rotation):
+def test_the_transforms_are_exact_and_carry_no_rounding(rotation):
     geometry = page(box=(20.25, 10.5, 380.75, 290.125), rotation=rotation)
+    assert (geometry.to_display, geometry.to_user) == EXACT[rotation]
     for matrix in (geometry.to_display, geometry.to_user):
-        for element in (matrix.a, matrix.b, matrix.c, matrix.d):
-            assert element in (0.0, 1.0, -1.0), (rotation, matrix)
+        for element in (matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f):
+            # == cannot tell 0.0 from -0.0; the sign can.
+            assert element != 0 or math.copysign(1, element) == 1, (rotation, matrix)
 
 
 @pytest.mark.parametrize("rotation", [45, 360, -90, 91])
