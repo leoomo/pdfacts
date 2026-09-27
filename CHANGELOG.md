@@ -6,6 +6,15 @@ may break callers.
 
 ## Unreleased
 
+### Added
+
+- Error types: `PdfactsError` and its subclasses, listed under "Errors" in
+  `docs/conventions.md`.
+- `Unknown` and `UnknownReason` for values that could not be determined.
+- The capability table: `Capability`, `capabilities()`, `require()`. No
+  capability is available yet; each becomes available with the change that
+  implements it.
+
 ### Changed
 
 - The minimum Python version is 3.13. It was 3.11.
