@@ -23,16 +23,21 @@ def _is_number(value: object) -> bool:
     return isinstance(value, int | float) and not isinstance(value, bool)
 
 
-def _coordinate(value: float, name: str) -> float:
+def _finite_float(value: float, name: str) -> float:
+    """An int or float as a finite float; TypeError or ValueError otherwise."""
     if not _is_number(value):
-        raise TypeError(f"{name} must be a number, not {type(value).__name__}")
+        raise TypeError(f"{name} must be an int or a float, not {type(value).__name__}")
     try:
         number = float(value)
     except OverflowError:
-        raise ValueError(f"{name} is too large to be a coordinate") from None
+        raise ValueError(f"{name} is too large for a float") from None
     if not math.isfinite(number):
         raise ValueError(f"{name} must be finite, not {number}")
     return number + 0.0  # turns -0.0 into 0.0
+
+
+def _coordinate(value: float, name: str) -> float:
+    return _finite_float(value, name)
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,11 +157,12 @@ class PageGeometry:
         if not isinstance(self.user_unit, Unknown):
             if not _is_number(self.user_unit):
                 raise TypeError(
-                    f"user_unit must be a number or Unknown, not {type(self.user_unit).__name__}"
+                    "user_unit must be an int, a float or Unknown, "
+                    f"not {type(self.user_unit).__name__}"
                 )
-            value = float(self.user_unit)
-            if not (math.isfinite(value) and value > 0):
-                raise ValueError(f"user_unit must be a positive number, not {value}")
+            value = _finite_float(self.user_unit, "user_unit")
+            if value <= 0:
+                raise ValueError(f"user_unit must be greater than 0, not {value}")
             object.__setattr__(self, "user_unit", value)
 
     @property
