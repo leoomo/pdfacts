@@ -7,7 +7,7 @@ ends in exactly one state:
   changed        the source now serves different bytes; kept as NAME.changed
   no-source      the manifest has no verified source for it and it is not
                  present locally
-  failed         the download failed
+  failed         the download failed or was not allowed
 
 The manifest records for every entry what is known about its source:
 
@@ -18,6 +18,15 @@ The manifest records for every entry what is known about its source:
 
 Official forms are revised regularly, so `changed` is expected over time. It
 is reported, never silently accepted.
+
+How the script behaves towards the hosts:
+
+  - it names itself in the User-Agent header
+  - it reads robots.txt of every host first and fetches nothing that the
+    host disallows; when robots.txt cannot be read, nothing is fetched from
+    that host
+  - requests to one host are spaced; a crawl delay stated by the host is kept
+  - after status 429 it waits and tries again, twice at most
 
 Usage:
   python bench/corpus/fetch.py                  verify what is present, fetch the rest
@@ -38,6 +47,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import urllib.robotparser
 from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlparse
@@ -45,15 +55,24 @@ from urllib.parse import urlparse
 HERE = Path(__file__).resolve().parent
 MANIFEST = HERE / "manifest.csv"
 FILES = HERE / "files"
-# Several publishers ask automated clients to identify themselves.
-USER_AGENT = "pdfacts-corpus-fetch/0.2 (checks published forms against recorded hashes)"
+# Several publishers require automated clients to identify themselves.
+ROBOTS_AGENT = "pdfacts-corpus-fetch"
+USER_AGENT = f"{ROBOTS_AGENT}/0.3 (checks published forms against recorded hashes)"
 TIMEOUT_SECONDS = 90
 MAX_BYTES = 50 * 1024 * 1024
 HOST_PAUSE_SECONDS = 3.0
-HOST_PAUSE_AFTER_LIMIT_SECONDS = 20.0
+RETRY_PAUSES_SECONDS = (20.0, 60.0)
+MAX_RETRY_AFTER_SECONDS = 120.0
 HTTP_TOO_MANY_REQUESTS = 429
 
 SOURCE_STATES = ("verified", "changed", "local-only")
+
+Request = Callable[[str], bytes]
+
+
+def _host(url: str) -> str:
+    parts = urlparse(url)
+    return f"{parts.scheme}://{parts.netloc}"
 
 
 class Pacer:
@@ -70,7 +89,7 @@ class Pacer:
         self._pause: dict[str, float] = {}
 
     def wait(self, url: str) -> None:
-        host = urlparse(url).netloc
+        host = _host(url)
         last = self._last.get(host)
         if last is not None:
             remaining = last + self._pause.get(host, HOST_PAUSE_SECONDS) - self._clock()
@@ -78,8 +97,56 @@ class Pacer:
                 self._sleep(remaining)
         self._last[host] = self._clock()
 
-    def slow_down(self, url: str) -> None:
-        self._pause[urlparse(url).netloc] = HOST_PAUSE_AFTER_LIMIT_SECONDS
+    def at_least(self, url: str, seconds: float) -> None:
+        """From now on, leave at least this interval between requests to the host."""
+        host = _host(url)
+        self._pause[host] = max(self._pause.get(host, HOST_PAUSE_SECONDS), seconds)
+
+
+def _request(url: str) -> bytes:
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+        return response.read(MAX_BYTES + 1)
+
+
+class Robots:
+    """What each host allows automated clients to fetch, read from its robots.txt."""
+
+    def __init__(self, pacer: Pacer, request: Request = _request) -> None:
+        self._pacer = pacer
+        self._request = request
+        # None: robots.txt could not be read, so nothing is fetched from the host.
+        self._rules: dict[str, urllib.robotparser.RobotFileParser | None] = {}
+
+    def _load(self, url: str) -> urllib.robotparser.RobotFileParser | None:
+        host = _host(url)
+        if host not in self._rules:
+            address = host + "/robots.txt"
+            parser: urllib.robotparser.RobotFileParser | None
+            parser = urllib.robotparser.RobotFileParser()
+            self._pacer.wait(address)
+            try:
+                parser.parse(self._request(address).decode("utf-8", "replace").splitlines())
+            except urllib.error.HTTPError as error:
+                missing = 400 <= error.code < 500 and error.code != HTTP_TOO_MANY_REQUESTS
+                if missing:
+                    parser.parse([])  # the host has no rules
+                else:
+                    parser = None
+            except (urllib.error.URLError, TimeoutError, OSError):
+                parser = None
+            self._rules[host] = parser
+        return self._rules[host]
+
+    def allowed(self, url: str) -> bool:
+        parser = self._load(url)
+        return parser is not None and parser.can_fetch(ROBOTS_AGENT, url)
+
+    def delay(self, url: str) -> float:
+        parser = self._load(url)
+        if parser is None:
+            return 0.0
+        return float(parser.crawl_delay(ROBOTS_AGENT) or 0.0)
 
 
 def sha256(path: Path) -> str:
@@ -97,23 +164,36 @@ def verified_source(row: dict[str, str]) -> str:
     return url if state == "verified" else ""
 
 
-def _request(url: str) -> bytes:
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
-        return response.read(MAX_BYTES + 1)
+def _retry_after(error: urllib.error.HTTPError) -> float:
+    """Seconds the host asks to wait, or 0 when it does not say."""
+    value = error.headers.get("Retry-After") if error.headers is not None else None
+    if value is None or not value.strip().isdigit():
+        return 0.0
+    return min(float(value), MAX_RETRY_AFTER_SECONDS)
 
 
-def download(url: str, pacer: Pacer, request: Callable[[str], bytes] = _request) -> bytes:
-    pacer.wait(url)
-    try:
-        data = request(url)
-    except urllib.error.HTTPError as error:
-        if error.code != HTTP_TOO_MANY_REQUESTS:
-            raise
-        # The host limits the rate: slow down for this host and try once more.
-        pacer.slow_down(url)
+def download(
+    url: str,
+    pacer: Pacer,
+    request: Request = _request,
+    robots: Robots | None = None,
+) -> bytes:
+    if robots is not None:
+        if not robots.allowed(url):
+            raise PermissionError("robots.txt of the host does not allow this address")
+        pacer.at_least(url, robots.delay(url))
+    pauses = iter(RETRY_PAUSES_SECONDS)
+    while True:
         pacer.wait(url)
-        data = request(url)
+        try:
+            data = request(url)
+            break
+        except urllib.error.HTTPError as error:
+            pause = next(pauses, None)
+            if error.code != HTTP_TOO_MANY_REQUESTS or pause is None:
+                raise
+            # The host limits the rate: slow down for this host and try again.
+            pacer.at_least(url, max(pause, _retry_after(error)))
     if len(data) > MAX_BYTES:
         raise ValueError(f"larger than {MAX_BYTES} bytes")
     if not data.startswith(b"%PDF-"):
@@ -128,7 +208,8 @@ def process(
     local: Path | None,
     network: bool,
     pacer: Pacer,
-    request: Callable[[str], bytes] = _request,
+    request: Request = _request,
+    robots: Robots | None = None,
 ) -> tuple[str, str]:
     name = row["file"]
     target = files / name
@@ -150,7 +231,7 @@ def process(
     if not network:
         return "failed", "not present and network access is disabled"
     try:
-        data = download(url, pacer, request)
+        data = download(url, pacer, request, robots)
     except (urllib.error.URLError, TimeoutError, ValueError, OSError) as error:
         return "failed", f"{type(error).__name__}: {error}"
     if hashlib.sha256(data).hexdigest() != expected:
@@ -164,14 +245,15 @@ def check_source(
     row: dict[str, str],
     *,
     pacer: Pacer,
-    request: Callable[[str], bytes] = _request,
+    request: Request = _request,
+    robots: Robots | None = None,
 ) -> tuple[str, str]:
     """Download the source and compare it with the manifest. Writes nothing."""
     url = verified_source(row)
     if not url:
         return "skipped", "no verified source"
     try:
-        data = download(url, pacer, request)
+        data = download(url, pacer, request, robots)
     except (urllib.error.URLError, TimeoutError, ValueError, OSError) as error:
         return "failed", f"{type(error).__name__}: {error}"
     if hashlib.sha256(data).hexdigest() != row["sha256"]:
@@ -192,11 +274,12 @@ def main() -> int:
     if args.only:
         rows = [row for row in rows if row["id"] in set(args.only)]
     pacer = Pacer()
+    robots = Robots(pacer)
 
     counts: dict[str, int] = {}
     if args.check_sources:
         for row in rows:
-            state, note = check_source(row, pacer=pacer)
+            state, note = check_source(row, pacer=pacer, robots=robots)
             counts[state] = counts.get(state, 0) + 1
             if state not in ("ok", "skipped"):
                 print(f"{state:10} {row['id']:>4} {row['file']}  {note}")
@@ -207,7 +290,12 @@ def main() -> int:
     FILES.mkdir(exist_ok=True)
     for row in rows:
         state, note = process(
-            row, files=FILES, local=args.local, network=not args.verify_only, pacer=pacer
+            row,
+            files=FILES,
+            local=args.local,
+            network=not args.verify_only,
+            pacer=pacer,
+            robots=robots,
         )
         counts[state] = counts.get(state, 0) + 1
         if state != "ok" or note:
