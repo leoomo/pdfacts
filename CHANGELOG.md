@@ -9,8 +9,12 @@ may break callers.
 ### Changed
 
 - The minimum Python version is 3.13. It was 3.11.
-- The order of milestones: a time-boxed text probe follows M1 and comes before
-  M2.
+- The order of milestones follows what the first consumer needs in order to
+  switch: M1, M2 (forms), M3, M4a (text, first level), M5a (inspection, repair
+  and decryption), then the switch in M6 for documents with form fields. The
+  text probe and text in full (M4b), the edit session, annotations other than
+  widgets, rotated text and the design note on form filling (M5b) come after
+  the switch.
 - The comparison with other libraries moved from M0 to M7.
 - The division of work between the engines is described by kind of work:
   PDFium for what needs interpretation, QPDF for file structure.

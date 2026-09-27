@@ -30,7 +30,7 @@ Dependencies point downwards. Core never imports a feature package.
 
 A value that is written directly in a dictionary may be read through QPDF:
 object numbers, `UserUnit`, the field tree. Whether pdfacts interprets content
-streams itself is not decided; the text probe in
+streams itself is not decided; the text probe at the start of M4b in
 [ROADMAP.md](../ROADMAP.md) answers that.
 
 Every document is opened by both engines. They are checked against each other
@@ -109,13 +109,14 @@ A milestone builds only the parts of the skeleton that its own features call.
 | Part | Arrives with | First caller |
 | --- | --- | --- |
 | runtime, page references, protocols for geometry, rendering and object access | M1 | open, page geometry, rendering |
-| annotation references | M2 | annotation reader |
-| writer protocol, edit session | M5 | rewrite and decrypt |
+| widget references | M2 | form reader |
+| references for other annotations | M5b | annotation reader |
+| writer protocol, edit session | M5b | rewrite and decrypt, which exist as plain functions from M5a on |
 
 Form filling is the feature the skeleton is measured against. It needs
 appearance generation, font embedding and, for signed files, incremental
-saving, which makes it the hardest of the planned write features. M1 ends with
-a one-page note that shows how it can be added by adding modules only.
+saving, which makes it the hardest of the planned write features. A one-page
+note that shows how it can be added by adding modules only is written in M5b.
 
 ## Saving
 
@@ -127,7 +128,7 @@ signature only with an incremental save, so callers must be able to ask.
 
 | Feature | Reading | Writing | Relies on |
 | --- | --- | --- | --- |
-| Annotations | common properties in M2, subtype details later | add, change, remove, build appearance | references, edit session, writer protocol |
+| Annotations | widgets in M2, common properties of the others in M5b, subtype details later | add, change, remove, build appearance | references, edit session, writer protocol |
 | Form filling and flattening | M2 | set value, build appearance, embed fonts | same |
 | Merge, split, rotate pages | M1 | page operations | edit session |
 | Outlines, links, attachments, metadata | new reader packages | new operations | object backend |
