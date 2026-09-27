@@ -167,17 +167,37 @@ def test_the_real_tests_and_tools_are_actually_scanned():
         assert list((ROOT / directory).rglob("*.py")), directory
 
 
-def test_a_missing_directory_is_an_error(tmp_path):
+def repository_with(tmp_path: Path, *directories: str) -> Path:
     put(tmp_path, "src/pdfacts/__init__.py", "")
-    put(tmp_path, "tools/t.py", "")
-    assert main(["check_architecture.py", str(tmp_path / "src")]) == 2
+    for directory in directories:
+        put(tmp_path, f"{directory}/module.py", "")
+    return tmp_path
 
 
-def test_a_violation_in_tests_fails_the_whole_check(tmp_path):
-    put(tmp_path, "src/pdfacts/__init__.py", "")
-    put(tmp_path, "tests/test_x.py", "import fitz\n")
-    put(tmp_path, "tools/t.py", "")
-    assert main(["check_architecture.py", str(tmp_path / "src")]) == 1
+@pytest.mark.parametrize("missing", ["tests", "tools"])
+def test_a_missing_directory_is_an_error(tmp_path, missing):
+    present = {"tests", "tools"} - {missing}
+    root = repository_with(tmp_path, *present)
+    assert main(["check_architecture.py", str(root / "src")]) == 2
+
+
+@pytest.mark.parametrize("directory", ["tests", "tools"])
+def test_a_violation_in_tests_or_tools_fails_the_whole_check(tmp_path, directory):
+    root = repository_with(tmp_path, "tests", "tools")
+    put(root, f"{directory}/uses_mupdf.py", "import fitz\n")
+    assert main(["check_architecture.py", str(root / "src")]) == 1
+
+
+def test_a_violation_in_the_library_fails_the_whole_check(tmp_path):
+    root = repository_with(tmp_path, "tests", "tools")
+    put(root, "src/pdfacts/core/document.py", "import pikepdf\n")
+    assert main(["check_architecture.py", str(root / "src")]) == 1
+
+
+def test_a_relative_source_root_finds_the_directories_next_to_it(tmp_path, monkeypatch):
+    root = repository_with(tmp_path, "tests", "tools")
+    monkeypatch.chdir(root / "src")
+    assert main(["check_architecture.py", "."]) == 0
 
 
 def test_a_clean_repository_passes_the_whole_check(tmp_path):

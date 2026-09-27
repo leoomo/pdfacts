@@ -133,7 +133,7 @@ def main(argv: list[str]) -> int:
     if not (root / "pdfacts").is_dir():
         print(f"no pdfacts package under {root}", file=sys.stderr)
         return 2
-    repository = root.parent
+    repository = root.resolve().parent
     try:
         violations = find_violations(root) + find_forbidden(repository, ("tests", "tools"))
     except FileNotFoundError as error:
