@@ -1,8 +1,12 @@
 # Conventions
 
-Status: draft. These become binding with milestone M1. Each one exists because
-the alternative produced a wrong or unstable result in measurements on 109
-files (104 official German forms, 474 pages, about one million glyphs).
+Status: draft. These become binding with milestone M1. Until version 1.0 a
+convention changes only with the maintainer's consent, and every change is
+recorded in [CHANGELOG.md](../CHANGELOG.md).
+
+Each convention exists because the alternative produced a wrong or unstable
+result in measurements on 109 files (104 official German forms, 474 pages,
+about one million glyphs).
 
 ## Coordinate spaces
 
@@ -14,6 +18,9 @@ files (104 official German forms, 474 pages, about one million glyphs).
 Facts are stored in user space. `PageGeometry` provides the transform to display
 space and back. A library that writes into the file needs user space; a viewer
 overlay needs display space.
+
+There is no third space with y pointing downwards. A rendered bitmap carries
+the transform from display space to its own pixels.
 
 Reason: on rotated pages, mixing unrotated coordinates with the rotated page
 size gave positions that did not match the rendering.
@@ -68,12 +75,17 @@ were found.
 
 ## Fonts
 
-Fonts installed on the host are ignored by default. Only fonts embedded in the
-file and the engine's built-in substitutes are used.
+Fonts installed on the host are ignored. Only fonts embedded in the file and
+the engine's built-in substitutes are used. This is the only policy in M1; the
+parameter exists so that another policy can be added without changing the
+interface.
+
+PDFium's font configuration belongs to the process, so one process has one
+policy.
 
 Reason: 28 of 104 files gave different glyph facts on macOS and Linux. With
 host fonts ignored, all 104 were identical on macOS arm64, Linux arm64 and
-Linux x86_64.
+Linux x86_64, compared at 0.001 pt.
 
 ## Object identity
 
@@ -82,13 +94,93 @@ annotation array. The object number comes from QPDF at the same index. PDFium
 does not expose object numbers. The mapping held for all 7935 widgets in the
 corpus.
 
-## Three states
+The corpus contains no damaged files, and on a damaged file the two engines may
+recover different page trees or annotation lists. Therefore the mapping is
+checked at run time:
 
-"Absent", "unsupported" and "unknown" are different answers. A check that could
-not be carried out is unknown. It is never reported as absent.
+| When | Check |
+| --- | --- |
+| on open | both engines report the same number of pages |
+| before a value from QPDF is used for a page or an annotation | the object at the same position is the same in both engines |
+
+When a check fails, the values that depend on it are unknown and the reason is
+stated. Facts read through PDFium are returned as usual.
+
+Reason: a wrong object number is worse than none. A later change to the file
+would address the wrong object.
+
+## Three answers
+
+| Answer | Meaning | How it is expressed |
+| --- | --- | --- |
+| absent | the check was done and the file does not contain it | `None`, or an empty collection |
+| unknown | the check could not be done on this file | `Unknown(reason)` |
+| unsupported | this version of the library cannot do the check at all | the capability table; calling the feature raises an error |
+
+A check that could not be carried out is unknown. It is never reported as
+absent, and a value is never made up to fill the gap.
+
+A single unknown value does not discard the facts around it.
+
+## Damaged files
+
+`open` does not change what it reads. A file that the engine cannot load is
+reported as damaged. Recovery is a separate, explicit step: the caller asks
+for recovered bytes and opens those.
+
+| Case | Result |
+| --- | --- |
+| recovery succeeds | new bytes; warnings raised during recovery are returned with them |
+| recovery fails | an error; never an empty document |
+
+Reason: recovery rewrites the file. Object numbers may change and the bytes and
+their hash do change. Facts read from recovered bytes describe the recovered
+file, so the caller has to hold those bytes.
+
+## Limits
+
+The library checks what it can check between two engine calls:
+
+| Limit | Checked |
+| --- | --- |
+| size in bytes | before opening |
+| number of pages, number of objects | after opening, before any page is read |
+| number of items per page | while facts are collected |
+| deadline | between pages |
+
+Time and memory cannot be enforced from inside a running engine call. They are
+the caller's responsibility; a separate process per document is the
+recommended way.
+
+The numbers are passed in by the caller. The library has no built-in defaults.
+
+## Rendering
+
+A page or a region of it is rendered at a given scale to grey or RGB. The
+result is raw bytes with width, height and row length. No type of an imaging
+library appears in the public interface.
 
 ## Digest
 
-Coordinates are quantized before hashing. Unquantized floating-point values
-differ between platforms at the fourth decimal place even with one and the
-same engine.
+The digest is a tool under `bench/`. It is not part of the public interface.
+It serves two purposes: comparing platforms, and noticing what an engine
+upgrade changes.
+
+Whether values have to be rounded before hashing is not known yet.
+
+| Measurement | Result |
+| --- | --- |
+| PDFium, unrounded values, Linux arm64 against Linux x86_64 | glyph, path and widget digests identical for all 104 forms |
+| PDFium, unrounded values, macOS against Linux | not measured |
+| PDFium, values rounded to three decimals, host fonts ignored, macOS against Linux | identical for all 104 forms |
+| the reference engine, word coordinates rounded to three decimals, macOS against Linux | identical for 83 of 104 forms |
+
+The last row shows that rounding does not make nearly equal values hash
+equally: two values on either side of a rounding boundary still differ.
+
+The missing measurement is part of the M1 gate, and its result decides:
+
+| Result | Digest |
+| --- | --- |
+| unrounded digests are identical on all three platforms | exact values are hashed |
+| they differ | platforms are compared fact by fact with a tolerance, not by hash |

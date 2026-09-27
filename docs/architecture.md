@@ -15,11 +15,27 @@ core                  geometry, object references, errors, limits,
    |
 backend protocols     one protocol per capability
    |
-backend modules       pdfium (text, geometry, rendering)
-                      qpdf   (objects, rewrite, write)
+backend modules       pdfium (what needs interpretation)
+                      qpdf   (file structure)
 ```
 
 Dependencies point downwards. Core never imports a feature package.
+
+## The two engines
+
+| Engine | Responsible for |
+| --- | --- |
+| PDFium | what needs interpretation: text positions, paths, rendering |
+| QPDF | file structure: objects, dictionaries, streams, rewrite, decryption |
+
+A value that is written directly in a dictionary may be read through QPDF:
+object numbers, `UserUnit`, the field tree. Whether pdfacts interprets content
+streams itself is not decided; the text probe in
+[ROADMAP.md](../ROADMAP.md) answers that.
+
+Every document is opened by both engines. They are checked against each other
+at run time, and a value that depends on a failed check is unknown. The checks
+are listed under "Object identity" in [conventions.md](conventions.md).
 
 ## Package layout
 
@@ -82,6 +98,25 @@ Core does not import features. Adding annotations does not touch text or forms.
 Fact structures carry a schema version. A minor version may add optional
 fields. Removing or changing a field needs a major version.
 
+This rule takes effect with version 1.0. Before that, the interface may change
+in ways that break callers, and every such change is recorded in
+[CHANGELOG.md](../CHANGELOG.md).
+
+## How much of this exists at each milestone
+
+A milestone builds only the parts of the skeleton that its own features call.
+
+| Part | Arrives with | First caller |
+| --- | --- | --- |
+| runtime, page references, protocols for geometry, rendering and object access | M1 | open, page geometry, rendering |
+| annotation references | M2 | annotation reader |
+| writer protocol, edit session | M5 | rewrite and decrypt |
+
+Form filling is the feature the skeleton is measured against. It needs
+appearance generation, font embedding and, for signed files, incremental
+saving, which makes it the hardest of the planned write features. M1 ends with
+a one-page note that shows how it can be added by adding modules only.
+
 ## Saving
 
 A write backend declares whether it supports incremental saving. QPDF rewrites
@@ -115,6 +150,9 @@ isolation between documents should use separate processes.
 | engine-boundary | pypdfium2 only in `backends/pdfium.py`, pikepdf only in `backends/qpdf.py` |
 | forbidden | MuPDF bindings are never imported by the library |
 | core-isolation | `pdfacts.core` does not import feature packages |
+
+The table states what the tool checks today. M1 extends the `forbidden` rule
+to `tests/` and `tools/`.
 
 An abstraction is added only when a feature uses it. The rules above do not
 justify code that nothing calls.

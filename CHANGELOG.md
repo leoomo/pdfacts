@@ -1,0 +1,44 @@
+# Changelog
+
+Every change to the public interface or to a convention is recorded here.
+Versions are 0.x until the first consumer has switched; until then a change
+may break callers.
+
+## Unreleased
+
+### Changed
+
+- The minimum Python version is 3.13. It was 3.11.
+- The order of milestones: a time-boxed text probe follows M1 and comes before
+  M2.
+- The comparison with other libraries moved from M0 to M7.
+- The division of work between the engines is described by kind of work:
+  PDFium for what needs interpretation, QPDF for file structure.
+
+### Conventions
+
+- Three answers: `None` for absent, `Unknown(reason)` for unknown, the
+  capability table and an error for unsupported.
+- Damaged files are recovered by an explicit step. `open` does not change what
+  it reads.
+- The two engines are checked against each other at run time. A value that
+  depends on a failed check is unknown.
+- Limits: the library checks size, page count, object count, items per page
+  and a deadline between pages. Time and memory are the caller's
+  responsibility. There are no built-in numbers.
+- Rendering returns raw bytes. No type of an imaging library appears in the
+  public interface.
+- There are two coordinate spaces, user and display. There is no third space
+  with y pointing downwards.
+- The digest is a tool under `bench/`, not part of the public interface.
+
+### Corrected
+
+- `docs/conventions.md` stated that unrounded values differ between platforms
+  with one and the same engine. That was measured with the reference engine,
+  not with PDFium. The section now lists what was measured and what was not.
+
+## 0.0.1
+
+Project skeleton: pinned engines, `engine_info()`, import checks, corpus
+manifest.

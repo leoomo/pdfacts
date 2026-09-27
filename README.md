@@ -27,8 +27,8 @@ jobs belong to the engines.
 
 | Engine | Binding | Used for |
 | --- | --- | --- |
-| PDFium | pypdfium2 | text, geometry, rendering |
-| QPDF | pikepdf | object access, rewrite, decryption |
+| PDFium | pypdfium2 | what needs interpretation: text positions, paths, rendering |
+| QPDF | pikepdf | file structure: objects, dictionaries, streams, rewrite, decryption |
 
 Engine versions are pinned exactly in `pyproject.toml`. Extracted facts depend
 on the engine build, so an upgrade is a reviewed change.
@@ -41,8 +41,8 @@ print(pdfacts.engine_info())
 
 ## Development
 
-Python 3.11 or newer; the project is developed on 3.13. Dependencies are managed
-with [uv](https://docs.astral.sh/uv/).
+Python 3.13 or newer. Dependencies are managed with
+[uv](https://docs.astral.sh/uv/).
 
 ```bash
 uv sync
@@ -70,6 +70,8 @@ uv build
 - [Capabilities](docs/capabilities.md): what works, what does not, what is unknown
 - [Provenance](docs/provenance.md): where knowledge came from and what may not be copied
 - [Third-party components](THIRD_PARTY.md)
+- [Changelog](CHANGELOG.md): every change to the interface or to a convention
+- [Rules for coding agents](AGENTS.md)
 
 ## License
 
