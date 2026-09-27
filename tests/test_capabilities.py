@@ -31,9 +31,10 @@ def test_the_table_cannot_be_changed():
 
 
 def test_nothing_is_claimed_that_is_not_implemented():
-    # Each capability becomes True in the change that implements it. None of
-    # them is implemented yet; the host font policy never will be in M1.
-    assert not any(capabilities().values())
+    # Each capability becomes True in the change that implements it; the host
+    # font policy will not be in M1.
+    available = {capability for capability, value in capabilities().items() if value}
+    assert available == {Capability.FONT_POLICY_EMBEDDED_ONLY}
 
 
 def test_require_raises_for_a_capability_that_is_not_available():

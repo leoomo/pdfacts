@@ -17,6 +17,10 @@ may break callers.
 - Geometry: `Point`, `Rect`, `Matrix` and `PageGeometry`, with the transforms
   between user space and display space listed under "Coordinate spaces" in
   `docs/conventions.md`.
+- The runtime: `configure(font_policy=...)` and `FontPolicy`. The policy
+  "embedded-only" ignores fonts installed on the host; "host" exists and is not
+  supported. `EngineInfo` has a new field `font_policy`, and the capability
+  `FONT_POLICY_EMBEDDED_ONLY` is available.
 
 ### Changed
 
