@@ -14,6 +14,9 @@ may break callers.
 - The capability table: `Capability`, `capabilities()`, `require()`. No
   capability is available yet; each becomes available with the change that
   implements it.
+- Geometry: `Point`, `Rect`, `Matrix` and `PageGeometry`, with the transforms
+  between user space and display space listed under "Coordinate spaces" in
+  `docs/conventions.md`.
 
 ### Changed
 
