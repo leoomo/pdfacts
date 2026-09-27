@@ -19,8 +19,10 @@ In practice:
   log below.
 - Behaviour rules are covered by constructed test files. This is first of all
   for correctness; it also shows that the implementation follows behaviour.
-- MuPDF bindings appear only under `bench/`. The library and its tests never
-  import them. `tools/check_architecture.py` enforces this for the library.
+- MuPDF bindings appear only under `bench/`. The library, its tests and its
+  tools never import them. `tools/check_architecture.py` checks the import
+  statements for this; an import made at run time, for example with
+  `importlib`, is not detected.
 - Coding agents may read third-party source. They must not paste or translate
   AGPL code.
 
