@@ -11,6 +11,7 @@ import hashlib
 import re
 import sys
 import urllib.error
+from email.message import Message
 from pathlib import Path
 
 import pytest
@@ -216,29 +217,175 @@ def test_no_pause_is_added_when_enough_time_has_passed():
     assert fake.slept == []
 
 
-def test_a_rate_limit_slows_the_host_down_and_is_retried_once():
+def limited(times: int, calls: list[str], retry_after: str | None = None):
+    """A host that answers with status 429 for the first `times` requests."""
+
+    def request(url: str) -> bytes:
+        calls.append(url)
+        if len(calls) <= times:
+            headers = Message()
+            if retry_after is not None:
+                headers["Retry-After"] = retry_after
+            raise urllib.error.HTTPError(url, 429, "Too Many Requests", headers, None)
+        return PDF
+
+    return request
+
+
+def test_a_rate_limit_is_answered_by_waiting_and_trying_again():
+    fake = FakeTime()
+    pacer = fetch.Pacer(clock=fake.clock, sleep=fake.sleep)
+    calls: list[str] = []
+    assert fetch.download("https://forms.example/a.pdf", pacer, limited(1, calls)) == PDF
+    assert len(calls) == 2
+    assert fake.slept == [fetch.RETRY_PAUSES_SECONDS[0]]
+
+
+def test_a_second_rate_limit_is_answered_by_a_longer_wait():
+    fake = FakeTime()
+    pacer = fetch.Pacer(clock=fake.clock, sleep=fake.sleep)
+    calls: list[str] = []
+    assert fetch.download("https://forms.example/a.pdf", pacer, limited(2, calls)) == PDF
+    assert len(calls) == 3
+    assert fake.slept == list(fetch.RETRY_PAUSES_SECONDS)
+
+
+def test_a_host_that_keeps_limiting_is_reported_after_two_retries():
+    fake = FakeTime()
+    pacer = fetch.Pacer(clock=fake.clock, sleep=fake.sleep)
+    calls: list[str] = []
+    state, note = fetch.check_source(row(), pacer=pacer, request=limited(99, calls))
+    assert state == "failed"
+    assert "429" in note
+    assert len(calls) == 1 + len(fetch.RETRY_PAUSES_SECONDS)
+
+
+def test_the_slower_pace_is_kept_for_the_next_file_of_the_host():
+    fake = FakeTime()
+    pacer = fetch.Pacer(clock=fake.clock, sleep=fake.sleep)
+    calls: list[str] = []
+    request = limited(1, calls)
+    fetch.download("https://forms.example/a.pdf", pacer, request)
+    fetch.download("https://forms.example/b.pdf", pacer, request)
+    assert fake.slept == [fetch.RETRY_PAUSES_SECONDS[0]] * 2
+
+
+def test_the_wait_the_host_asks_for_is_kept_when_it_is_longer():
+    fake = FakeTime()
+    pacer = fetch.Pacer(clock=fake.clock, sleep=fake.sleep)
+    calls: list[str] = []
+    fetch.download("https://forms.example/a.pdf", pacer, limited(1, calls, retry_after="45"))
+    assert fake.slept == [45.0]
+
+
+def test_the_wait_the_host_asks_for_has_an_upper_bound():
+    fake = FakeTime()
+    pacer = fetch.Pacer(clock=fake.clock, sleep=fake.sleep)
+    calls: list[str] = []
+    fetch.download("https://forms.example/a.pdf", pacer, limited(1, calls, retry_after="86400"))
+    assert fake.slept == [fetch.MAX_RETRY_AFTER_SECONDS]
+
+
+def test_other_http_errors_are_not_retried():
     fake = FakeTime()
     pacer = fetch.Pacer(clock=fake.clock, sleep=fake.sleep)
     calls: list[str] = []
 
-    def limited_once(url: str) -> bytes:
+    def gone(url: str) -> bytes:
         calls.append(url)
-        if len(calls) == 1:
-            raise urllib.error.HTTPError(url, 429, "Too Many Requests", None, None)
+        raise urllib.error.HTTPError(url, 404, "Not Found", Message(), None)
+
+    state, note = fetch.check_source(row(), pacer=pacer, request=gone)
+    assert (state, len(calls)) == ("failed", 1)
+    assert "404" in note
+
+
+def host(robots: bytes | int, calls: list[str]):
+    """A host whose robots.txt has the given content, or answers with the given status."""
+
+    def request(url: str) -> bytes:
+        calls.append(url)
+        if url.endswith("/robots.txt"):
+            if isinstance(robots, int):
+                raise urllib.error.HTTPError(url, robots, "status", Message(), None)
+            return robots
         return PDF
 
-    assert fetch.download("https://forms.example/a.pdf", pacer, limited_once) == PDF
-    assert len(calls) == 2
-    assert fake.slept == [fetch.HOST_PAUSE_AFTER_LIMIT_SECONDS]
+    return request
 
 
-def test_a_second_rate_limit_is_reported():
+def checked(robots: bytes | int, calls: list[str], fake: FakeTime | None = None):
+    fake = fake or FakeTime()
+    pacer = fetch.Pacer(clock=fake.clock, sleep=fake.sleep)
+    request = host(robots, calls)
+    rules = fetch.Robots(pacer, request)
+    return fetch.check_source(row(), pacer=pacer, request=request, robots=rules)
+
+
+def test_an_address_the_host_disallows_is_not_fetched():
+    calls: list[str] = []
+    state, note = checked(b"User-agent: *\nDisallow: /\n", calls)
+    assert state == "failed"
+    assert "robots.txt" in note
+    assert calls == ["https://forms.example/robots.txt"]
+
+
+def test_a_rule_for_this_client_by_name_is_kept():
+    calls: list[str] = []
+    rules = b"User-agent: pdfacts-corpus-fetch\nDisallow: /a.pdf\n\nUser-agent: *\nDisallow:\n"
+    assert checked(rules, calls)[0] == "failed"
+    assert calls == ["https://forms.example/robots.txt"]
+
+
+def test_an_address_the_host_allows_is_fetched():
+    calls: list[str] = []
+    assert checked(b"User-agent: *\nDisallow: /private/\n", calls) == ("ok", "")
+    assert calls == ["https://forms.example/robots.txt", "https://forms.example/a.pdf"]
+
+
+def test_a_host_without_robots_file_has_no_rules():
+    calls: list[str] = []
+    assert checked(404, calls) == ("ok", "")
+
+
+@pytest.mark.parametrize("status", [429, 500, 503])
+def test_nothing_is_fetched_when_the_rules_cannot_be_read(status):
+    calls: list[str] = []
+    state, note = checked(status, calls)
+    assert state == "failed"
+    assert "robots.txt" in note
+    assert calls == ["https://forms.example/robots.txt"]
+
+
+def test_the_rules_of_a_host_are_read_once():
     fake = FakeTime()
     pacer = fetch.Pacer(clock=fake.clock, sleep=fake.sleep)
+    calls: list[str] = []
+    request = host(b"User-agent: *\nDisallow:\n", calls)
+    rules = fetch.Robots(pacer, request)
+    for name in ("a.pdf", "b.pdf", "c.pdf"):
+        fetch.download(f"https://forms.example/{name}", pacer, request, rules)
+    assert calls.count("https://forms.example/robots.txt") == 1
+    assert len(calls) == 4
 
-    def always_limited(url: str) -> bytes:
-        raise urllib.error.HTTPError(url, 429, "Too Many Requests", None, None)
 
-    state, note = fetch.check_source(row(), pacer=pacer, request=always_limited)
-    assert state == "failed"
-    assert "429" in note
+def test_a_crawl_delay_stated_by_the_host_is_kept():
+    fake = FakeTime()
+    pacer = fetch.Pacer(clock=fake.clock, sleep=fake.sleep)
+    calls: list[str] = []
+    request = host(b"User-agent: *\nCrawl-delay: 10\nDisallow:\n", calls)
+    rules = fetch.Robots(pacer, request)
+    fetch.download("https://forms.example/a.pdf", pacer, request, rules)
+    fetch.download("https://forms.example/b.pdf", pacer, request, rules)
+    # robots.txt, then the first file, then the second: two intervals of ten seconds
+    assert fake.slept == [10.0, 10.0]
+
+
+def test_a_shorter_crawl_delay_does_not_shorten_the_pause():
+    fake = FakeTime()
+    pacer = fetch.Pacer(clock=fake.clock, sleep=fake.sleep)
+    calls: list[str] = []
+    request = host(b"User-agent: *\nCrawl-delay: 1\nDisallow:\n", calls)
+    rules = fetch.Robots(pacer, request)
+    fetch.download("https://forms.example/a.pdf", pacer, request, rules)
+    assert fake.slept == [fetch.HOST_PAUSE_SECONDS]

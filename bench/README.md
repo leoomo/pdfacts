@@ -31,10 +31,22 @@ next to the expected name with the suffix `.changed`. It is never accepted in
 place of the listed file. When the revised form is wanted in the corpus, it is
 added as a new entry; the old entry stays.
 
-Requests to one host are spaced by three seconds. A host that answers with
-status 429 is asked again once, after twenty seconds, and at that pace from
-then on. The script identifies itself in the `User-Agent` header, which some
-publishers require of automated clients.
+### How the script behaves towards the hosts
+
+Some publishers state conditions for automated clients. The script keeps them
+for every host:
+
+| Behaviour | Detail |
+| --- | --- |
+| it names itself | the `User-Agent` header starts with `pdfacts-corpus-fetch` |
+| it reads `robots.txt` first | an address that the host disallows is not fetched |
+| `robots.txt` cannot be read | nothing is fetched from that host; a missing file (status 404) means the host has no rules |
+| spacing | three seconds between two requests to one host, or the crawl delay the host states, whichever is longer |
+| status 429 | it waits 20 seconds and tries again, then 60 seconds, then reports the failure; a longer wait asked for by the host is kept, up to 120 seconds; the slower pace stays for the rest of the run |
+
+A run over all sources sends 132 requests to 34 hosts. Do not repeat it
+several times a day: one host answered with status 429 after three such runs
+on 2026-09-27.
 
 ## Referees
 
