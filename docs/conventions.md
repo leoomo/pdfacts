@@ -25,6 +25,25 @@ the transform from display space to its own pixels.
 Reason: on rotated pages, mixing unrotated coordinates with the rotated page
 size gave positions that did not match the rendering.
 
+With the visible box `(x0, y0, x1, y1)`, W = `x1 - x0` and H = `y1 - y0`, the
+transform to display space is:
+
+| Rotation | x' | y' | `Matrix(a, b, c, d, e, f)` | Displayed size |
+| --- | --- | --- | --- | --- |
+| 0 | x - x0 | y - y0 | `(1, 0, 0, 1, -x0, -y0)` | W x H |
+| 90 | y - y0 | x1 - x | `(0, -1, 1, 0, -y0, x1)` | H x W |
+| 180 | x1 - x | y1 - y | `(-1, 0, 0, -1, x1, y1)` | W x H |
+| 270 | y1 - y | x - x0 | `(0, 1, -1, 0, y1, -x0)` | H x W |
+
+A `Matrix` means what a PDF matrix means: x' = a·x + c·y + e,
+y' = b·x + d·y + f. The matrices hold only 0, 1 and -1 besides the offsets, so
+the transform carries no rounding from trigonometry. Display space is measured
+in user space units: `UserUnit` does not scale it, because the engine does not
+scale what it renders either (measured).
+
+Every coordinate is a finite number. A rectangle puts its corners in order,
+because a file may write them reversed.
+
 ## Page boxes
 
 The page bounding box is read with a call that resolves inheritance from the
