@@ -111,6 +111,18 @@ not by an agent:
 | dependency versions | `pyproject.toml`, `uv.lock` |
 | architecture check | `tools/check_architecture.py` and its tests |
 
+One exception, granted by the maintainer on 2026-09-27: a pull request may be
+merged by an agent when both of the following hold.
+
+| Condition | Meaning |
+| --- | --- |
+| it changes documents only | no file under `src/`, `tests/`, `tools/` or `bench/`, and neither `pyproject.toml` nor `uv.lock` |
+| it records a decision | every change writes down something the maintainer has explicitly decided; the pull request names the decision |
+
+The agent tells the maintainer after the merge. A document change that
+contains a proposal of the agent's own is not covered and waits for the
+maintainer.
+
 Until version 1.0 the interface may change in ways that break callers. Every
 such change, and every change to a convention, gets an entry in
 [CHANGELOG.md](CHANGELOG.md).
