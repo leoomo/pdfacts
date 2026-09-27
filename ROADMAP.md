@@ -3,22 +3,24 @@
 Each milestone has a gate. A milestone is done when its gate has been run and
 the result recorded, not when the code looks finished.
 
-Order: M0, M1, text probe, M2, M3, M4, M5, M6. M7 has no date.
+The first consumer decides the priorities. The order below brings it to the
+point where it can switch to pdfacts as early as possible: first for documents
+with form fields, later for documents without.
 
-| Milestone | Content | State |
-| --- | --- | --- |
-| M0 | project skeleton, pinned engines, corpus manifest | done 2026-09-27 |
-| M1 | documents, geometry, determinism, test and gate tooling | next |
-| Text probe | two glyph sources compared, time-boxed | planned |
-| M2 | annotations and forms | planned |
-| M3 | paths and images | planned |
-| M4 | text: glyphs, words, lines | planned |
-| M5 | inspection, edit session, repair | planned |
-| M6 | integration into the first consumer; version 1.0 | planned |
-| M7 | checks before going public | no date |
+| Order | Milestone | Content | State |
+| --- | --- | --- | --- |
+| 1 | M0 | project skeleton, pinned engines, corpus manifest | done 2026-09-27 |
+| 2 | M1 | documents, geometry, determinism, test and gate tooling | in progress |
+| 3 | M2 | forms: fields and widgets | planned |
+| 4 | M3 | paths and images | planned |
+| 5 | M4a | text, first level | planned |
+| 6 | M5a | inspection, repair and decryption | planned |
+| 7 | M6 | the first consumer switches for documents with form fields; version 1.0 | planned |
+| 8 | M4b | text probe, then text in full | planned |
+| 9 | M5b | what was left out on the way: edit session, annotations, rotated text | planned |
+| - | M7 | checks before going public | no date |
 
-The first consumer decides the priorities. What it does not need waits until
-after M6.
+Until M6 nothing is built that the switch does not need.
 
 ## Supported platforms
 
@@ -35,7 +37,8 @@ Python 3.13 or newer.
 Versions are 0.x until M6. Before 1.0 the interface may change in ways that
 break callers; every such change is recorded in [CHANGELOG.md](CHANGELOG.md).
 From 1.0 on, fact structures only grow (rule 7 in
-[docs/architecture.md](docs/architecture.md)).
+[docs/architecture.md](docs/architecture.md)), and a change that breaks
+callers needs a new major version.
 
 ## M0 Project skeleton
 
@@ -70,8 +73,6 @@ Deliverables
 - continuous integration on Linux x86_64 and Linux arm64
 - gate scripts and the digest tool under `bench/`
 - the import check covers `tests/` and `tools/` as well as the library
-- a one-page design note on how form filling can be added later by adding
-  modules only; no code
 
 Gate
 - constructed geometry cases are all correct: rotation 0/90/180/270, crop box,
@@ -87,39 +88,20 @@ Gate
   empty result
 - the architecture check passes
 
-## Text probe
-
-Time-boxed to two weeks. It comes before M2 because text is the main risk of
-the project and the result shapes the architecture.
-
-Two glyph sources are compared on the same files: the PDFium text interface,
-and a content-stream interpreter built on QPDF tokens.
-
-The decision rule is fixed before the probe starts. The content-stream
-interpreter is adopted only if all three hold:
-
-- it changes at least two percentage points fewer results in the first
-  consumer's comparison than the PDFium text interface does
-- median time per file is at most 1.5 times that of the reference engine
-- no corpus file is readable through the PDFium text interface but not through
-  the interpreter
-
-Otherwise the PDFium text interface is used, and spaces it leaves out are
-inferred from glyph spacing.
-
-## M2 Annotations and forms
+## M2 Forms
 
 Deliverables
-- annotation base type and reader: subtype, rectangle, flags, contents, colour,
-  appearance, object reference
 - field tree, widgets, inherited flags, values, options, appearance states,
   border and background
+- for every widget: rectangle, object reference, and the field it belongs to
+
+Annotations other than widgets are read in M5b. M5a looks at their
+dictionaries only as far as the active content report needs it.
 
 Gate
 - widget rectangle, name, type, flags and label equal the file content for
   every widget in the corpus
 - options and states of radio buttons and check boxes equal the file content
-- every annotation in the corpus yields its common properties
 - object references are stable across repeated reads
 
 ## M3 Paths and images
@@ -133,17 +115,80 @@ Gate
   are documented and covered by constructed cases
 - constructed cases with nested transforms and repeated images are correct
 
-## M4 Text
+## M4a Text, first level
 
-The main risk of the project.
+Text as far as a consumer needs it to find the label next to a form field. It
+is not yet good enough to find the fields of a document that has no form
+fields; that is M4b.
 
 Deliverables
-- glyph facts, word and line segmentation, versioned rule sets, rotated text,
-  normalization
+- glyph facts read through the PDFium text interface
+- words and lines, built with one documented rule set
+- normalization of what the engine returns: the line-end hyphen marker and
+  expanded ligatures
 
-Before starting
-- constructed cases that pin every segmentation threshold
-- the result of the text probe
+Not in M4a: rotated text, a second glyph source, tuning of thresholds.
+
+Gate
+- constructed cases pin every rule of the rule set
+- glyph, word and line facts of every corpus file are identical on three
+  platforms
+- what the rule set is known to get wrong is listed in
+  [docs/capabilities.md](docs/capabilities.md), with counts from the corpus
+
+## M5a Inspection, repair and decryption
+
+Deliverables
+- inspection report: object counts, declared stream lengths, encryption
+  details, active content
+- two functions that return new bytes: recovery, which exists since M1, and
+  decryption; each verifies its own result before it returns
+
+Not in M5a: the edit session. The two functions are written so that they can
+be moved onto it later without changing their signature.
+
+Gate
+- owner-password-protected corpus files are readable and writable by a
+  third-party library after decryption, with field names and rectangles equal
+  to those of the original file
+- a page `/Contents` entry that is an indirect array is handled
+- the verification inside each function detects a deliberately introduced fault
+- the active content report names the object in which each finding was made
+
+## M6 Integration
+
+The first consumer switches to pdfacts for documents with form fields. Its
+acceptance criteria live in that project. After each earlier milestone the
+consumer's comparison is run again outside this repository, so that the
+interface meets a real caller early.
+
+Version 1.0 is released with this milestone.
+
+## M4b Text in full
+
+The main technical risk of the project. It comes after M6 so that the switch
+does not depend on it.
+
+It starts with a probe, time-boxed to two weeks. Two glyph sources are
+compared on the same files: the PDFium text interface, and a content-stream
+interpreter built on QPDF tokens.
+
+The decision rule is fixed before the probe starts. The content-stream
+interpreter is adopted only if all three hold:
+
+- it changes at least two percentage points fewer results in the first
+  consumer's comparison than the PDFium text interface does
+- median time per file is at most 1.5 times that of the reference engine
+- no corpus file is readable through the PDFium text interface but not through
+  the interpreter
+
+Otherwise the PDFium text interface is used, and spaces it leaves out are
+inferred from glyph spacing.
+
+Deliverables
+- word and line segmentation with versioned rule sets, thresholds pinned by
+  constructed cases
+- the glyph source chosen by the probe
 
 Gate
 - word boxes checked against rendering are correct for at least 99% of words
@@ -151,32 +196,19 @@ Gate
 
 If the gate is missed, in this order:
 
-1. the cases that do not work are recorded as unsupported, and the other
-   milestones continue
+1. the cases that do not work are recorded as unsupported
 2. the gate is relaxed, and every remaining difference is reviewed one by one
 3. a third text source is added
 
-## M5 Inspection, edit session, repair
+## M5b What was left out on the way
 
-Deliverables
-- object counts, declared stream lengths, encryption details, active content
-  report
-- edit session with verification after writing; the first operations are
-  rewrite and decrypt only
-
-Gate
-- owner-password-protected corpus files are writable by a third-party library
-  after repair, with field names and rectangles unchanged
-- a page `/Contents` entry that is an indirect array is handled
-- verification after writing detects a deliberately introduced fault
-
-## M6 Integration
-
-The first consumer switches to pdfacts. Its acceptance criteria live in that
-project. After each earlier milestone the consumer's comparison is run again
-outside this repository, so that the interface meets a real caller early.
-
-Version 1.0 is released with this milestone.
+- edit session with verification after writing; rewrite and decrypt become
+  operations of it
+- annotation base type and reader for annotations other than widgets: subtype,
+  rectangle, flags, contents, colour, appearance, object reference
+- rotated text
+- a one-page design note on how form filling can be added later by adding
+  modules only; no code
 
 ## M7 Before going public
 
