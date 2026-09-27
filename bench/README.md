@@ -35,10 +35,15 @@ compared. In order of trust:
 
 The output of one library is never the expected value for another.
 
-## Comparison tooling
+## Gate scripts and the digest tool
 
-Not written yet. It follows once pdfacts produces facts worth comparing
-(milestone M1).
+Not written yet. They arrive with milestone M1: one script per gate, and a
+digest of the facts of a file that is used to compare platforms and to see
+what an engine upgrade changes.
+
+## Comparison with other libraries
+
+Deferred to milestone M7.
 
 PyMuPDF may be installed here for comparison. It is licensed under the AGPL
 and must not be imported by the library or by the library's tests.
