@@ -40,7 +40,6 @@ may break callers.
 - The transform from user space to display space is the table under
   "Coordinate spaces"; display space is measured in user space units, and
   `UserUnit` does not scale it.
-
 - Three answers: `None` for absent, `Unknown(reason)` for unknown, the
   capability table and an error for unsupported.
 - Damaged files are recovered by an explicit step. `open` does not change what

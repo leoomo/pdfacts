@@ -125,6 +125,18 @@ def test_an_inverse_whose_determinant_overflows_is_refused():
 def test_a_number_too_large_for_a_float_is_refused():
     with pytest.raises(ValueError):
         Point(10**400, 0)
+    with pytest.raises(ValueError):
+        page(user_unit=10**400)
+
+
+def test_a_decimal_is_refused_with_a_message_that_says_what_is_accepted():
+    # pikepdf returns PDF reals as Decimal; a reader converts with float() first.
+    from decimal import Decimal
+
+    with pytest.raises(TypeError, match="an int, a float or Unknown"):
+        page(user_unit=Decimal("2.5"))
+    with pytest.raises(TypeError, match="int or a float"):
+        Point(Decimal("1.5"), 0)
 
 
 @pytest.mark.parametrize(
