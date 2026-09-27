@@ -19,6 +19,10 @@ may break callers.
 - The division of work between the engines is described by kind of work:
   PDFium for what needs interpretation, QPDF for file structure.
 
+- The repository uses no hosted continuous integration. The checks of every
+  change run on the development machine: natively on macOS, and in containers
+  for Linux arm64 and Linux x86_64.
+
 ### Conventions
 
 - Three answers: `None` for absent, `Unknown(reason)` for unknown, the
