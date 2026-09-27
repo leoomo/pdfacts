@@ -194,6 +194,41 @@ def test_a_subclass_of_a_later_change_survives_pickling():
     assert copy.extra == 1
 
 
+class _NoMessageError(PdfactsError):
+    def __init__(self) -> None:
+        Exception.__init__(self)
+
+
+class _TwoArgumentsError(PdfactsError):
+    def __init__(self) -> None:
+        Exception.__init__(self, "first", 2)
+
+
+class _KeyLikeError(PdfactsError, KeyError):
+    def __init__(self) -> None:
+        KeyError.__init__(self, "no field x")
+
+
+@pytest.mark.parametrize("error", [_NoMessageError(), _TwoArgumentsError(), _KeyLikeError()])
+def test_the_arguments_of_an_error_survive_pickling_as_they_are(error):
+    copy = pickle.loads(pickle.dumps(error))
+    assert copy.args == error.args
+    assert str(copy) == str(error)
+
+
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda: DamagedFileError(detail=None),
+        lambda: RecoveryFailedError(detail=3),
+        lambda: EngineError(engine="qpdf", detail=None),
+    ],
+)
+def test_a_detail_has_to_be_text(make):
+    with pytest.raises(TypeError):
+        make()
+
+
 class _LaterError(InputError):
     """Stands for an error a later change adds: no fields, one attribute set directly."""
 
