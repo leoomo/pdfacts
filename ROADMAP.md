@@ -24,10 +24,12 @@ Until M6 nothing is built that the switch does not need.
 
 ## Supported platforms
 
+The checks of every change run on all three with `tools/checks.py`.
+
 | Platform | How it is verified |
 | --- | --- |
-| Linux x86_64 and arm64, glibc | M0 gate run in containers; continuous integration from M1 on |
-| macOS arm64 | on the maintainer's machine, with the same gate script |
+| Linux x86_64 and arm64, glibc | in containers on the development machine; x86_64 is emulated, nothing runs on real x86_64 hardware |
+| macOS arm64 | natively on the development machine |
 | Linux with musl, Windows | not verified; wheels of both engines exist, nothing was run |
 
 Python 3.13 or newer.
@@ -70,7 +72,8 @@ Deliverables
   references, backend protocols for geometry, rendering and object access
 - test tooling: a PDF builder that writes bytes directly, so that no engine
   takes part in constructing a test file
-- continuous integration on Linux x86_64 and Linux arm64
+- one script that runs the checks on macOS, Linux arm64 and Linux x86_64
+  (`tools/checks.py`); the repository uses no hosted continuous integration
 - gate scripts and the digest tool under `bench/`
 - the import check covers `tests/` and `tools/` as well as the library
 
