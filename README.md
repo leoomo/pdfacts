@@ -48,9 +48,46 @@ Python 3.13 or newer. Dependencies are managed with
 uv sync
 uv run pytest
 uv run ruff check
+uv run ruff format --check
 uv run python tools/check_architecture.py
 uv build
 ```
+
+## Checks
+
+`tools/checks.py` defines the checks that decide whether a change may be
+merged. It installs the locked dependencies, runs the commands above, builds
+the wheel, installs it into a fresh environment outside the checkout and calls
+`pdfacts.engine_info()` from there. A check that fails does not stop the
+checks after it, so one run shows every problem.
+
+```bash
+python3 tools/checks.py                # this machine, in a fresh copy of the working tree
+python3 tools/checks.py --linux arm64  # the same inside a Linux container (needs Docker)
+python3 tools/checks.py --all          # this machine, Linux arm64 and Linux amd64
+```
+
+The copy contains what git would commit. Files that git ignores, such as a
+local virtual environment or the corpus files, never reach a check. The copy
+is taken once, at the start, and every platform of the run checks the same
+copy. Every run states the commit it checked, whether the working tree had
+uncommitted changes, and whether the commit contains `origin/main` as last
+fetched; `--all` refuses to run while there are uncommitted changes, so that
+its result describes exactly what will be merged.
+
+The repository uses no hosted continuous integration. Before a merge,
+`python3 tools/checks.py --all` is run on the final commit of the branch, and
+its output is put into the pull request.
+
+| Platform | Where it runs |
+| --- | --- |
+| macOS arm64 | on the development machine |
+| Linux arm64 | in a container on the development machine |
+| Linux x86_64 | in a container, emulated on the arm64 development machine; nothing runs on real x86_64 hardware |
+
+The containers use the image `python:3.13.5-slim`, pinned by digest, which has
+the Python version of `.python-version`. The script names the version of uv
+that wrote `uv.lock`; when uv is upgraded, the script is changed with it.
 
 ## Layout
 
