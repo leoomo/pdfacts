@@ -146,14 +146,14 @@ isolation between documents should use separate processes.
 
 `tools/check_architecture.py` checks three rules on every test run:
 
-| Rule | Meaning |
-| --- | --- |
-| engine-boundary | pypdfium2 only in `backends/pdfium.py`, pikepdf only in `backends/qpdf.py` |
-| forbidden | MuPDF bindings are never imported by the library |
-| core-isolation | `pdfacts.core` does not import feature packages |
+| Rule | Where | Meaning |
+| --- | --- | --- |
+| engine-boundary | `src/pdfacts/` | pypdfium2 only in `backends/pdfium.py`, pikepdf only in `backends/qpdf.py` |
+| forbidden | `src/pdfacts/`, `tests/`, `tools/` | MuPDF bindings are never imported; `bench/` is not checked |
+| core-isolation | `src/pdfacts/` | `pdfacts.core` does not import feature packages |
 
-The table states what the tool checks today. M1 extends the `forbidden` rule
-to `tests/` and `tools/`.
+Tests and tools may import the engines. A directory that the tool should check
+and cannot find is an error, not a pass.
 
 An abstraction is added only when a feature uses it. The rules above do not
 justify code that nothing calls.
