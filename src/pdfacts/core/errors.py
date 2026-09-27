@@ -18,12 +18,14 @@ HEADER_SEARCH_BYTES = 1029
 
 
 def _with_detail(text: str, detail: str) -> str:
+    if not isinstance(detail, str):
+        raise TypeError(f"detail must be a string, not {type(detail).__name__}")
     return f"{text}: {detail}" if detail else text
 
 
-def _rebuild(cls: type[PdfactsError], message: str) -> PdfactsError:
+def _rebuild(cls: type[PdfactsError], args: tuple[Any, ...]) -> PdfactsError:
     error = cls.__new__(cls)
-    Exception.__init__(error, message)
+    Exception.__init__(error, *args)
     return error
 
 
@@ -37,9 +39,10 @@ class PdfactsError(Exception):
 
     def __reduce__(self) -> tuple[Any, ...]:
         # The attributes are keyword-only, which the default pickling cannot
-        # pass back to __init__. The message is passed, and every attribute,
-        # including notes added with add_note(), travels as state.
-        return (_rebuild, (type(self), str(self)), dict(vars(self)))
+        # pass back to __init__. The arguments of the exception are passed as
+        # they are, and every attribute, including notes added with
+        # add_note(), travels as state.
+        return (_rebuild, (type(self), self.args), dict(vars(self)))
 
 
 class InputError(PdfactsError):

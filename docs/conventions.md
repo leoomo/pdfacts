@@ -169,9 +169,9 @@ A limit that could not be checked does not count as passed; that is why
 Errors can be pickled with their attributes and their notes, so that they
 cross process boundaries intact.
 
-Where an error or an unknown value takes a capability or a reason, it accepts
-the member or its value, for example `"rendering"`, and rejects anything else
-with `ValueError`.
+`Unknown`, `UnsupportedError` and `require()` accept a member of their enum
+or its value, for example `"rendering"`, and reject anything else with
+`ValueError`. The `reason` of `LimitUncheckedError` has to be an `Unknown`.
 
 ## Damaged files
 
