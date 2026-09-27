@@ -207,6 +207,7 @@ def test_every_case_of_the_issue_exists():
     assert set(cases.TRUNCATED) == {
         "cut inside the xref table",
         "cut before the xref table",
+        "cut before the xref table, rotation 90 and crop box",
         "cut inside the last page",
         "cut after the first page",
         "cut inside the catalog",
@@ -214,27 +215,68 @@ def test_every_case_of_the_issue_exists():
     assert set(cases.ENCRYPTED) == {"user password", "owner password only"}
 
 
+NUMBER = rb"-?\d+(?:\.\d+)?"
+
+
+def read_box(dictionary: bytes, key: bytes) -> tuple[float, ...] | None:
+    """The numbers of an array entry, read back from the bytes; None when absent."""
+    found = re.findall(rb"/" + key + rb"\s*\[([^\]]*)\]", dictionary)
+    assert len(found) <= 1, (key, found)
+    return tuple(float(value) for value in found[0].split()) if found else None
+
+
+def read_number(dictionary: bytes, key: bytes) -> float | None:
+    found = re.findall(rb"/" + key + rb"\s+(" + NUMBER + rb")(?=[\s/>])", dictionary)
+    assert len(found) <= 1, (key, found)
+    return float(found[0]) if found else None
+
+
+def read_token(dictionary: bytes, key: bytes) -> bytes | None:
+    found = re.findall(rb"/" + key + rb"\s+(\([^)]*\)|[^\s/>]+)", dictionary)
+    assert len(found) <= 1, (key, found)
+    return found[0] if found else None
+
+
+def as_floats(box):
+    return None if box is None else tuple(float(value) for value in box)
+
+
 @pytest.mark.parametrize("name", sorted(cases.GEOMETRY))
 def test_each_geometry_case_contains_what_it_records(name):
+    # Every value is read back from the bytes up to its delimiter and compared
+    # with the record; an entry the record says is absent must be absent.
     case = cases.GEOMETRY[name]()
     tree = object_bytes(case.data, PAGE_TREE)
+    assert read_box(tree, b"MediaBox") == as_floats(case.pages_media_box)
+    assert read_number(tree, b"Rotate") == case.pages_rotate
+    assert read_box(tree, b"CropBox") is None and read_token(tree, b"UserUnit") is None
     for number, media_box in zip(case.page_objects, case.media_boxes, strict=True):
         page = object_bytes(case.data, number)
-        if media_box is None:
-            assert b"/MediaBox" not in page
-        else:
-            assert b"/MediaBox " + cases.box_text(media_box) in page
-        if case.crop_box is not None:
-            assert b"/CropBox " + cases.box_text(case.crop_box) in page
-        if case.rotate is not None:
-            assert b"/Rotate %d" % case.rotate in page
-        if case.user_unit is not None:
-            assert b"/UserUnit " + case.user_unit in page
-        assert b"0 g 50 40 60 20 re f" in case.data
-    if case.pages_media_box is not None:
-        assert b"/MediaBox " + cases.box_text(case.pages_media_box) in tree
-    if case.pages_rotate is not None:
-        assert b"/Rotate %d" % case.pages_rotate in tree
+        assert read_box(page, b"MediaBox") == as_floats(media_box)
+        assert read_box(page, b"CropBox") == as_floats(case.crop_box)
+        assert read_number(page, b"Rotate") == case.rotate
+        assert read_token(page, b"UserUnit") == case.user_unit
+
+
+@pytest.mark.parametrize("name", sorted(cases.GEOMETRY))
+def test_every_page_fills_the_recorded_rectangle_in_the_recorded_colour(name):
+    case = cases.GEOMETRY[name]()
+    for number in case.page_objects:
+        content = object_bytes(case.data, number + 1)
+        data = content[
+            content.index(b"stream\n") + len(b"stream\n") : content.rindex(b"\nendstream")
+        ]
+        match = re.fullmatch(rb"(\S+) (\S+) (\S+) rg (\S+) (\S+) (\S+) (\S+) re f", data)
+        assert match, data
+        red, green, blue, x, y, width, height = (float(value) for value in match.groups())
+        assert (red, green, blue) == case.colour
+        assert (x, y, x + width, y + height) == case.rectangle
+
+
+@pytest.mark.parametrize("name", sorted(cases.GEOMETRY))
+def test_the_recorded_size_is_the_size_of_the_trailer(name):
+    case = cases.GEOMETRY[name]()
+    assert re.search(rb"/Size (\d+)", trailer(case.data)).group(1) == b"%d" % case.size
 
 
 def test_the_unusable_cases_are_what_their_names_say():
@@ -247,12 +289,11 @@ def test_the_unusable_cases_are_what_their_names_say():
 
 
 @pytest.mark.parametrize("name", sorted(cases.TRUNCATED))
-def test_each_truncated_case_is_a_shorter_prefix_of_three_pages(name):
+def test_each_truncated_case_is_a_shorter_prefix_of_its_source(name):
     case = cases.TRUNCATED[name]()
-    full = cases.three_pages().data
-    assert case.pages_built == 3
-    assert full.startswith(case.data)
-    assert case.cut_at == len(case.data) < len(full)
+    assert case.source.data.startswith(case.data)
+    assert case.cut_at == len(case.data) < len(case.source.data)
+    assert case.pages_built == len(case.source.page_objects)
 
 
 def test_the_truncated_cases_end_where_their_names_say():
@@ -262,9 +303,31 @@ def test_the_truncated_cases_end_where_their_names_say():
     assert full.rindex(b"\nxref\n") + 1 < inside_table < full.rindex(b"trailer")
     assert cases.cut_after_first_page().cut_at == full.index(b"%d 0 obj" % page_object(1))
     last = full.index(b"%d 0 obj" % (page_object(2) + 1))
-    assert last < cases.cut_inside_last_page().cut_at < full.rindex(b"endobj")
+    data_start = full.index(b"stream\n", last) + len(b"stream\n")
+    data_end = full.index(b"\nendstream", data_start)
+    assert data_start < cases.cut_inside_last_page().cut_at < data_end
     catalog = full.index(b"1 0 obj")
     assert catalog < cases.cut_inside_catalog().cut_at < full.index(b"endobj", catalog)
+
+
+def test_the_rotated_cropped_cut_keeps_its_geometry_on_record():
+    case = cases.cut_before_xref_table_rotated_cropped()
+    assert case.source.rotate == 90
+    assert case.source.crop_box == (20, 10, 380, 290)
+    assert case.cut_at == case.source.data.rindex(b"\nxref\n") + 1
+
+
+def test_the_verdana_page_uses_the_font_it_records_and_nothing_else():
+    case = cases.verdana_text()
+    assert case.font in case.data
+    assert b"/Helvetica" not in case.data
+    assert b"/Widths" not in case.data
+    assert b"BT /F1 24 Tf 40 200 Td (Hamburgefonstiv 0123) Tj ET" in case.data
+    loaded = pypdfium2.PdfDocument(case.data)
+    try:
+        assert len(loaded) == 1
+    finally:
+        loaded.close()
 
 
 def test_a_user_password_is_needed_for_one_encrypted_case_and_not_the_other():
