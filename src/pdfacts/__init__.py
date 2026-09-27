@@ -18,6 +18,7 @@ from pdfacts.core.errors import (
     RecoveryFailedError,
     UnsupportedError,
 )
+from pdfacts.core.geometry import Matrix, PageGeometry, Point, Rect
 from pdfacts.core.values import Unknown, UnknownReason
 
 __version__ = "0.0.1"
@@ -34,10 +35,14 @@ __all__ = [
     "LimitError",
     "LimitExceededError",
     "LimitUncheckedError",
+    "Matrix",
     "NotPdfError",
+    "PageGeometry",
     "PasswordRequiredError",
     "PdfactsError",
+    "Point",
     "RecoveryFailedError",
+    "Rect",
     "Unknown",
     "UnknownReason",
     "UnsupportedError",
