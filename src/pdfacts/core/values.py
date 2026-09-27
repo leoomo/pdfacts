@@ -27,6 +27,12 @@ class Unknown:
     reason: UnknownReason
     detail: str = ""
 
+    def __post_init__(self) -> None:
+        # UnknownReason(...) accepts a member or its value and rejects anything else.
+        object.__setattr__(self, "reason", UnknownReason(self.reason))
+        if not isinstance(self.detail, str):
+            raise TypeError(f"detail must be a string, not {type(self.detail).__name__}")
+
     def __bool__(self) -> bool:
         raise TypeError(
             "an unknown value has no truth value; test it with isinstance(value, Unknown)"

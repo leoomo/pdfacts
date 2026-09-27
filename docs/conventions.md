@@ -166,8 +166,12 @@ A limit that could not be checked does not count as passed; that is why
 
 `MemoryError` is never caught and never wrapped.
 
-Errors can be pickled with their attributes, so that they cross process
-boundaries intact.
+Errors can be pickled with their attributes and their notes, so that they
+cross process boundaries intact.
+
+Where an error or an unknown value takes a capability or a reason, it accepts
+the member or its value, for example `"rendering"`, and rejects anything else
+with `ValueError`.
 
 ## Damaged files
 

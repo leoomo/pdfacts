@@ -42,6 +42,13 @@ def test_require_raises_for_a_capability_that_is_not_available():
     assert raised.value.capability is Capability.FONT_POLICY_HOST
 
 
+def test_require_takes_a_capability_by_its_value_and_rejects_other_names():
+    with pytest.raises(UnsupportedError):
+        require("rendering")
+    with pytest.raises(ValueError):
+        require("bogus")
+
+
 def test_require_passes_for_a_capability_that_is_available(monkeypatch):
     from pdfacts.core import capabilities as module
 
