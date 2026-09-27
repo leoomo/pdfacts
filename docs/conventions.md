@@ -122,6 +122,57 @@ absent, and a value is never made up to fill the gap.
 
 A single unknown value does not discard the facts around it.
 
+An unknown value is `pdfacts.Unknown`, with one of three reasons:
+
+| Reason | Meaning |
+| --- | --- |
+| `engines-disagree` | the two engines describe the object differently |
+| `unreadable` | the value could not be read from the file |
+| `invalid-in-file` | the file contains a value that the PDF specification does not allow |
+
+An unknown value refuses to be used as a boolean: `if value:` raises
+`TypeError`, so that it cannot silently count as true. Test it with
+`isinstance(value, Unknown)`.
+
+The capability table, `pdfacts.capabilities()`, lists every capability and
+whether this version has it. A capability is True only once it is implemented.
+
+## Errors
+
+Every error is a `PdfactsError`. Its attributes are given as keywords and are
+readable under the same names.
+
+| Error | Parent | Attributes | Raised when |
+| --- | --- | --- | --- |
+| `InputError` | `PdfactsError` | - | never directly |
+| `EmptyInputError` | `InputError` | - | the input has 0 bytes |
+| `NotPdfError` | `InputError` | - | there is no `%PDF-` in the first 1029 bytes |
+| `DamagedFileError` | `InputError` | `detail` | there is a header, and the engine cannot load the file |
+| `PasswordRequiredError` | `PdfactsError` | `password_was_given` | a password is needed, or the one given is wrong |
+| `LimitError` | `PdfactsError` | `limit`, `allowed` | never directly |
+| `LimitExceededError` | `LimitError` | `found` | a limit was exceeded |
+| `LimitUncheckedError` | `LimitError` | `reason` | a limit was set and could not be checked |
+| `RecoveryFailedError` | `PdfactsError` | `detail` | recovery did not produce a usable file |
+| `UnsupportedError` | `PdfactsError` | `capability` | a feature was asked for that this version does not have |
+| `ClosedError` | `PdfactsError` | - | a document or page was used after it was closed |
+| `ConfigurationError` | `PdfactsError` | - | the runtime was configured too late, or twice with different values |
+| `EngineError` | `PdfactsError` | `engine`, `detail` | an engine failed in a way none of the above describes |
+
+The number 1029 is the 1024 bytes that PDFium accepts before the header
+(measured: it refuses 1025) plus the five bytes of `%PDF-`.
+
+A limit that could not be checked does not count as passed; that is why
+`LimitUncheckedError` exists.
+
+`MemoryError` is never caught and never wrapped.
+
+Errors can be pickled with their attributes and their notes, so that they
+cross process boundaries intact.
+
+`Unknown`, `UnsupportedError` and `require()` accept a member of their enum
+or its value, for example `"rendering"`, and reject anything else with
+`ValueError`. The `reason` of `LimitUncheckedError` has to be an `Unknown`.
+
 ## Damaged files
 
 `open` does not change what it reads. A file that the engine cannot load is
