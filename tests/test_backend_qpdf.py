@@ -7,6 +7,8 @@ are the numbers the cases were built from.
 from __future__ import annotations
 
 import dataclasses
+import re
+import threading
 import typing
 
 import pikepdf
@@ -15,14 +17,25 @@ import pytest
 from pdfacts.backends.protocols import EngineFailure, FailureKind, ObjectReader, PageObject
 from pdfacts.backends.qpdf import QpdfDocument
 from synthetic import cases
-from synthetic.builder import PageSpec, document
+from synthetic.builder import PageSpec, build, document, stream
 
-# The box QPDF puts on a page that has no usable media box: US letter.
-LETTER = (0.0, 0.0, 612.0, 792.0)
+CATALOG = b"<< /Type /Catalog /Pages 2 0 R >>"
 
 
 def opened(data: bytes, password: str | None = None) -> QpdfDocument:
     return QpdfDocument.open(data, password)
+
+
+def with_generation(data: bytes, number: int, generation: int) -> bytes:
+    """`data` with object `number` in `generation`; every length stays the same."""
+    data = data.replace(b"\n%d 0 obj" % number, b"\n%d %d obj" % (number, generation))
+    data = re.sub(rb"(?<![0-9])%d 0 R" % number, b"%d %d R" % (number, generation), data)
+    table = data.rindex(b"\nxref\n") + 1
+    lines = data[table:].split(b"\n")
+    # "xref", "0 <count>", then one entry per object: offset, generation, type.
+    entry = lines[2 + number]
+    lines[2 + number] = entry[:11] + b"%05d" % generation + entry[16:]
+    return data[:table] + b"\n".join(lines)
 
 
 def failure(data: bytes, password: str | None = None) -> EngineFailure:
@@ -78,7 +91,7 @@ def test_reversed_corners_come_back_as_written():
     assert case.media_boxes[0] == (400, 300, 0, 0)
 
 
-def test_a_page_without_a_crop_box():
+def test_a_page_without_crop_box_rotation_or_user_unit():
     page = opened(cases.plain_page().data).page_object(0)
     assert (page.crop_box, page.rotate, page.user_unit, page.user_unit_invalid) == (
         None,
@@ -93,19 +106,122 @@ def test_real_corners():
     assert page.media_box == (0.5, 0.25, 400.75, 300.0)
 
 
-def test_inherited_values_sit_on_the_page():
+def test_media_box_and_rotation_are_inherited():
     case = cases.media_box_and_rotation_on_pages()
     page = opened(case.data).page_object(0)
     assert page.media_box == floats(case.pages_media_box)
     assert page.rotate == case.pages_rotate
 
 
-def test_a_media_box_qpdf_had_to_replace_is_letter_and_a_warning_says_so():
-    for data in (cases.no_media_box().data, document([PageSpec(b"/MediaBox [0 0 400]")])):
-        document_ = opened(data)
-        assert document_.page_object(0).media_box == LETTER
-        (warning,) = document_.warnings()
-        assert "MediaBox" in warning
+def test_the_crop_box_is_inherited():
+    data = document(
+        [PageSpec(b"")], pages_entries=b"/MediaBox [0 0 400 300] /CropBox [20 10 380 290]"
+    )
+    page = opened(data).page_object(0)
+    assert (page.media_box, page.crop_box) == ((0.0, 0.0, 400.0, 300.0), (20.0, 10.0, 380.0, 290.0))
+
+
+def test_the_user_unit_is_not_inherited():
+    # The PDF specification does not list UserUnit among the inheritable keys.
+    data = document([PageSpec(b"/MediaBox [0 0 400 300]")], pages_entries=b"/UserUnit 2")
+    page = opened(data).page_object(0)
+    assert (page.user_unit, page.user_unit_invalid) == (None, False)
+
+
+def test_a_parent_chain_that_returns_to_the_page_ends():
+    data = build(
+        {
+            1: CATALOG,
+            2: b"<< /Type /Pages /Kids [4 0 R] /Count 1 >>",
+            4: b"<< /Type /Page /Parent 4 0 R /Rotate 90 /Contents 5 0 R >>",
+            5: stream(b""),
+        },
+        1,
+    )
+    document_ = opened(data)
+    pages: list[PageObject] = []
+    # In a thread, so that a loop fails the test instead of hanging the run.
+    reader = threading.Thread(target=lambda: pages.append(document_.page_object(0)), daemon=True)
+    reader.start()
+    reader.join(timeout=10)
+    assert not reader.is_alive(), "following /Parent did not end"
+    assert (pages[0].media_box, pages[0].rotate) == (None, 90)
+
+
+def test_a_warning_both_views_give_is_kept_once():
+    data = build(
+        {
+            1: CATALOG,
+            2: b"<< /Type /Pages /Kids [4 0 R] /Count 1 >>",
+            4: b"<< /Type /Page /Parent 2 0 R /MediaBox 6 0 R /Contents 5 0 R >>",
+            5: stream(b""),
+            6: b"[0 0 400 300]",
+        },
+        1,
+    )
+    # The cross-reference entry of object 6 says offset 0; QPDF reads the
+    # object as null and warns each time a view reads it.
+    table = data.rindex(b"\nxref\n") + 1
+    lines = data[table:].split(b"\n")
+    lines[2 + 6] = b"%010d" % 0 + lines[2 + 6][10:]
+    document_ = opened(data[:table] + b"\n".join(lines))
+    assert document_.page_object(0).media_box is None
+    offsets = [warning for warning in document_.warnings() if "has offset 0" in warning]
+    assert len(offsets) == 1
+
+
+@pytest.mark.parametrize(
+    "entries",
+    [b"", b"/MediaBox [0 0 400]", b"/MediaBox [0 0 (400) 300]", b"/MediaBox []", b"/MediaBox null"],
+    ids=repr,
+)
+def test_a_page_without_a_usable_media_box_has_none_although_qpdf_put_one_in(entries):
+    # QPDF gives such a page US letter in memory and says so in a warning.
+    document_ = opened(document([PageSpec(entries)]))
+    assert document_.page_object(0).media_box is None
+    (warning,) = document_.warnings()
+    assert "MediaBox is undefined" in warning
+
+
+def test_a_page_written_directly_into_the_kids_has_no_object_of_the_file():
+    kid = b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Contents 3 0 R >>"
+    data = build(
+        {1: CATALOG, 2: b"<< /Type /Pages /Kids [%s] /Count 1 >>" % kid, 3: stream(b"")}, 1
+    )
+    document_ = opened(data)
+    assert document_.page_count() == 1
+    with pytest.raises(EngineFailure) as raised:
+        document_.page_object(0)
+    assert raised.value.kind is FailureKind.FORMAT
+    assert "not an object of the file" in raised.value.detail
+    assert any("is direct" in warning for warning in document_.warnings())
+
+
+def test_a_page_listed_twice_is_known_once():
+    data = build(
+        {
+            1: CATALOG,
+            2: b"<< /Type /Pages /Kids [4 0 R 4 0 R] /Count 2 >>",
+            4: b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Contents 5 0 R >>",
+            5: stream(b""),
+        },
+        1,
+    )
+    document_ = opened(data)
+    assert document_.page_count() == 2
+    assert document_.page_object(0).object_number == 4
+    with pytest.raises(EngineFailure) as raised:
+        document_.page_object(1)
+    assert raised.value.kind is FailureKind.FORMAT
+    assert "not an object of the file" in raised.value.detail
+    assert any("more than once" in warning for warning in document_.warnings())
+
+
+def test_the_generation_comes_from_the_file():
+    data = with_generation(cases.plain_page().data, 4, 1)
+    assert b"4 1 obj" in data
+    page = opened(data).page_object(0)
+    assert (page.object_number, page.generation) == (4, 1)
 
 
 def test_asking_for_the_warnings_twice_gives_them_twice():
@@ -243,6 +359,9 @@ def test_after_close_every_method_fails_and_close_does_nothing(monkeypatch):
     monkeypatch.setattr(pikepdf.Pdf, "close", counting)
     document_ = opened(cases.plain_page().data)
     document_.close()
+    # Both views of the file, each once.
+    assert len(engine_closes) == 2
+    assert engine_closes[0] is not engine_closes[1]
     calls = [
         document_.page_count,
         document_.object_count,
@@ -254,7 +373,46 @@ def test_after_close_every_method_fails_and_close_does_nothing(monkeypatch):
             call()
         assert (raised.value.kind, raised.value.detail) == (FailureKind.OTHER, "closed")
     document_.close()
+    assert len(engine_closes) == 2
+
+
+def test_close_closes_the_second_view_when_the_first_fails(monkeypatch):
+    closed = []
+    original = pikepdf.Pdf.close
+
+    def first_fails(self, *args, **kwargs):
+        closed.append(self)
+        if len(closed) == 1:
+            original(self, *args, **kwargs)
+            raise RuntimeError("the first view failed to close")
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(pikepdf.Pdf, "close", first_fails)
+    document_ = opened(cases.plain_page().data)
+    with pytest.raises(EngineFailure):
+        document_.close()
+    assert len(closed) == 2
+
+
+def test_a_failed_open_closes_the_view_already_opened(monkeypatch):
+    engine_closes, opens = [], []
+    original_open, original_close = pikepdf.open, pikepdf.Pdf.close
+
+    def second_fails(*args, **kwargs):
+        if opens:
+            raise pikepdf.PdfError("the second view failed")
+        opens.append(original_open(*args, **kwargs))
+        return opens[-1]
+
+    def counting(self, *args, **kwargs):
+        engine_closes.append(self)
+        return original_close(self, *args, **kwargs)
+
+    monkeypatch.setattr(pikepdf, "open", second_fails)
+    monkeypatch.setattr(pikepdf.Pdf, "close", counting)
+    assert failure(cases.plain_page().data).kind is FailureKind.FORMAT
     assert len(engine_closes) == 1
+    assert engine_closes[0] is opens[0]
 
 
 def test_the_file_is_opened_with_recovery_off(monkeypatch):

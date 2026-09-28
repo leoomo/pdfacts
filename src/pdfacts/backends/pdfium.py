@@ -135,8 +135,8 @@ class PdfiumDocument:
     def visible_box(self, index: int) -> Box:
         """The crop box intersected with the media box, corners in order.
 
-        Inheritance is resolved and the box is not rotated. A page without any
-        media box gets US letter, as PDFium assumes.
+        Inheritance is resolved and the box is not rotated. A page without a
+        usable media box gets US letter, as PDFium assumes.
         """
         return self._read_page(index, _bounding_box)
 

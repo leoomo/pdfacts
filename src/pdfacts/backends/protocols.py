@@ -46,7 +46,7 @@ class PageObject:
     object_number: int
     generation: int
     # As written, corners not put in order; None when absent or not four
-    # numbers. Inherited values already sit on the page.
+    # numbers. An inherited value is looked up through /Parent.
     media_box: Box | None
     crop_box: Box | None
     # As written, for example -90 or 450; None when absent or not an integer.
