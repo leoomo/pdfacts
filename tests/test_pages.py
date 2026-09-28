@@ -738,8 +738,9 @@ def test_a_media_box_pdfium_reads_otherwise_than_qpdf_disagrees():
     assert page.ref.object_number.reason is UnknownReason.ENGINES_DISAGREE
 
 
-def test_no_media_box_and_a_flat_crop_box_is_damaged():
-    data = document([PageSpec(b"/CropBox [0 0 0 300]")])
+@pytest.mark.parametrize("crop_box", [b"[0 0 0 300]", b"[0 0 400 0]"], ids=["width", "height"])
+def test_no_media_box_and_a_flat_crop_box_is_damaged(crop_box):
+    data = document([PageSpec(b"/CropBox " + crop_box)])
     with pytest.raises(DamagedFileError) as raised:
         pdfacts.open(data).pages[0]
     assert "no visible area" in raised.value.detail
@@ -855,26 +856,68 @@ def test_a_box_of_the_same_size_elsewhere_disagrees(monkeypatch, theirs):
 
 
 @pytest.mark.parametrize(
-    ("number", "read"),
+    ("entries", "visible"),
     [
-        (b"2147483648", True),
-        (b"-2147483648", True),
-        (b"4294967296", False),
-        (b"-2147483649", False),
+        (b"/MediaBox [0 0 4294967296 300]", LETTER),
+        (b"/MediaBox [0 0 -2147483649 300]", LETTER),
+        (b"/MediaBox [0 0 +2147483648 300]", LETTER),
+        (b"/MediaBox [0 0 400 300] /CropBox [100 0 100.000001 300]", (0.0, 0.0, 400.0, 300.0)),
     ],
+    ids=["2**32", "-2**31 - 1", "+2**31", "a real 32 bits make flat"],
 )
-def test_an_integer_pdfium_cannot_hold_is_read_as_0(number, read):
-    # Measured: PDFium reads an integer outside -2**31 .. 2**32 - 1 as 0, QPDF
-    # as written. The media box becomes flat and PDFium puts in US letter;
-    # the engines disagree (docs/conventions.md, "Damaged files").
+def test_a_box_only_pdfium_reads_as_flat_is_the_known_gap(entries, visible):
+    # Measured: PDFium reads an integer outside its range as 0 and holds
+    # reals in 32 bits. It puts in US letter for the flat media box and
+    # ignores the flat crop box; QPDF reads the box as written. The engines
+    # disagree, and the page is not counted as damaged (docs/conventions.md,
+    # "Damaged files").
+    page = first_page(document([PageSpec(entries)]))
+    box = page.geometry.visible_box
+    assert (box.x0, box.y0, box.x1, box.y1) == visible
+    assert page.ref.object_number.reason is UnknownReason.ENGINES_DISAGREE
+
+
+@pytest.mark.parametrize("number", [b"2147483648", b"-2147483648"])
+def test_an_integer_within_pdfiums_range_is_read(number):
     page = first_page(document([PageSpec(b"/MediaBox [0 0 " + number + b" 300]")]))
     box = page.geometry.visible_box
-    if read:
-        assert (box.x0, box.y0, box.x1, box.y1) == ordered((0.0, 0.0, float(number), 300.0))
-        assert known(page.ref)
-    else:
-        assert (box.x0, box.y0, box.x1, box.y1) == LETTER
-        assert page.ref.object_number.reason is UnknownReason.ENGINES_DISAGREE
+    assert (box.x0, box.y0, box.x1, box.y1) == ordered((0.0, 0.0, float(number), 300.0))
+    assert known(page.ref)
+
+
+@pytest.mark.parametrize(
+    ("number", "dropped"),
+    [
+        (b"9223372036854775807", False),
+        (b"9223372036854775808", True),
+        (b"-9223372036854775808", False),
+        (b"-9223372036854775809", True),
+    ],
+)
+def test_an_integer_beyond_what_qpdf_holds_drops_the_page_in_qpdf(number, dropped):
+    # Measured: QPDF reads integers from -2**63 to 2**63 - 1. Outside, it
+    # treats the page as null and counts one page fewer: every value from
+    # QPDF is unknown.
+    first = PageSpec(b"/MediaBox [0 0 " + number + b" 300]")
+    document_ = pdfacts.open(document([first, PageSpec(b"/MediaBox [0 0 400 300]")]))
+    assert ("PDFium counts 2 pages, QPDF 1" in document_.warnings) is dropped
+    assert known(document_.pages[1].ref) is not dropped
+
+
+def test_a_crop_box_outside_the_media_box_the_file_writes_is_damaged_where_pdfium_reads_another():
+    # /MediaBox null counts as absent (ISO 32000, 7.3.9): the media box comes
+    # from the page tree node, and the crop box lies outside it. PDFium puts
+    # in US letter for the null, which the crop box overlaps: only the file's
+    # boxes, read through QPDF, show the damage.
+    data = document(
+        [PageSpec(b"/MediaBox null /CropBox [500 500 600 600]")],
+        pages_entries=b"/MediaBox [0 0 400 300]",
+    )
+    alone = first_page(b"x" * JUNK_ACCEPTED + data).geometry.visible_box
+    assert (alone.x0, alone.y0, alone.x1, alone.y1) == (500.0, 500.0, 600.0, 600.0)
+    with pytest.raises(DamagedFileError) as raised:
+        pdfacts.open(data).pages[0]
+    assert "media box (0.0, 0.0, 400.0, 300.0)" in raised.value.detail
 
 
 class WatchedLock:
@@ -940,3 +983,21 @@ def test_a_thread_that_waited_past_the_deadline_does_not_read_the_page(monkeypat
 
     outcome = read_first_page_after_waiting(monkeypatch, document_, time_passes)
     assert isinstance(outcome, LimitExceededError)
+
+
+def test_a_thread_that_waited_while_the_page_was_read_gets_it_also_past_the_deadline(
+    monkeypatch,
+):
+    # The deadline is checked before a page is read, not before one is given.
+    now = [0.0]
+    document_ = pdfacts.open(
+        cases.plain_page().data, limits=Limits(deadline_seconds=5), _clock=lambda: now[0]
+    )
+    read: list[Page] = []
+
+    def read_then_time_passes() -> None:
+        read.append(document_.pages[0])
+        now[0] = 10.0
+
+    outcome = read_first_page_after_waiting(monkeypatch, document_, read_then_time_passes)
+    assert outcome is read[0]
