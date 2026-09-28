@@ -16,6 +16,7 @@ import pytest
 
 from pdfacts.backends.pdfium import PdfiumDocument
 from pdfacts.backends.protocols import EngineFailure, FailureKind, GeometryReader
+from pdfium_handles import watch
 from synthetic import cases
 
 # The box PDFium uses for a page without any media box: US letter.
@@ -46,17 +47,9 @@ def plain(value: object) -> bool:
     return False
 
 
-def counting_closes(monkeypatch) -> list[object]:
-    """Every handle PDFium is asked to close, from now on in this test."""
-    closed: list[object] = []
-    original = pypdfium2.raw.FPDF_CloseDocument
-
-    def counting(handle):
-        closed.append(handle)
-        return original(handle)
-
-    monkeypatch.setattr(pypdfium2.raw, "FPDF_CloseDocument", counting)
-    return closed
+def counting_closes(monkeypatch) -> list[int]:
+    """The handles this test loads that PDFium is asked to close, from now on."""
+    return watch(monkeypatch).freed
 
 
 def test_the_page_count_of_three_pages():
@@ -223,13 +216,13 @@ def test_a_close_interrupted_after_the_engine_closed_refuses_every_use(monkeypat
 
 def test_an_interrupt_inside_pypdfium2_after_the_handle_was_freed(monkeypatch):
     # PDFium freed the handle; pypdfium2 has not forgotten it yet.
-    freed = []
-    original = pypdfium2.raw.FPDF_CloseDocument
+    handles = watch(monkeypatch)
+    watched = pypdfium2.raw.FPDF_CloseDocument
 
     def interrupted_after(handle):
-        freed.append(handle)
-        original(handle)
-        raise KeyboardInterrupt
+        watched(handle)
+        if handles.owns(handle):
+            raise KeyboardInterrupt
 
     monkeypatch.setattr(pypdfium2.raw, "FPDF_CloseDocument", interrupted_after)
     document = opened(cases.three_pages().data)
@@ -237,7 +230,7 @@ def test_an_interrupt_inside_pypdfium2_after_the_handle_was_freed(monkeypatch):
         document.close()
     every_method_refuses(document)
     document.close()
-    assert len(freed) == 1
+    assert len(handles.freed) == 1
 
 
 def test_a_memory_error_while_closing_a_refused_file_is_not_swallowed(monkeypatch):
