@@ -274,18 +274,13 @@ def rewrite_recovered(data: bytes, password: str | None) -> RecoveredBytes:
     source = _Input(data + b"%")
     try:
         with _translated():
-            try:
-                with _needless_password_unsaid():
-                    pdf = pikepdf.open(
-                        source,
-                        password="" if password is None else password,
-                        attempt_recovery=True,
-                        inherit_page_attributes=False,
-                    )
-            except ValueError as error:
-                # For a file too short to hold a trailer, QPDF's search for one
-                # fails in the stream it reads from.
-                raise EngineFailure(FailureKind.FORMAT, str(error)) from error
+            with _needless_password_unsaid():
+                pdf = pikepdf.open(
+                    source,
+                    password="" if password is None else password,
+                    attempt_recovery=True,
+                    inherit_page_attributes=False,
+                )
             try:
                 page_count = len(pdf.pages)
                 if _lost_encryption(pdf):
@@ -294,18 +289,18 @@ def rewrite_recovered(data: bytes, password: str | None) -> RecoveredBytes:
                         "the file is encrypted, and QPDF did not find the trailer that names "
                         "its encryption dictionary",
                     )
-                reported = [str(message) for message in pdf.get_warnings()]
                 # Any value: QPDF writes the number of objects it writes.
                 pdf.trailer["/Size"] = 1
                 written = io.BytesIO()
                 encrypted = pdf.is_encrypted
                 pdf.save(written, encryption=encrypted, deterministic_id=not encrypted)
-                reported.extend(str(message) for message in pdf.get_warnings())
+                # Everything QPDF reported since the file was opened.
+                reported = tuple(str(message) for message in pdf.get_warnings())
             finally:
                 pdf.close()
     finally:
         source.close()
-    return RecoveredBytes(data=written.getvalue(), page_count=page_count, warnings=tuple(reported))
+    return RecoveredBytes(data=written.getvalue(), page_count=page_count, warnings=reported)
 
 
 def _lost_encryption(pdf: pikepdf.Pdf) -> bool:
