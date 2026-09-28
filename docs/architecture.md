@@ -1,6 +1,7 @@
 # Architecture
 
-Status: design. Only `core/engines.py` and the two backend modules exist.
+Status: design; M1 is being built. The package layout below is the target, not
+a list of what exists.
 
 ## Layers
 
