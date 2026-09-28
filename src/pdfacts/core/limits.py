@@ -22,7 +22,9 @@ class Limits:
     # The object count from the trailer; checked as soon as QPDF has opened
     # the file. When the count is unknown, open() raises LimitUncheckedError.
     max_objects: int | None = None
-    # Seconds from the start of open(); checked before each page is read.
+    # Seconds from the start of open() or recover(). open() checks it before
+    # each page is read; recover() once the file is rebuilt and once the
+    # result is checked.
     deadline_seconds: int | float | None = None
     # Pixels of one rendering, counted from the region and the scale; checked
     # before the engine is called. Memory grows with the square of the scale,

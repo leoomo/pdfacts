@@ -420,24 +420,26 @@ def incremental_update() -> Updated:
     return Updated(data, source, UPDATED_MEDIA_BOX)
 
 
-def cut_inside_the_last_offset() -> Updated:
+def cut_inside_the_last_offset(*, naming_the_update: bool = False) -> Updated:
     """The update of incremental_update(), padded, cut inside its last offset.
 
     A string that nothing uses pads the update until its table lies at ten
-    times the offset of the source's table; the cut leaves the digits of the
-    latter after the last startxref. The objects of the update are whole.
+    times the offset that the cut leaves after the last startxref: the offset
+    of the source's table, or with `naming_the_update` that of the update's
+    first object. The objects of the update are whole.
     """
     source = plain_page()
     _, earlier = _startxref(source.data)
+    named = len(source.data) if naming_the_update else earlier
 
     def padded(padding: int) -> bytes:
         objects = {FIRST_PAGE: _updated_page(), size_of_document(1): b"(%s)" % (b"x" * padding)}
         return append_update(source.data, objects, 1)
 
     _, table = _startxref(padded(0))
-    data = padded(10 * earlier - table)
+    data = padded(10 * named - table)
     start, _ = _startxref(data)
-    return Updated(data[: start + len(b"%d" % earlier)], source, UPDATED_MEDIA_BOX)
+    return Updated(data[: start + len(b"%d" % named)], source, UPDATED_MEDIA_BOX)
 
 
 @dataclass(frozen=True)

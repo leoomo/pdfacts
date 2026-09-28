@@ -29,21 +29,25 @@ _STARTXREF = re.compile(rb"startxref(?>(?:[\x00\t\n\x0c\r ]|%[^\r\n]*)+)")
 # end of the file after it. It passes over a startxref without an offset, one
 # glued to its offset and one whose offset other characters follow.
 _OFFSET = re.compile(rb"\+?([0-9]+)(?![^\x00\t\n\x0c\r ()<>\[\]{}/%])")
-# What the offset after startxref names: a cross-reference table, or an object,
-# which may be a cross-reference stream. QPDF skips white space before it
-# (measured); only the first bytes are looked at, so that a crafted file whose
-# offsets all name a long run of white space is not read over and over.
+# What the offset after startxref can name: a cross-reference table, or an
+# object, which may be a cross-reference stream; QPDF tells which. Offsets
+# count from the header, which may follow other bytes (measured: QPDF and
+# PDFium read such a file as written). QPDF skips white space before the
+# section (measured); only the first bytes are looked at, so that a crafted
+# file whose offsets all name a long run of white space is not read over and
+# over.
 _SECTION = re.compile(
     rb"[\x00\t\n\x0c\r ]*(?:xref|[0-9]+[\x00\t\n\x0c\r ]+[0-9]+[\x00\t\n\x0c\r ]+obj)"
 )
-_SECTION_REACH = 64
+_REACH = 64
+# %%EOF after an offset: the revision is closed.
+_CLOSED = re.compile(rb"[\x00\t\n\x0c\r ]*%%EOF")
 # "N G obj", where an object begins.
 _OBJECT_HEADER = re.compile(
     rb"(?<![0-9])[0-9]+[\x00\t\n\x0c\r ]+[0-9]+[\x00\t\n\x0c\r ]+obj(?![A-Za-z])"
 )
-# The end of the first page, in the linearization dictionary of a linearized
-# file, which lies within its first 1024 bytes (ISO 32000-1, F.2).
-_FIRST_PAGE_END = re.compile(rb"/E[\x00\t\n\x0c\r ]+([0-9]+)")
+# What a revision is written of: objects, a cross-reference table, a trailer.
+_REVISION_PART = re.compile(_OBJECT_HEADER.pattern + rb"|(?<![A-Za-z])(?:xref|trailer)(?![A-Za-z])")
 
 
 @dataclass(frozen=True)
@@ -313,33 +317,35 @@ def rewrite_recovered(data: bytes, password: str | None) -> RecoveredBytes:
     holds an encryption dictionary: QPDF did not find the trailer that names
     it, and read the encrypted strings and streams as they are.
 
-    QPDF reads the file up to the end of its last whole revision, and what
-    follows is left out. Where objects follow, the file ends inside an
-    incremental update: a FORMAT failure, since QPDF would read the revision
-    before without a word, or, rebuilding the file from its objects, mix the
-    update with it; it places objects in object streams only through a
-    cross-reference stream, which a cut update lacks. A file without a whole
-    revision is rebuilt from its objects.
+    QPDF reads the file up to the end of its last whole revision
+    (_revision_ends), and what follows is left out. Where part of a revision
+    follows, an object, a cross-reference table or a trailer, the file ends
+    inside an incremental update, and so it does where QPDF, recovery off,
+    cannot read the last revision after another that %%EOF closes: a FORMAT
+    failure, since QPDF would read the revision before without a word, or,
+    rebuilding the file from its objects, mix the update with it; it places
+    objects in object streams only through a cross-reference stream, which
+    an unfinished update lacks. A file without a whole revision is rebuilt
+    from its objects.
 
     The warnings are those QPDF gave while it rebuilt the file, walked its
     pages and wrote it: it reads streams only when it writes them.
     """
-    end = _last_revision(data)
-    if end is None:
+    ends = _revision_ends(data)
+    last = ends[-1][0] if ends else None
+    if last is not None and _REVISION_PART.search(data, last):
+        raise _unfinished()
+    if last is not None and _reads_as_written(data[:last], password):
+        data = data[:last]
+    elif any(closed for _, closed in ends[:-1]):
+        raise _unfinished()
+    else:
         # A comment longer than QPDF's search for startxref makes it rebuild
         # the file from its objects, the last of each number counting, and
         # keeps it from dropping an object that only white space follows to
         # the end ("EOF after endobj"). Comments mean nothing, and QPDF does
         # not write them.
         data += b"%" + b" " * (2 * _STARTXREF_SEARCH)
-    elif _OBJECT_HEADER.search(data, end):
-        raise EngineFailure(
-            FailureKind.FORMAT,
-            "it ends inside an incremental update, which QPDF would drop without a word "
-            "or, rebuilding the file from its objects, mix with the revision before",
-        )
-    else:
-        data = data[:end]
     sources: list[_Input] = []
     try:
         with _translated():
@@ -379,35 +385,95 @@ def rewrite_recovered(data: bytes, password: str | None) -> RecoveredBytes:
     return RecoveredBytes(data=written.getvalue(), page_count=page_count, warnings=reported)
 
 
-def _last_revision(data: bytes) -> int | None:
-    """Where the offset after the startxref of the last whole revision ends.
+def _unfinished() -> EngineFailure:
+    return EngineFailure(
+        FailureKind.FORMAT,
+        "it ends inside an incremental update, which QPDF would drop without a word "
+        "or, rebuilding the file from its objects, mix with the revision before",
+    )
 
-    None where the file has no whole revision. A startxref ends a revision
-    where QPDF reads through it, its offset names a cross-reference section,
-    and that section lies after the startxref of the revision before: a
-    later revision's section lies nowhere else, and an offset cut short, or
-    cut short and followed by other bytes, can name an earlier one. In a
-    linearized file, the first startxref, where it lies before the end of
-    the first page, ends the first-page section, not a revision; its offset
-    is often 0, which names no section, but need not be.
+
+def _revision_ends(data: bytes) -> list[tuple[int, bool]]:
+    """Where the offsets after the startxrefs of whole revisions end, in order,
+    and whether %%EOF closes each revision.
+
+    A startxref ends a revision where QPDF reads through it, and its offset
+    names a cross-reference table or an object after the startxref of the
+    last revision that %%EOF closes: a later revision's section lies nowhere
+    else, and an offset cut short, or cut short and followed by other bytes,
+    can name an earlier one. A revision is taken as closed only where %%EOF
+    follows, so that the text of a startxref inside a stream cannot pass for
+    the end of one. The first-page trailer of a linearized file ends no
+    revision (_first_page_trailer).
     """
-    head = data[:1024]
-    first_page_end = 0
-    if b"/Linearized" in head:
-        match = _FIRST_PAGE_END.search(head, 0, max(head.find(b"endobj"), 0))
-        first_page_end = int(match.group(1)) if match else 0
-    previous = end = None
-    for index, found in enumerate(_STARTXREF.finditer(data)):
-        if index == 0 and found.start() < first_page_end:
+    header = max(data.find(b"%PDF-"), 0)
+    first_page = _first_page_trailer(data, header)
+    ends: list[tuple[int, bool]] = []
+    previous = None
+    for found in _STARTXREF.finditer(data):
+        if found.start() == first_page:
             continue
         match = _OFFSET.match(data, found.end())
         if match is None:
             continue
-        offset = int(match.group(1))
-        section = _SECTION.match(data, offset, offset + _SECTION_REACH)
-        if section and (previous is None or offset > previous):
-            previous, end = found.start(), match.end()
-    return end
+        section = header + int(match.group(1))
+        if not _SECTION.match(data, section, section + _REACH):
+            continue
+        if previous is not None and section <= previous:
+            continue
+        closed = _CLOSED.match(data, match.end(), match.end() + _REACH) is not None
+        ends.append((match.end(), closed))
+        if closed:
+            previous = found.start()
+    return ends
+
+
+def _first_page_trailer(data: bytes, header: int) -> int | None:
+    """Where the startxref of a linearized file's first-page trailer begins.
+
+    None where the file is not linearized or has no such trailer. The
+    linearization dictionary is the first object, within the first 1024
+    bytes (ISO 32000-1, F.2), and the first-page cross-reference section
+    follows it (F.3): its startxref is the first, with at most the object of
+    a cross-reference stream between. The last startxref of the revision
+    names the first-page section, which lies before this one; some files
+    have no first-page trailer.
+    """
+    first = _OBJECT_HEADER.search(data, header, header + 1024)
+    if first is None:
+        return None
+    closing = data.find(b"endobj", first.end(), header + 1024)
+    if closing < 0 or b"/Linearized" not in data[first.end() : closing]:
+        return None
+    found = _STARTXREF.search(data, closing)
+    if found is None:
+        return None
+    between = _OBJECT_HEADER.finditer(data, closing, found.start())
+    if next(between, None) is not None and next(between, None) is not None:
+        return None
+    return found.start()
+
+
+def _reads_as_written(data: bytes, password: str | None) -> bool:
+    """Whether QPDF, recovery off, reads the cross-reference sections of `data`.
+
+    QPDF reads them when it opens a file: from the last startxref through
+    each /Prev.
+    """
+    sources: list[_Input] = []
+    try:
+        with _translated():
+            _opened(
+                data, password, sources, attempt_recovery=False, inherit_page_attributes=False
+            ).close()
+    except EngineFailure as failure:
+        if failure.kind is not FailureKind.FORMAT:
+            raise
+        return False
+    finally:
+        for source in sources:
+            source.close()
+    return True
 
 
 def _lost_encryption(pdf: pikepdf.Pdf) -> bool:
