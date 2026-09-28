@@ -33,6 +33,8 @@ from pdfacts.backends import qpdf as qpdf_backend
 from pdfacts.backends.protocols import EngineFailure, FailureKind, RecoveredBytes
 from pdfacts.core import runtime
 from synthetic import cases
+from synthetic.builder import build, stream
+from synthetic.encryption import encrypt
 
 # The cases QPDF rebuilds, and the pages each keeps.
 RECOVERED = {
@@ -480,3 +482,98 @@ def test_open_with_a_password_the_file_does_not_need_raises_no_python_warning():
         with pdfacts.open(data, password="x") as document:
             assert document.warnings == ()
             assert not isinstance(document.object_count, Unknown)
+
+
+def one_page_with(extra: bytes) -> bytes:
+    """A one-page file with `extra` as a further object, cut before its table."""
+    data = build(
+        {
+            1: b"<< /Type /Catalog /Pages 2 0 R >>",
+            2: b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            3: b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Contents 4 0 R >>",
+            4: stream(cases.rectangle_content(cases.RECTANGLE, cases.BLACK)),
+            5: extra,
+        },
+        1,
+    )
+    return data[: data.rindex(b"\nxref\n") + 1]
+
+
+@pytest.mark.parametrize(
+    "dictionary",
+    [
+        b"<< /Filter /Adobe.PubSec /SubFilter /adbe.pkcs7.s4 /V 2 /Length 128 "
+        b"/Recipients [<0102>] >>",
+        b"<< /Filter /Adobe.PubSec /SubFilter /adbe.pkcs7.s5 /V 4 /CF << /DefaultCryptFilter "
+        b"<< /CFM /AESV2 /Recipients [<0102>] >> >> /StmF /DefaultCryptFilter "
+        b"/StrF /DefaultCryptFilter >>",
+        b"<< /Filter /Adobe.APS /V 2 /Length 128 >>",
+        b"<< /Filter /Adobe.PubSec /CF << /DefaultCryptFilter << /Recipients [<0102>] >> >> >>",
+        b"<< /Filter /Adobe.PubSec /StmF /DefaultCryptFilter >>",
+        b"<< /Filter /Adobe.PubSec /StrF /DefaultCryptFilter >>",
+        b"<< /Filter /Adobe.PubSec /Recipients [<0102>] >>",
+        b"<< /Filter /Standard /R 2 /O <00> /U <00> /P -4 >>",
+    ],
+    ids=[
+        "public key, version 2",
+        "public key, version 4",
+        "another handler",
+        "crypt filters only",
+        "a stream filter only",
+        "a string filter only",
+        "recipients only",
+        "the standard handler without /V",
+    ],
+)
+def test_an_encryption_dictionary_of_any_handler_left_without_its_trailer_fails(dictionary):
+    # Handlers pikepdf cannot write, built as plain objects: once the trailer
+    # is cut off, nothing but the dictionary says the file is encrypted.
+    with pytest.raises(RecoveryFailedError, match="encrypt"):
+        pdfacts.recover(one_page_with(dictionary))
+
+
+def test_an_aes_256_file_whose_trailer_is_lost_is_not_recovered():
+    data = encrypt(cases.plain_page().data, user="user", owner="owner", R=6)
+    with pytest.raises(RecoveryFailedError, match="encrypt"):
+        pdfacts.recover(data[: data.rindex(b"\nxref\n") + 1], password="user")
+
+
+def test_a_signature_dictionary_is_not_taken_for_encryption():
+    signature = (
+        b"<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached /V 1 "
+        b"/ByteRange [0 10 20 30] /Contents <00> >>"
+    )
+    assert pdfacts.recover(one_page_with(signature)).page_count == 1
+
+
+def test_an_intact_file_with_white_space_after_its_end_is_rewritten_without_warnings():
+    # startxref 1054 bytes before the end, the most QPDF's search reaches
+    # (measured): a byte more, and it would rebuild the table.
+    data = cases.three_pages().data
+    data += b" " * (1054 - (len(data) - data.rindex(b"startxref")))
+    assert pdfacts.recover(data).warnings == ()
+
+
+def test_the_id_of_a_result_comes_from_its_content():
+    ids = []
+    for case in (cases.cut_after_first_page(), cases.cut_before_xref_table()):
+        with reopened(pdfacts.recover(case.data).data) as pdf:
+            ids.append(tuple(bytes(part) for part in pdf.trailer.ID))
+    assert ids[0] != ids[1]
+
+
+def test_a_wrong_password_for_a_file_with_only_an_owner_password_is_refused():
+    # As open() refuses it.
+    with pytest.raises(PasswordRequiredError) as raised:
+        pdfacts.recover(cases.owner_password_only().data, password="wrong")
+    assert raised.value.password_was_given is True
+
+
+def test_a_form_field_is_not_taken_for_encryption():
+    # It has /V, the value, and no security handler in /Filter.
+    assert pdfacts.recover(one_page_with(b"<< /FT /Tx /T (name) /V (value) >>")).page_count == 1
+
+
+def test_a_filter_name_alone_is_not_taken_for_encryption():
+    extra = b"<< /Filter /FlateDecode /DecodeParms << /Predictor 12 >> >>"
+    assert pdfacts.recover(one_page_with(extra)).page_count == 1

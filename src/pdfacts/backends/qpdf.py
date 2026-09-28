@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import io
 import math
-import warnings
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
@@ -56,16 +55,37 @@ def _translated() -> Iterator[None]:
         raise EngineFailure(FailureKind.OTHER, str(error)) from error
 
 
-@contextmanager
-def _needless_password_unsaid() -> Iterator[None]:
-    """pikepdf's warning that a password was given for a file that needs none.
+def _opened(
+    data: bytes, password: str | None, sources: list[_Input], **options: bool
+) -> pikepdf.Pdf:
+    """pikepdf.open with the password given only where the file needs one.
 
-    It is no error, and not the caller's to see; under a filter that turns
-    warnings into errors it would fail the open.
+    pikepdf warns when a password is given for a file that is not encrypted,
+    and quieting it with warnings.catch_warnings would change the warning
+    state of the whole process. So the file is opened without a password
+    first, and again with it when that fails or the file is encrypted, so
+    that a wrong password is refused. The input the returned document reads
+    from is added to `sources`, for the caller to close.
     """
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", message="A password was provided", category=UserWarning)
-        yield
+    source = _Input(data)
+    try:
+        pdf = pikepdf.open(source, password="", **options)
+    except pikepdf.PasswordError:
+        source.close()
+        if not password:
+            raise
+    except BaseException:
+        source.close()
+        raise
+    else:
+        if not password or not pdf.is_encrypted:
+            sources.append(source)
+            return pdf
+        pdf.close()
+        source.close()
+    source = _Input(data)
+    sources.append(source)
+    return pikepdf.open(source, password=password, **options)
 
 
 def _check_index(index: int, count: int) -> None:
@@ -129,19 +149,19 @@ class QpdfDocument:
     def open(cls, data: bytes, password: str | None) -> QpdfDocument:
         """Open `data`. A damaged file is a FORMAT failure: recovery is off."""
         views: list[pikepdf.Pdf] = []
-        sources = [_Input(data), _Input(data)]
+        sources: list[_Input] = []
         try:
             with _translated():
-                for source in sources:
-                    with _needless_password_unsaid():
-                        views.append(
-                            pikepdf.open(
-                                source,
-                                password="" if password is None else password,
-                                attempt_recovery=False,
-                                inherit_page_attributes=False,
-                            )
+                for _ in range(2):
+                    views.append(
+                        _opened(
+                            data,
+                            password,
+                            sources,
+                            attempt_recovery=False,
+                            inherit_page_attributes=False,
                         )
+                    )
                 walked, unwalked = views
                 # Walked now, so that what QPDF changed is among the warnings
                 # from the start.
@@ -270,17 +290,16 @@ def rewrite_recovered(data: bytes, password: str | None) -> RecoveredBytes:
     # QPDF drops an object that only white space follows to the end of the
     # file ("EOF after endobj"), the last one of a file cut after it. A
     # comment after it keeps it; comments mean nothing, and QPDF does not
-    # write them.
-    source = _Input(data + b"%")
+    # write them. Not after a file that ends with %%EOF: there a byte more can
+    # put startxref beyond the end of QPDF's search.
+    if not data.rstrip(b"\x00\t\n\x0c\r ").endswith(b"%%EOF"):
+        data += b"%"
+    sources: list[_Input] = []
     try:
         with _translated():
-            with _needless_password_unsaid():
-                pdf = pikepdf.open(
-                    source,
-                    password="" if password is None else password,
-                    attempt_recovery=True,
-                    inherit_page_attributes=False,
-                )
+            pdf = _opened(
+                data, password, sources, attempt_recovery=True, inherit_page_attributes=False
+            )
             try:
                 page_count = len(pdf.pages)
                 if _lost_encryption(pdf):
@@ -299,23 +318,31 @@ def rewrite_recovered(data: bytes, password: str | None) -> RecoveredBytes:
             finally:
                 pdf.close()
     finally:
-        source.close()
+        for source in sources:
+            source.close()
     return RecoveredBytes(data=written.getvalue(), page_count=page_count, warnings=reported)
 
 
 def _lost_encryption(pdf: pikepdf.Pdf) -> bool:
-    """Whether a document QPDF reads as unencrypted holds an encryption dictionary.
+    """Whether a document QPDF reads as unencrypted holds an encryption dictionary."""
+    return not pdf.is_encrypted and any(_encryption_dictionary(obj) for obj in pdf.objects)
 
-    One of the standard security handler, with /O and /U, or of a public-key
-    handler, with /Recipients.
+
+def _encryption_dictionary(obj: object) -> bool:
+    """A security handler's name in /Filter, and what only encryption holds.
+
+    /O and /U of the standard handler, /Recipients of the public-key one,
+    crypt filters (/CF, /StmF, /StrF) from version 4 on, or else /V for the
+    algorithm. A signature dictionary also names a handler in /Filter and may
+    have /V; it has /ByteRange and /Contents, which encryption never has.
     """
-    if pdf.is_encrypted:
+    if not isinstance(obj, pikepdf.Dictionary) or not isinstance(obj.get("/Filter"), pikepdf.Name):
         return False
-    for obj in pdf.objects:
-        if isinstance(obj, pikepdf.Dictionary) and "/Filter" in obj:
-            if ("/O" in obj and "/U" in obj) or "/Recipients" in obj:
-                return True
-    return False
+    if "/ByteRange" in obj or "/Contents" in obj:
+        return False
+    return ("/O" in obj and "/U" in obj) or any(
+        key in obj for key in ("/Recipients", "/CF", "/StmF", "/StrF", "/V")
+    )
 
 
 def _page_objects_as_written(pdf: pikepdf.Pdf) -> tuple[tuple[int, int] | None, ...] | None:
