@@ -254,6 +254,7 @@ The library checks what it can check between two engine calls:
 | number of pages, number of objects | after opening, before any page is read |
 | number of items per page | while facts are collected |
 | deadline | between pages |
+| pixels of one rendering | before the engine is called |
 
 Time and memory cannot be enforced from inside a running engine call. They are
 the caller's responsibility; a separate process per document is the
@@ -266,6 +267,21 @@ The numbers are passed in by the caller. The library has no built-in defaults.
 A page or a region of it is rendered at a given scale to grey or RGB. The
 result is raw bytes with width, height and row length. No type of an imaging
 library appears in the public interface.
+
+The region is given in user space, like every fact, and is cut to the
+displayed page; the scale is pixels per user space unit. Pixel coordinates
+count columns and rows from the top left corner. A bitmap of the region
+`(rx0, ry0, rx1, ry1)` in display space at scale s carries `display_to_pixel`,
+`Matrix(s, 0, 0, -s, -rx0·s, ry1·s)`: column = (x - rx0)·s, row = (ry1 - y)·s.
+The engine decides how it rounds the size of the bitmap and the edges of the
+region, and it places points in 32-bit floating point. On a page of up to
+2^20 pixels a side, its own transform to the pixels differs from
+`display_to_pixel` by up to about one pixel, and where the page, the region
+and the scale give whole pixels by no more than one step of those floats, 1/8
+pixel at most; the edges of what it fills may snap to whole pixels, further
+off. On larger pages the difference grows with the page's size in pixels, to
+tens of pixels near the 2^31 pixels a side that the engine addresses
+(measured: 4 pixels at 4·10^8, 28 at 2·10^9).
 
 ## Digest
 

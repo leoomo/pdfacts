@@ -4,9 +4,10 @@ Structured, verifiable facts from PDF files: text, paths, images, annotations
 and forms, each with explicit geometry.
 
 > **Status: private, pre-alpha (milestone M1).** `pdfacts.open()` reads a
-> document and the geometry and object numbers of its pages; nothing else
-> described below exists yet. See [ROADMAP.md](ROADMAP.md) for what is planned
-> and how each step is accepted.
+> document and the geometry and object numbers of its pages, and renders a
+> page or a region of it to raw bytes; nothing else described below exists
+> yet. See [ROADMAP.md](ROADMAP.md) for what is planned and how each step is
+> accepted.
 
 ## What it is for
 
@@ -45,6 +46,10 @@ with pdfacts.open(data) as document:
         geometry = page.geometry  # user space, with the transform to display space
         print(page.index, geometry.visible_box, geometry.rotation, page.ref.object_number)
     print(document.warnings)
+
+    # A region in user space at 3 pixels per unit: grey bytes, row 0 at the top.
+    bitmap = document.pages[0].render(3, region=pdfacts.Rect(50, 40, 110, 60))
+    print(bitmap.width, bitmap.height, bitmap.row_length, bitmap.display_to_pixel)
 
 print(pdfacts.engine_info())  # the versions the facts depend on
 ```

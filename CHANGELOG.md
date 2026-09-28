@@ -31,8 +31,8 @@ may break callers.
   password that is not a `str` and limits that are not a `Limits` raise
   `TypeError`; a password with NUL or one that cannot be written as UTF-8
   raises `ValueError`. Nothing is repaired.
-- `Limits` with `max_bytes`, `max_pages`, `max_objects` and
-  `deadline_seconds`; none is set by default. `max_objects` raises
+- `Limits` with `max_bytes`, `max_pages`, `max_objects`, `deadline_seconds`
+  and `max_render_pixels`; none is set by default. `max_objects` raises
   `LimitUncheckedError` when the object count is unknown; the deadline counts
   from the start of `open()` and is checked before each page is read.
 - Pages: `Document.pages` (length, an index from 0, iteration; no slices, no
@@ -46,6 +46,18 @@ may break callers.
   `Document.warnings` gives the reasons first, then what QPDF reported; it
   grows as pages are read. The capabilities `PAGE_GEOMETRY`, `USER_UNIT` and
   `OBJECT_NUMBERS` are available.
+- Rendering: `Page.render(scale=1.0, *, region=None, colour=Colour.GREY)`
+  returns a `Bitmap`: the bytes (row 0 at the top), width and height as the
+  engine made them, row length, channels, colour, scale, the region in display
+  space and `display_to_pixel`. `region` is in user space and is cut to the
+  page; a region without area on the page, or of which less than a pixel is
+  left, raises `ValueError`, and so does a scale that is not finite and above
+  0, or at which the page is more pixels than the engine addresses. A scale
+  that is not a number and a region that is not a `Rect` raise `TypeError`.
+  `Colour` is `GREY` or `RGB`, red, green, blue, given as a member or by its
+  value. `Limits.max_render_pixels` is checked before the engine is called.
+  The bitmap holds a copy of the bytes, and the engine's bitmap is freed. The
+  capability `RENDERING` is available.
 
 ### Changed
 
@@ -96,6 +108,15 @@ may break callers.
   responsibility. There are no built-in numbers.
 - Rendering returns raw bytes. No type of an imaging library appears in the
   public interface.
+- A region to render is given in user space and cut to the displayed page.
+  Pixel coordinates count from the top left corner; `display_to_pixel` is
+  `Matrix(s, 0, 0, -s, -rx0·s, ry1·s)` for the region `(rx0, ry0, rx1, ry1)` in
+  display space at scale s. The engine places points in 32-bit floating point:
+  on pages of up to 2^20 pixels a side its own transform differs from it by
+  up to about one pixel, and the edges it fills may snap to whole pixels; on
+  larger pages the difference grows, to tens of pixels near 2^31 pixels a
+  side. The pixels of one rendering are a limit, checked before the engine is
+  called.
 - There are two coordinate spaces, user and display. There is no third space
   with y pointing downwards.
 - The digest is a tool under `bench/`, not part of the public interface.

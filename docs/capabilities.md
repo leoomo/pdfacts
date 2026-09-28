@@ -18,6 +18,7 @@ on. Three states are used throughout:
 | Opening a document, classification of the input, limits (`open`, `Document`, `Limits`) | proven | `tests/test_open.py`, `tests/test_limits.py`; all 104 corpus files open |
 | Page geometry (`PAGE_GEOMETRY`) | proven | `tests/test_pages.py`, including where PDFium draws a rectangle of known position |
 | Object numbers of pages (`OBJECT_NUMBERS`), `UserUnit` (`USER_UNIT`) | proven | `tests/test_pages.py`; on the corpus both engines agree on all 467 pages |
+| Rendering a page or a region (`RENDERING`) | proven | `tests/test_render.py`; the first pages of five corpus files gave the same bytes on macOS arm64, Linux arm64 and Linux x86_64 |
 | Everything else | planned | [ROADMAP.md](../ROADMAP.md) |
 
 ## Milestone M0: install gate

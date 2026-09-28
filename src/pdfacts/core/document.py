@@ -20,9 +20,10 @@ from contextlib import contextmanager, suppress
 from types import TracebackType
 
 from pdfacts.backends.pdfium import PdfiumDocument
-from pdfacts.backends.protocols import Box, EngineFailure, FailureKind, PageObject
+from pdfacts.backends.protocols import Box, EngineFailure, FailureKind, PageObject, RawBitmap
 from pdfacts.backends.qpdf import QpdfDocument
 from pdfacts.core import runtime
+from pdfacts.core.bitmap import Bitmap, Colour, checked_scale
 from pdfacts.core.errors import (
     HEADER_SEARCH_BYTES,
     ClosedError,
@@ -34,7 +35,7 @@ from pdfacts.core.errors import (
     NotPdfError,
     PasswordRequiredError,
 )
-from pdfacts.core.geometry import PageGeometry, Rect
+from pdfacts.core.geometry import Matrix, PageGeometry, Rect
 from pdfacts.core.limits import Limits
 from pdfacts.core.refs import PageRef
 from pdfacts.core.values import Unknown, UnknownReason
@@ -79,6 +80,68 @@ class Page:
         self._document._check_open()
         return self._ref
 
+    def render(
+        self,
+        scale: float = 1.0,
+        *,
+        region: Rect | None = None,
+        colour: Colour | str = Colour.GREY,
+    ) -> Bitmap:
+        """The page, or a region of it, as raw bytes.
+
+        `scale` is pixels per user space unit, finite and greater than 0.
+        `region` is in user space, like every fact; None is the whole visible
+        page. The region is cut to the page; one without area on the page
+        raises ValueError, and nothing is rendered for it. So does one of which
+        less than a pixel is left at this scale, and a scale at which the page
+        is more pixels than the engine addresses.
+
+        LimitExceededError when the pixels, counted from the region and the
+        scale, exceed max_render_pixels; the engine is not called then. Memory
+        is otherwise the caller's to limit.
+        """
+        self._document._check_open()
+        scale = checked_scale(scale)
+        colour = Colour(colour)
+        width, height = self._geometry.width, self._geometry.height
+        shown = self._shown(region)
+        # The engine scales the whole page before it cuts the region out.
+        if not (math.isfinite(width * scale) and math.isfinite(height * scale)):
+            raise ValueError(f"at scale {scale} the page has no finite size in pixels")
+        pixels = math.ceil(shown.width * scale) * math.ceil(shown.height * scale)
+        allowed = self._document._max_render_pixels
+        if allowed is not None and pixels > allowed:
+            raise LimitExceededError(limit="max_render_pixels", allowed=allowed, found=pixels)
+        crop = (shown.x0, shown.y0, width - shown.x1, height - shown.y1)
+        raw = self._document._render(
+            self._geometry.index, scale=scale, crop=crop, rgb=colour is Colour.RGB
+        )
+        return Bitmap(
+            width=raw.width,
+            height=raw.height,
+            row_length=raw.row_length,
+            channels=raw.channels,
+            colour=colour,
+            data=raw.data,
+            scale=scale,
+            region=shown,
+            display_to_pixel=Matrix(scale, 0, 0, -scale, -shown.x0 * scale, shown.y1 * scale),
+        )
+
+    def _shown(self, region: Rect | None) -> Rect:
+        """The region in display space, cut to the displayed page."""
+        width, height = self._geometry.width, self._geometry.height
+        if region is None:
+            return Rect(0, 0, width, height)
+        if not isinstance(region, Rect):
+            raise TypeError(f"region must be a Rect or None, not {type(region).__name__}")
+        shown = self._geometry.to_display.apply_rect(region)
+        x0, y0 = max(shown.x0, 0.0), max(shown.y0, 0.0)
+        x1, y1 = min(shown.x1, width), min(shown.y1, height)
+        if x1 <= x0 or y1 <= y0:
+            raise ValueError(f"the region {region} has no area on the page")
+        return Rect(x0, y0, x1, y1)
+
 
 class Pages:
     """The pages of a Document: len(), an index from 0, iteration.
@@ -119,6 +182,7 @@ class Document:
         # The same notes as a set: one note per page can come to thousands.
         self._noted = set(self._notes)
         self._deadline = opened.deadline
+        self._max_render_pixels = opened.max_render_pixels
         self._read: dict[int, Page] = {}
         self._pages = Pages(self)
         self._closed = False
@@ -265,6 +329,13 @@ class Document:
             self._noted.add(note)
             self._notes.append(note)
 
+    def _render(
+        self, index: int, *, scale: float, crop: tuple[float, float, float, float], rgb: bool
+    ) -> RawBitmap:
+        with runtime.engine():
+            self._check_open()
+            return _pdfium_call(lambda: self._pdfium.render(index, scale=scale, crop=crop, rgb=rgb))
+
 
 class _Opened:
     """What open() hands to Document."""
@@ -279,6 +350,7 @@ class _Opened:
         object_count: int | Unknown,
         notes: list[str],
         deadline: Callable[[], None],
+        max_render_pixels: int | None,
     ) -> None:
         self.pdfium = pdfium
         self.page_count = page_count
@@ -289,6 +361,7 @@ class _Opened:
         self.object_count = object_count
         self.notes = notes
         self.deadline = deadline
+        self.max_render_pixels = max_render_pixels
 
 
 @contextmanager
@@ -400,6 +473,7 @@ def open(
                     object_count=object_count,
                     notes=[qpdf_unknown.detail] if qpdf_unknown is not None else [],
                     deadline=_deadline(limits.deadline_seconds, started, _clock),
+                    max_render_pixels=limits.max_render_pixels,
                 )
             )
         except BaseException:
