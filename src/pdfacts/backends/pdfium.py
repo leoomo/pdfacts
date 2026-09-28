@@ -11,10 +11,11 @@ from dataclasses import dataclass
 import pypdfium2
 import pypdfium2.raw as pdfium_c
 
-# Every font info handed to PDFium by install_font_policy(). PDFium keeps a
-# pointer to the last one, so none may ever be freed: the list is never
-# cleared. It has more than one entry only when an exception interrupted an
-# installation and it was repeated.
+# Every font info handed to PDFium by install_font_policy(). None may ever be
+# freed, so the list is never cleared: PDFium keeps a pointer to the last one,
+# and when a font info is replaced it reads the old one once more (the
+# destructor of CFX_ExternalFontInfo looks at Release). There is more than one
+# entry only when an exception interrupted an installation that was repeated.
 _FONT_INFOS: list[pdfium_c.FPDF_SYSFONTINFO] = []
 # True once FPDF_SetSystemFontInfo has returned.
 _font_policy_installed = False
@@ -43,8 +44,8 @@ def install_font_policy(policy: str) -> None:
 
     "embedded-only": fonts installed on the host are ignored. PDFium gets a
     font info of version 1 whose callbacks are all null, so it uses only the
-    fonts embedded in a file and its own built-in substitutes. A second call
-    does nothing.
+    fonts embedded in a file and its own built-in substitutes. Once a call has
+    returned, every further call does nothing.
 
     PDFium's header marks GetFontData, DeleteFont and one of MapFont and
     GetFont as required. The pinned build checks every callback for null

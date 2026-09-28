@@ -179,6 +179,65 @@ print(json.dumps({"held": held}))
     assert run(code) == {"held": [True]}
 
 
+def test_the_engine_lock_is_free_after_every_way_out():
+    # A path that kept the lock would make every engine call from another
+    # thread wait for ever.
+    code = """
+import json, threading
+from pdfacts import ConfigurationError, FontPolicy
+from pdfacts.backends import pdfium
+from pdfacts.core import runtime
+
+def free():
+    got = []
+    def probe():
+        if runtime.engine_lock.acquire(blocking=False):
+            runtime.engine_lock.release()
+            got.append(True)
+        else:
+            got.append(False)
+    thread = threading.Thread(target=probe)
+    thread.start()
+    thread.join()
+    return got[0]
+
+seen = {}
+runtime.configure(font_policy="embedded-only")
+seen["configured"] = free()
+original = pdfium.install_font_policy
+def failing(policy):
+    raise RuntimeError("the engine refused")
+pdfium.install_font_policy = failing
+try:
+    runtime.start()
+except RuntimeError:
+    pass
+seen["start failed"] = free()
+pdfium.install_font_policy = original
+runtime.start()
+seen["started"] = free()
+runtime.start()
+seen["started again"] = free()
+runtime.configure(font_policy="embedded-only")
+seen["configured after the start"] = free()
+runtime._active = FontPolicy.HOST  # a started runtime with another policy
+try:
+    runtime.configure(font_policy="embedded-only")
+except ConfigurationError:
+    pass
+seen["configure refused"] = free()
+print(json.dumps(seen))
+"""
+    assert run(code) == {
+        "configured": True,
+        "start failed": True,
+        "started": True,
+        "started again": True,
+        "configured after the start": True,
+        "configure refused": True,
+    }
+
+
 def test_the_backend_installs_the_font_info_once():
     # PDFium ignores a font info whose version is not 1 or 2 without an error,
     # so the structure itself is checked: on a host without the font, the
@@ -333,18 +392,27 @@ def test_the_engine_lock_is_reentrant():
 
 def test_two_threads_holding_the_engine_lock_do_not_overlap():
     intervals: list[tuple[float, float]] = []
+    refused: list[str] = []
 
     def work():
-        with runtime.engine_lock:
+        # With a timeout, a lock left held by an earlier test fails this test
+        # instead of hanging the run.
+        if not runtime.engine_lock.acquire(timeout=5):
+            refused.append(threading.current_thread().name)
+            return
+        try:
             start = time.monotonic()
             time.sleep(0.05)
             intervals.append((start, time.monotonic()))
+        finally:
+            runtime.engine_lock.release()
 
     threads = [threading.Thread(target=work) for _ in range(2)]
     for thread in threads:
         thread.start()
     for thread in threads:
         thread.join()
+    assert not refused, f"the engine lock was held elsewhere: {refused}"
     (first_start, first_end), (second_start, second_end) = sorted(intervals)
     assert first_end <= second_start
 
