@@ -25,8 +25,14 @@ TESTS = Path(__file__).resolve().parent
 
 # Glyph boxes of the page cases.verdana_text() with the policy installed,
 # measured on macOS arm64 and Linux arm64 (identical there). Compared at 0.001.
+# A host without Verdana gives the same values without the policy; the pinned
+# Linux image has no fonts at all. There these values cannot show that the
+# policy is missing: the test of the structure handed to PDFium covers that.
 FIRST_BOX = (42.016, 200.0, 54.832, 217.016)
 LAST_ORIGIN = (292.696, 200.0)
+
+# Where macOS keeps Verdana. PDFium finds it there when host fonts are used.
+VERDANA = Path("/System/Library/Fonts/Supplemental/Verdana.ttf")
 
 READ_GLYPHS = """
 import ctypes, json, sys
@@ -65,19 +71,35 @@ def close(first, second, tolerance=0.001):
     return all(abs(a - b) <= tolerance for a, b in zip(first, second, strict=True))
 
 
-def test_with_the_policy_the_glyphs_are_the_measured_ones():
+def read_glyphs(*, start: bool) -> dict:
+    """The first glyph box and the last origin, read in a fresh process."""
+    starting = "from pdfacts.core import runtime\nruntime.start()\n" if start else ""
     code = (
         READ_GLYPHS.format(tests=str(TESTS))
+        + starting
         + """
-from pdfacts.core import runtime
-runtime.start()
 boxes, origins = glyphs()
 print(json.dumps({"first_box": boxes[0], "last_origin": origins[-1]}))
 """
     )
-    seen = run(code)
+    return run(code)
+
+
+def test_with_the_policy_the_glyphs_are_the_measured_ones():
+    seen = read_glyphs(start=True)
     assert close(seen["first_box"], FIRST_BOX), seen
     assert close(seen["last_origin"], LAST_ORIGIN), seen
+
+
+@pytest.mark.skipif(
+    not VERDANA.exists(),
+    reason="Verdana is not where macOS keeps it; elsewhere this test cannot tell "
+    "whether the host has the font",
+)
+def test_on_a_host_with_verdana_the_policy_changes_the_glyphs():
+    without = read_glyphs(start=False)
+    with_policy = read_glyphs(start=True)
+    assert not close(without["last_origin"], with_policy["last_origin"]), (without, with_policy)
 
 
 def test_rendering_works_with_the_policy_installed():
@@ -127,6 +149,9 @@ print(json.dumps({"same": pdfium._FONT_INFO is first, "kept": first is not None}
 
 
 def test_the_backend_installs_the_font_info_once():
+    # PDFium ignores a font info whose version is not 1 or 2 without an error,
+    # so the structure itself is checked: on a host without the font, the
+    # glyph values could not tell.
     code = """
 import json
 import pypdfium2.raw as c
@@ -134,15 +159,83 @@ from pdfacts.backends import pdfium
 calls = []
 original = c.FPDF_SetSystemFontInfo
 def counting(info):
-    calls.append(info)
+    calls.append(info._obj)
     return original(info)
 c.FPDF_SetSystemFontInfo = counting
 pdfium.install_font_policy("embedded-only")
 first = pdfium._FONT_INFO
 pdfium.install_font_policy("embedded-only")
-print(json.dumps({"calls": len(calls), "same": pdfium._FONT_INFO is first}))
+passed = calls[0]
+names = [name for name, _ in type(passed)._fields_ if name != "version"]
+print(json.dumps({
+    "calls": len(calls),
+    "same": pdfium._FONT_INFO is first,
+    "kept": passed is first,
+    "version": passed.version,
+    "callbacks": [name for name in names if getattr(passed, name)],
+}))
 """
-    assert run(code) == {"calls": 1, "same": True}
+    assert run(code) == {
+        "calls": 1,
+        "same": True,
+        "kept": True,
+        "version": 1,
+        "callbacks": [],
+    }
+
+
+def test_the_font_info_is_referenced_before_pdfium_gets_it():
+    code = """
+import ctypes, json
+import pypdfium2.raw as c
+from pdfacts.backends import pdfium
+during = []
+def refusing(info):
+    during.append(pdfium._FONT_INFO is info._obj)
+    raise ctypes.ArgumentError("refused")
+c.FPDF_SetSystemFontInfo = refusing
+try:
+    pdfium.install_font_policy("embedded-only")
+    raised = False
+except ctypes.ArgumentError:
+    raised = True
+print(json.dumps({"during": during, "raised": raised, "after": pdfium._FONT_INFO is None}))
+"""
+    # Referenced while PDFium could take the pointer; dropped when the call
+    # was refused, so that the next start installs it.
+    assert run(code) == {"during": [True], "raised": True, "after": True}
+
+
+def test_a_start_that_failed_can_be_repeated():
+    code = """
+import json
+from pdfacts.backends import pdfium
+from pdfacts.core import runtime
+original = pdfium.install_font_policy
+def failing(policy):
+    raise RuntimeError("the engine refused")
+pdfium.install_font_policy = failing
+try:
+    runtime.start()
+    raised = False
+except RuntimeError:
+    raised = True
+after_failure = runtime.active_font_policy()
+pdfium.install_font_policy = original
+runtime.start()
+print(json.dumps({
+    "raised": raised,
+    "after_failure": after_failure,
+    "after_retry": runtime.active_font_policy(),
+    "installed": pdfium._FONT_INFO is not None,
+}))
+"""
+    assert run(code) == {
+        "raised": True,
+        "after_failure": None,
+        "after_retry": "embedded-only",
+        "installed": True,
+    }
 
 
 def test_the_backend_refuses_a_policy_it_does_not_know():

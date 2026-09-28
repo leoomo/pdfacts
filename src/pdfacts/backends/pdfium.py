@@ -41,6 +41,13 @@ def install_font_policy(policy: str) -> None:
     font info of version 1 whose callbacks are all null, so it uses only the
     fonts embedded in a file and its own built-in substitutes. A second call
     does nothing.
+
+    PDFium's header marks GetFontData, DeleteFont and one of MapFont and
+    GetFont as required. The pinned build checks every callback for null
+    before calling it (fpdfsdk/fpdf_sysfontinfo.cpp, CFX_ExternalFontInfo, on
+    the branch chromium/7999); that is what makes a font info without
+    callbacks safe. An engine upgrade has to check it again. Any version other
+    than 1 or 2 is ignored without an error.
     """
     global _FONT_INFO
     if policy != "embedded-only":
@@ -49,5 +56,12 @@ def install_font_policy(policy: str) -> None:
         return
     info = pdfium_c.FPDF_SYSFONTINFO()
     info.version = 1
-    pdfium_c.FPDF_SetSystemFontInfo(ctypes.byref(info))
+    # Referenced before PDFium gets the pointer, so that an interrupt between
+    # the two statements cannot leave PDFium holding freed memory.
     _FONT_INFO = info
+    try:
+        pdfium_c.FPDF_SetSystemFontInfo(ctypes.byref(info))
+    except Exception:
+        # ctypes refused the call, so PDFium never saw the pointer.
+        _FONT_INFO = None
+        raise
