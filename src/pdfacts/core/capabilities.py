@@ -25,9 +25,9 @@ class Capability(StrEnum):
 # Each entry becomes True in the change that implements it.
 _TABLE: Mapping[Capability, bool] = MappingProxyType(
     {
-        Capability.PAGE_GEOMETRY: False,
-        Capability.USER_UNIT: False,
-        Capability.OBJECT_NUMBERS: False,
+        Capability.PAGE_GEOMETRY: True,
+        Capability.USER_UNIT: True,
+        Capability.OBJECT_NUMBERS: True,
         Capability.RENDERING: False,
         Capability.RECOVERY: False,
         Capability.FONT_POLICY_EMBEDDED_ONLY: True,

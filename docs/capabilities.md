@@ -15,6 +15,9 @@ on. Three states are used throughout:
 | --- | --- | --- |
 | Engine identity (`engine_info`) | proven | `tests/test_engine_info.py` |
 | Import boundaries | proven | `tests/test_architecture.py`; the tests fail when the checker is disabled |
+| Opening a document, classification of the input, limits (`open`, `Document`, `Limits`) | proven | `tests/test_open.py`, `tests/test_limits.py`; all 104 corpus files open |
+| Page geometry (`PAGE_GEOMETRY`) | proven | `tests/test_pages.py`, including where PDFium draws a rectangle of known position |
+| Object numbers of pages (`OBJECT_NUMBERS`), `UserUnit` (`USER_UNIT`) | proven | `tests/test_pages.py`; on the corpus both engines agree on all 467 pages |
 | Everything else | planned | [ROADMAP.md](../ROADMAP.md) |
 
 ## Milestone M0: install gate
