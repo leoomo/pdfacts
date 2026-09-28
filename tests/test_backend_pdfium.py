@@ -167,13 +167,27 @@ def test_a_failing_close_does_not_hide_why_the_file_was_refused(monkeypatch):
     )
 
 
-def test_a_close_interrupted_before_the_engine_closed_can_be_repeated(monkeypatch):
-    engine_closes = []
+def every_method_refuses(document: PdfiumDocument) -> None:
+    calls = [
+        document.page_count,
+        document.check_pages,
+        lambda: document.visible_box(0),
+        lambda: document.rotation(0),
+    ]
+    for call in calls:
+        with pytest.raises(EngineFailure) as raised:
+            call()
+        assert (raised.value.kind, raised.value.detail) == (FailureKind.OTHER, "closed")
+
+
+def test_a_close_interrupted_before_the_engine_closed_is_finished_by_the_next(monkeypatch):
+    freed = counting_closes(monkeypatch)
+    calls = []
     original = pypdfium2.PdfDocument.close
 
     def interrupted_once(self, *args, **kwargs):
-        engine_closes.append(self)
-        if len(engine_closes) == 1:
+        calls.append(self)
+        if len(calls) == 1:
             raise KeyboardInterrupt
         return original(self, *args, **kwargs)
 
@@ -181,11 +195,73 @@ def test_a_close_interrupted_before_the_engine_closed_can_be_repeated(monkeypatc
     document = opened(cases.plain_page().data)
     with pytest.raises(KeyboardInterrupt):
         document.close()
-    assert document.page_count() == 1
+    every_method_refuses(document)
+    assert freed == []
     document.close()
-    assert len(engine_closes) == 2
-    with pytest.raises(EngineFailure):
-        document.page_count()
+    assert len(freed) == 1
+
+
+def test_a_close_interrupted_after_the_engine_closed_refuses_every_use(monkeypatch):
+    # The interrupt comes after PDFium freed the handle and before pypdfium2
+    # forgot it: nothing may use the handle again, nor free it again.
+    freed = counting_closes(monkeypatch)
+    original = pypdfium2.PdfDocument.close
+
+    def interrupted_after(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(pypdfium2.PdfDocument, "close", interrupted_after)
+    document = opened(cases.three_pages().data)
+    with pytest.raises(KeyboardInterrupt):
+        document.close()
+    every_method_refuses(document)
+    monkeypatch.setattr(pypdfium2.PdfDocument, "close", original)
+    document.close()
+    assert len(freed) == 1
+
+
+def test_an_interrupt_inside_pypdfium2_after_the_handle_was_freed(monkeypatch):
+    # PDFium freed the handle; pypdfium2 has not forgotten it yet.
+    freed = []
+    original = pypdfium2.raw.FPDF_CloseDocument
+
+    def interrupted_after(handle):
+        freed.append(handle)
+        original(handle)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(pypdfium2.raw, "FPDF_CloseDocument", interrupted_after)
+    document = opened(cases.three_pages().data)
+    with pytest.raises(KeyboardInterrupt):
+        document.close()
+    every_method_refuses(document)
+    document.close()
+    assert len(freed) == 1
+
+
+def test_a_memory_error_while_closing_a_refused_file_is_not_swallowed(monkeypatch):
+    error = MemoryError()
+
+    def failing(self, *args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(pypdfium2.PdfDocument, "close", failing)
+    with pytest.raises(MemoryError) as raised:
+        opened(cases.empty_page_tree().data)
+    assert raised.value is error
+
+
+def test_an_exception_in_the_page_check_is_an_other_failure(monkeypatch):
+    document = opened(cases.three_pages().data)
+
+    def raising(*args):
+        raise ctypes.ArgumentError("wrong argument")
+
+    monkeypatch.setattr(pypdfium2.raw, "FPDF_GetPageSizeByIndexF", raising)
+    with pytest.raises(EngineFailure) as raised:
+        document.check_pages()
+    assert (raised.value.kind, raised.value.detail) == (FailureKind.OTHER, "wrong argument")
 
 
 @pytest.mark.parametrize(
@@ -276,23 +352,12 @@ def test_an_index_that_is_not_an_int_is_a_type_error(index):
 
 
 def test_after_close_every_method_fails_and_close_does_nothing(monkeypatch):
-    engine_closes = []
-    original = pypdfium2.PdfDocument.close
-
-    def counting(self, *args, **kwargs):
-        engine_closes.append(self)
-        return original(self, *args, **kwargs)
-
-    monkeypatch.setattr(pypdfium2.PdfDocument, "close", counting)
+    freed = counting_closes(monkeypatch)
     document = opened(cases.plain_page().data)
     document.close()
-    calls = [document.page_count, lambda: document.visible_box(0), lambda: document.rotation(0)]
-    for call in calls:
-        with pytest.raises(EngineFailure) as raised:
-            call()
-        assert (raised.value.kind, raised.value.detail) == (FailureKind.OTHER, "closed")
+    every_method_refuses(document)
     document.close()
-    assert len(engine_closes) == 1
+    assert len(freed) == 1
 
 
 def test_a_page_is_closed_before_the_method_returns(monkeypatch):

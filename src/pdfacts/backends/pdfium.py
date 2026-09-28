@@ -207,16 +207,17 @@ class PdfiumDocument:
         return self._read_page(index, lambda page: int(page.get_rotation()))
 
     def close(self) -> None:
-        """Close the document. A second call does nothing.
+        """Close the document. A further call does nothing but finish this one.
 
-        Marked closed only once the engine has closed it: interrupted before
-        that, a later close() can still do it.
+        Every other method refuses from the start of the first call, whatever
+        happens during it: an interrupt can come after PDFium freed the handle
+        and before pypdfium2 forgot it. A further call finishes a close that
+        was interrupted before the engine closed; pypdfium2 closes the handle
+        at most once.
         """
-        if self._closed:
-            return
+        self._closed = True
         with _translated():
             self._document.close()
-        self._closed = True
 
     def _check_open(self) -> None:
         # The backend's own flag: what the engine does with a closed handle
