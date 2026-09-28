@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import ctypes
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from typing import TypeVar
 
@@ -140,8 +140,8 @@ class PdfiumDocument:
 
         A FORMAT failure also when PDFium could read the file only by
         rebuilding its cross-reference table, which is a repair, and when it
-        finds no page, or no page dictionary for one of the pages it counts
-        (docs/conventions.md, "Damaged files").
+        finds no page (docs/conventions.md, "Damaged files"). Whether every
+        page it counts is there is check_pages(), which takes longer.
 
         The document is loaded through the raw call, not through pypdfium2's
         PdfDocument, which leaves the handle of a document without pages open.
@@ -162,7 +162,10 @@ class PdfiumDocument:
             try:
                 _check_as_written(raw)
             except BaseException:
-                document.close()
+                # The first failure is the one to report. MemoryError is
+                # never swallowed.
+                with suppress(EngineFailure), _translated():
+                    document.close()
                 raise
         return cls(document, data)
 
@@ -170,6 +173,26 @@ class PdfiumDocument:
         self._check_open()
         with _translated():
             return len(self._document)
+
+    def check_pages(self) -> None:
+        """A FORMAT failure unless PDFium finds a dictionary for every page it counts.
+
+        The count comes from /Count and can promise pages that are not there.
+        Each size is read from the page dictionary without loading the page,
+        but the time still grows with the page count: the core checks its
+        page limit first.
+        """
+        self._check_open()
+        with _translated():
+            count = len(self._document)
+            size = pdfium_c.FS_SIZEF()
+            for index in range(count):
+                if not pdfium_c.FPDF_GetPageSizeByIndexF(self._document.raw, index, size):
+                    raise EngineFailure(
+                        FailureKind.FORMAT,
+                        f"PDFium finds no page dictionary for page {index} of the {count} "
+                        "it counts",
+                    )
 
     def visible_box(self, index: int) -> Box:
         """The crop box intersected with the media box, corners in order.
@@ -184,12 +207,16 @@ class PdfiumDocument:
         return self._read_page(index, lambda page: int(page.get_rotation()))
 
     def close(self) -> None:
-        """Close the document. A second call does nothing."""
+        """Close the document. A second call does nothing.
+
+        Marked closed only once the engine has closed it: interrupted before
+        that, a later close() can still do it.
+        """
         if self._closed:
             return
-        self._closed = True
         with _translated():
             self._document.close()
+        self._closed = True
 
     def _check_open(self) -> None:
         # The backend's own flag: what the engine does with a closed handle
@@ -209,25 +236,14 @@ class PdfiumDocument:
 
 
 def _check_as_written(raw: pdfium_c.FPDF_DOCUMENT) -> None:
-    """A FORMAT failure unless PDFium reads the document without repairing it."""
-    count = pdfium_c.FPDF_GetPageCount(raw)
-    if count < 1:
+    """A FORMAT failure when PDFium repaired the document or finds no page."""
+    if pdfium_c.FPDF_GetPageCount(raw) < 1:
         raise EngineFailure(FailureKind.FORMAT, "PDFium finds no page in the document")
     if not pdfium_c.FPDF_DocumentHasValidCrossReferenceTable(raw):
         raise EngineFailure(
             FailureKind.FORMAT,
             "PDFium could read the document only by rebuilding its cross-reference table",
         )
-    # The page count comes from /Count and can promise pages that are not
-    # there. The size is read from the page dictionary without loading the
-    # page.
-    size = pdfium_c.FS_SIZEF()
-    for index in range(count):
-        if not pdfium_c.FPDF_GetPageSizeByIndexF(raw, index, size):
-            raise EngineFailure(
-                FailureKind.FORMAT,
-                f"PDFium finds no page dictionary for page {index} of the {count} it counts",
-            )
 
 
 def _bounding_box(page: pypdfium2.PdfPage) -> Box:

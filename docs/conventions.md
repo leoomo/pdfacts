@@ -212,7 +212,7 @@ These count as files the engine cannot load:
 
 | Case | Reason |
 | --- | --- |
-| anything but white space follows the last `%%EOF` | a file cut short can end in an earlier revision's cross-reference table, which the engines then read without a word; so can a file with bytes appended |
+| the file does not end with `%%EOF` and white space: there is no `%%EOF`, or anything but white space follows the last one | a file cut short can end in an earlier revision's cross-reference table, which the engines then read without a word; so can a file with bytes appended |
 | PDFium can read the file only by rebuilding its cross-reference table | that is a repair |
 | PDFium finds no page, or no page dictionary for one of the pages it counts | an empty page tree, a missing one and one that names no object look the same to PDFium; the count comes from `/Count` and can promise pages that are not there |
 

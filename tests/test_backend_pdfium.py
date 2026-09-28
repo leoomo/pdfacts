@@ -133,12 +133,59 @@ def test_a_failure_while_wrapping_the_handle_never_closes_it_twice(monkeypatch):
 
 
 @pytest.mark.parametrize("name", list(cases.MISSING_PAGES))
-def test_a_page_pdfium_counts_but_cannot_find_is_a_format_failure(monkeypatch, name):
-    closed = counting_closes(monkeypatch)
-    raised = failure(cases.MISSING_PAGES[name]().data)
-    assert raised.kind is FailureKind.FORMAT
-    assert "no page dictionary" in raised.detail
-    assert len(closed) == 1
+def test_a_page_pdfium_counts_but_cannot_find_fails_the_page_check(name):
+    document = opened(cases.MISSING_PAGES[name]().data)
+    with pytest.raises(EngineFailure) as raised:
+        document.check_pages()
+    assert raised.value.kind is FailureKind.FORMAT
+    assert "no page dictionary" in raised.value.detail
+    document.close()
+
+
+def test_every_page_of_an_intact_file_passes_the_page_check():
+    for case in (cases.three_pages(), cases.media_box_on_pages(), cases.no_media_box()):
+        opened(case.data).check_pages()
+
+
+def test_the_page_check_of_a_closed_document_fails():
+    document = opened(cases.three_pages().data)
+    document.close()
+    with pytest.raises(EngineFailure) as raised:
+        document.check_pages()
+    assert raised.value.detail == "closed"
+
+
+def test_a_failing_close_does_not_hide_why_the_file_was_refused(monkeypatch):
+    def failing(self, *args, **kwargs):
+        raise RuntimeError("closing failed as well")
+
+    monkeypatch.setattr(pypdfium2.PdfDocument, "close", failing)
+    raised = failure(cases.empty_page_tree().data)
+    assert (raised.kind, raised.detail) == (
+        FailureKind.FORMAT,
+        "PDFium finds no page in the document",
+    )
+
+
+def test_a_close_interrupted_before_the_engine_closed_can_be_repeated(monkeypatch):
+    engine_closes = []
+    original = pypdfium2.PdfDocument.close
+
+    def interrupted_once(self, *args, **kwargs):
+        engine_closes.append(self)
+        if len(engine_closes) == 1:
+            raise KeyboardInterrupt
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(pypdfium2.PdfDocument, "close", interrupted_once)
+    document = opened(cases.plain_page().data)
+    with pytest.raises(KeyboardInterrupt):
+        document.close()
+    assert document.page_count() == 1
+    document.close()
+    assert len(engine_closes) == 2
+    with pytest.raises(EngineFailure):
+        document.page_count()
 
 
 @pytest.mark.parametrize(

@@ -28,6 +28,7 @@ class FontPolicy(StrEnum):
 
 # Every call into an engine, PDFium or QPDF, happens while this is held. The
 # backends do not take it; the core does, once per operation, through engine().
+# start() takes it directly.
 engine_lock = threading.RLock()
 
 # Closes that a finalizer could not run because another thread held the lock.
@@ -38,8 +39,7 @@ _deferred: list[Callable[[], None]] = []
 def engine() -> Iterator[None]:
     """Hold the engine lock; first run the closes finalizers handed over."""
     with engine_lock:
-        while _deferred:
-            _deferred.pop()()
+        _run_deferred()
         yield
 
 
@@ -49,15 +49,27 @@ def close_soon(close: Callable[[], None]) -> None:
     For finalizers, which must not wait for a lock: the garbage collector may
     run them in any thread, and at exit a daemon thread may hold the lock for
     ever. The next holder of engine() runs what was handed over. `close` must
-    not raise.
+    not raise; a MemoryError it raises surfaces in whichever call runs it.
     """
     if engine_lock.acquire(blocking=False):
         try:
             close()
         finally:
             engine_lock.release()
-    else:
-        _deferred.append(close)
+        return
+    _deferred.append(close)
+    # The holder may have let the lock go between the attempt and the append;
+    # then nobody would run the close before the next operation.
+    if engine_lock.acquire(blocking=False):
+        try:
+            _run_deferred()
+        finally:
+            engine_lock.release()
+
+
+def _run_deferred() -> None:
+    while _deferred:
+        _deferred.pop()()
 
 
 _requested = FontPolicy.EMBEDDED_ONLY

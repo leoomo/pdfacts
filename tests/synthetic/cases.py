@@ -521,9 +521,30 @@ def page_with_kids_null() -> NoPages:
     )
 
 
+def missing_kid_in_the_middle() -> NoPages:
+    """Three kids, the second of which names object 7; there is no object 7."""
+
+    def page(box: Box) -> bytes:
+        return b"<< /Type /Page /Parent 2 0 R /MediaBox %s /Contents 9 0 R >>" % box_text(box)
+
+    return NoPages(
+        build(
+            {
+                1: b"<< /Type /Catalog /Pages 2 0 R >>",
+                2: b"<< /Type /Pages /Kids [4 0 R 7 0 R 5 0 R] /Count 3 >>",
+                4: page((0, 0, 400, 300)),
+                5: page((0, 0, 300, 500)),
+                9: stream(b""),
+            },
+            1,
+        )
+    )
+
+
 # PDFium counts these pages but finds no page dictionary for one of them.
 MISSING_PAGES: dict[str, Callable[[], NoPages]] = {
     "count without kids": count_without_kids,
     "missing kid": missing_kid,
     "page with /Kids null": page_with_kids_null,
+    "missing kid in the middle": missing_kid_in_the_middle,
 }

@@ -422,6 +422,11 @@ def test_the_cases_with_a_page_that_is_not_there_are_what_their_names_say():
     for number in (1, 2, 4, 5, 6, 9):
         offset = entries[number][0]
         assert kids_null[offset:].startswith(b"%d 0 obj" % number)
+    middle = cases.missing_kid_in_the_middle().data
+    assert b"/Kids [4 0 R 7 0 R 5 0 R] /Count 3" in middle
+    entries = table_entries(middle)
+    assert entries[7][2] == b"f"
+    assert entries[4][2] == entries[5][2] == b"n"
 
 
 def test_the_cut_update_ends_inside_the_object_of_its_update():

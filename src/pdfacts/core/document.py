@@ -66,12 +66,18 @@ class Document:
         """Release the document. A second call does nothing."""
         if not self._finalizer.alive:
             return
-        # The lock first: interrupted while waiting for it, the document is
-        # still open and its finalizer still there.
+        # The finalizer stays until the engine has closed the document:
+        # interrupted before that, the document is still open and still has
+        # its finalizer.
         with runtime.engine():
-            if self._finalizer.detach() is None:
+            if not self._finalizer.alive:
                 return
-            _pdfium_call(self._pdfium.close)
+            try:
+                _pdfium_call(self._pdfium.close)
+            except EngineError:
+                self._finalizer.detach()
+                raise
+            self._finalizer.detach()
 
     def __enter__(self) -> Document:
         self._check_open()
@@ -145,10 +151,17 @@ def open(data: bytes, *, password: str | None = None, limits: Limits | None = No
             raise _open_error(failure, password) from failure
         try:
             page_count = _pdfium_call(pdfium.page_count)
+            # The limit first: a file over the limit is refused before the
+            # check that reads every page dictionary, and a file both over the
+            # limit and with a page missing gets LimitExceededError.
             if limits.max_pages is not None and page_count > limits.max_pages:
                 raise LimitExceededError(
                     limit="max_pages", allowed=limits.max_pages, found=page_count
                 )
+            try:
+                pdfium.check_pages()
+            except EngineFailure as failure:
+                raise _open_error(failure, password) from failure
             return Document(pdfium, page_count)
         except BaseException:
             # The first exception is the one to report. MemoryError is never
