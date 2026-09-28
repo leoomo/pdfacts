@@ -449,6 +449,14 @@ def test_the_offset_left_after_the_last_startxref_names_the_earlier_table():
     assert update.count(b" obj\n") == update.count(b"\nendobj\n") == 2
 
 
+def test_the_offset_left_after_the_last_startxref_can_name_the_update():
+    case = cases.cut_inside_the_last_offset(naming_the_update=True)
+    named = len(case.source.data)
+    assert case.data.endswith(b"startxref\n%d" % named)
+    assert case.data[named:].startswith(b"4 0 obj\n<< /Type /Page ")
+    assert case.data[10 * named :].startswith(b"xref\n")
+
+
 @pytest.mark.parametrize("first_page_offset", [False, True])
 def test_the_linearized_case_has_the_layout_of_annex_f(first_page_offset):
     case = cases.linearized(first_page_offset=first_page_offset)

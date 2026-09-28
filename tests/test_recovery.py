@@ -643,6 +643,14 @@ def unfinished_updates() -> dict[str, bytes]:
     commented = data.replace(
         earlier_line, earlier_line.replace(b"startxref\n", b"startxref%\n")[:-1], 1
     )
+    # The digits left name the update's first object, not a section.
+    naming_an_object = cases.cut_inside_the_last_offset(naming_the_update=True).data
+    # An update of only a table and a trailer.
+    earlier_table = int(source[source.rindex(b"startxref") :].split()[1])
+    trailer_only = source + (
+        b"xref\n0 1\n0000000000 65535 f \ntrailer\n<< /Size 6 /Root 1 0 R /Prev %d "
+        b"/Info 9 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (earlier_table, len(source))
+    )
     return {
         "cut after its object": data[:after_object],
         "cut inside its object": cases.cut_inside_the_update().data,
@@ -663,20 +671,31 @@ def unfinished_updates() -> dict[str, bytes]:
             : earlier.index(b"endobj", len(source) + 1) + len(b"endobj\n")
         ],
         "the revision before ends with a comment before its offset": commented[:after_object],
+        "cut inside the offset, which names an object of the update": naming_an_object,
+        "the last offset naming an object of the update, and %%EOF": naming_an_object
+        + b"\n%%EOF\n",
+        "an update of a table and a trailer only, cut inside the trailer": trailer_only[
+            : trailer_only.index(b"/Info", len(source))
+        ],
     }
 
 
 UNFINISHED = unfinished_updates()
 
 
+# Other bytes before the header: offsets count from the header.
+PREFIXES = {"the header first": b"", "bytes before the header": b"%comment\n"}
+
+
+@pytest.mark.parametrize("prefix", list(PREFIXES))
 @pytest.mark.parametrize("name", list(UNFINISHED))
-def test_a_file_that_ends_inside_an_incremental_update_is_refused(name):
+def test_a_file_that_ends_inside_an_incremental_update_is_refused(name, prefix):
     # Objects follow the last whole revision. QPDF would read the revision
     # before without a word, or, rebuilding the file from its objects, mix the
     # update with it: it places objects in object streams only through a
     # cross-reference stream, which an unfinished update lacks.
     with pytest.raises(RecoveryFailedError, match="incremental update"):
-        pdfacts.recover(UNFINISHED[name])
+        pdfacts.recover(PREFIXES[prefix] + UNFINISHED[name])
 
 
 def test_a_form_cut_off_before_its_acroform_raises_no_python_warning():
@@ -746,6 +765,22 @@ def test_an_updated_file_whose_end_alone_is_damaged_is_read_as_its_last_revision
     assert (box.x0, box.y0, box.x1, box.y1) == updated.media_box
 
 
+@pytest.mark.parametrize(
+    ("make", "pages"),
+    [
+        (lambda: cases.three_pages().data, 3),
+        (lambda: cases.incremental_update().data, 1),
+        (lambda: encrypt(cases.three_pages().data, user="", owner="owner", object_streams=True), 3),
+    ],
+    ids=["plain", "updated", "encrypted, with object streams"],
+)
+def test_a_file_whose_header_follows_other_bytes_is_read_as_it_is_written(make, pages):
+    # Offsets count from the header, as QPDF and PDFium count them.
+    result = pdfacts.recover(PREFIXES["bytes before the header"] + make())
+    assert result.warnings == ()
+    assert result.page_count == pages
+
+
 @pytest.mark.parametrize("damage", list(END_DAMAGE))
 def test_an_encrypted_file_with_object_streams_whose_end_alone_is_damaged_is_recovered(damage):
     # QPDF cannot rebuild such a file from its objects; read through its
@@ -764,11 +799,40 @@ def without_first_page_end(case: cases.Linearized) -> cases.Linearized:
     return dataclasses.replace(case, data=case.data.replace(b"/E ", b"/X ", 1))
 
 
+def with_first_page_end(case: cases.Linearized, first_page_end: int) -> cases.Linearized:
+    """`case` with another /E, its offsets unchanged."""
+    written = b"/E %010d" % case.main_table
+    return dataclasses.replace(
+        case, data=case.data.replace(written, b"/E %010d" % first_page_end, 1)
+    )
+
+
+def with_startxref_in_its_content(case: cases.Linearized) -> cases.Linearized:
+    """`case` with a comment in its page content: startxref and the offset of
+    the first-page table, written in as many bytes as the content it replaces."""
+    content = cases.rectangle_content(cases.RECTANGLE, cases.BLACK)
+    first_table = case.data.index(b"xref\n5 1\n")
+    comment = (b"%%startxref %010d" % first_table).ljust(len(content))
+    return dataclasses.replace(case, data=case.data.replace(content, comment, 1))
+
+
 LINEARIZED = {
     "first-page startxref 0": lambda: cases.linearized(first_page_offset=False),
     "first-page startxref naming its table": lambda: cases.linearized(first_page_offset=True),
     "first-page startxref 0, no /E": lambda: without_first_page_end(
         cases.linearized(first_page_offset=False)
+    ),
+    "first-page startxref naming its table, no /E": lambda: without_first_page_end(
+        cases.linearized(first_page_offset=True)
+    ),
+    "first-page startxref naming its table, /E too small": lambda: with_first_page_end(
+        cases.linearized(first_page_offset=True), 1
+    ),
+    "first-page startxref naming its table, /E beyond the file": lambda: with_first_page_end(
+        cases.linearized(first_page_offset=True), 9_999_999_999
+    ),
+    "a startxref in the page content naming the first-page table": lambda: (
+        with_startxref_in_its_content(cases.linearized(first_page_offset=True))
     ),
 }
 

@@ -64,9 +64,9 @@ may break callers.
   `open()` classifies it, without the rule on the end of the file. QPDF reads
   the file up to the end of its last whole revision, leaving out a damaged
   end, and rebuilds a file without one from its objects. The result is
-  written with `/Size` in the trailer, encryption kept, the metadata as it
-  is, an unencrypted result the same bytes for the same input; it has to open
-  as `open()` opens a file, without a warning and with `/Size`.
+  written with `/Size` in the trailer, encryption kept, the content of the
+  metadata kept, an unencrypted result the same bytes for the same input; it
+  has to open as `open()` opens a file, without a warning and with `/Size`.
   `RecoveryFailedError` otherwise, when QPDF cannot rebuild the file, when the
   file ends inside an incremental update, which QPDF would read as the
   earlier revision without a word or mix with it, and when an encrypted file

@@ -823,11 +823,13 @@ def watching_opens(monkeypatch) -> tuple[list[pikepdf.Pdf], list[pikepdf.Pdf], l
 @pytest.mark.parametrize(
     ("make", "password", "opens"),
     [
-        (cases.owner_password_only, None, 3),
-        # Opened without the password first, then again with it.
-        (cases.owner_password_only, "owner", 6),
-        # The first open, without a password, is refused.
-        (cases.user_password, "user", 3),
+        # The recovery opens the file twice, once with recovery off to see
+        # that it reads as written; QpdfDocument opens it twice.
+        (cases.owner_password_only, None, 4),
+        # Each opened without the password first, then again with it.
+        (cases.owner_password_only, "owner", 8),
+        # Each first open, without a password, is refused.
+        (cases.user_password, "user", 4),
     ],
     ids=["owner password, none given", "owner password given", "user password given"],
 )
