@@ -8,7 +8,7 @@ from __future__ import annotations
 import io
 import math
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -83,20 +83,31 @@ class QpdfDocument:
     Recovery being off does not keep QPDF from changing the document in
     memory. When it walks the page tree it gives a page without a usable media
     box US letter, turns a page written directly into /Kids into a new object,
-    and copies a page that is listed twice into a new object; it says so only
-    in a warning. So the document is opened twice: the page list comes from
-    the view QPDF walked, the values from a view nothing walks, and a page
-    whose object is not in the file's cross-reference table has no values.
+    copies a page that is listed twice, drops a kid that is not a dictionary
+    and flattens what is left, and may walk from another root; it says so in a
+    warning at most. So the document is opened twice. The page list comes
+    from the view QPDF walked, the values from a view nothing walks. When the
+    pages QPDF found are not, index by index, the objects the file's page tree
+    lists, no page has values: its object at an index may not be the file's.
     """
 
-    def __init__(self, walked: pikepdf.Pdf, unwalked: pikepdf.Pdf, sources: list[_Input]) -> None:
+    def __init__(
+        self,
+        walked: pikepdf.Pdf,
+        unwalked: pikepdf.Pdf,
+        sources: list[_Input],
+        pages: tuple[tuple[int, int], ...],
+        pages_as_written: bool,
+    ) -> None:
         # Use open(); this takes documents that are already open.
         self._walked = walked
         self._unwalked = unwalked
         self._sources = sources
+        # The page objects as QPDF found them, read once: pikepdf takes time
+        # in proportion to the page count for each access to its page list.
+        self._pages = pages
+        self._pages_as_written = pages_as_written
         self._warnings: list[str] = []
-        # The objects of the cross-reference table, read on first use.
-        self._file_objects: frozenset[tuple[int, int]] | None = None
         self._closed = False
 
     @classmethod
@@ -115,21 +126,25 @@ class QpdfDocument:
                             inherit_page_attributes=False,
                         )
                     )
-                # Walk the page tree now, so that what QPDF changed while
-                # walking it is among the warnings from the start.
-                len(views[0].pages)
+                walked, unwalked = views
+                # Walked now, so that what QPDF changed is among the warnings
+                # from the start.
+                pages = tuple(page.obj.objgen for page in walked.pages)
+                as_written = _page_objects_as_written(unwalked)
         except BaseException:
             for view in views:
-                view.close()
+                # The first exception is the one to report.
+                with suppress(Exception):
+                    view.close()
             for source in sources:
                 source.close()
             raise
-        return cls(views[0], views[1], sources)
+        return cls(walked, unwalked, sources, pages, pages == as_written)
 
     def page_count(self) -> int:
+        """The number of pages QPDF found."""
         self._check_open()
-        with _translated():
-            return len(self._walked.pages)
+        return len(self._pages)
 
     def object_count(self) -> int | None:
         """The /Size of the trailer; None unless it is an integer greater than 0.
@@ -146,25 +161,21 @@ class QpdfDocument:
     def page_object(self, index: int) -> PageObject:
         """The page's object and what the file writes on it and its ancestors.
 
-        A page QPDF made while walking the page tree is a FORMAT failure: its
-        object number is not one of the file's, and a wrong object number is
-        worse than none (docs/conventions.md, "Object identity").
+        A FORMAT failure when QPDF changed the page tree while walking it: a
+        wrong object number is worse than none (docs/conventions.md, "Object
+        identity").
         """
         count = self.page_count()
         _check_index(index, count)
+        if not self._pages_as_written:
+            raise EngineFailure(
+                FailureKind.FORMAT,
+                "QPDF changed the page tree while walking it, so the object it has at a "
+                "page index may not be the one the file lists there",
+            )
+        objgen = self._pages[index]
         with _translated():
-            objgen = self._walked.pages[index].obj.objgen
-            if self._file_objects is None:
-                self._file_objects = frozenset(self._unwalked.get_xref_table())
-            if objgen not in self._file_objects:
-                raise EngineFailure(
-                    FailureKind.FORMAT,
-                    f"page {index} is not an object of the file; QPDF made it while "
-                    "walking the page tree",
-                )
             page = self._unwalked.get_object(objgen)
-            if not isinstance(page, pikepdf.Dictionary):
-                raise EngineFailure(FailureKind.FORMAT, f"page {index} is not a dictionary")
             user_unit, user_unit_invalid = _user_unit(page.get("/UserUnit"))
             return PageObject(
                 object_number=int(objgen[0]),
@@ -177,11 +188,12 @@ class QpdfDocument:
             )
 
     def warnings(self) -> tuple[str, ...]:
-        """Everything QPDF reported so far, for example a media box it added.
+        """The warnings QPDF gave so far, for example about a media box it added.
 
         QPDF hands out each warning once and then forgets it, so they are
-        collected here. The unwalked view reads objects the walked one has
-        read already; a warning of its own is added only once.
+        collected here. A warning both views give is kept once. Some messages
+        QPDF sends to pikepdf's logger instead, for example about a kid it
+        drops; they are not among these.
         """
         self._check_open()
         with _translated():
@@ -214,11 +226,45 @@ class QpdfDocument:
             raise EngineFailure(FailureKind.OTHER, "closed")
 
 
+def _page_objects_as_written(pdf: pikepdf.Pdf) -> tuple[tuple[int, int] | None, ...] | None:
+    """The page objects in the order the file's page tree lists them.
+
+    Read without QPDF's walk. A node with a /Kids array is a node of the tree,
+    any other dictionary a page. A kid that is not a dictionary is None; a
+    page written directly into /Kids has the objgen (0, 0), which QPDF never
+    lists, since it makes such a page an object of its own. None for the whole
+    tree when an object is reached twice, by a loop or by a page listed twice:
+    QPDF refuses a loop in the tree it walks, but it may walk another tree
+    than the one the catalog names.
+    """
+    pages: list[tuple[int, int] | None] = []
+    seen: set[tuple[int, int]] = set()
+    stack: list[object] = [pdf.Root.get("/Pages")]
+    while stack:
+        node = stack.pop()
+        if not isinstance(node, pikepdf.Dictionary):
+            pages.append(None)
+            continue
+        if node.is_indirect:
+            if node.objgen in seen:
+                return None
+            seen.add(node.objgen)
+        kids = node.get("/Kids")
+        if isinstance(kids, pikepdf.Array):
+            stack.extend(reversed(list(kids)))
+        else:
+            pages.append(node.objgen)
+    return tuple(pages)
+
+
 def _inherited(page: pikepdf.Dictionary, key: str) -> object:
     """The value of an inheritable key on the page or its nearest ancestor.
 
     The chain of /Parent is followed as far as it goes, and never twice
-    through the same object.
+    through the same object. The first value found counts, also when it is
+    not usable, as in PDFium. An explicit null counts as absent, as ISO 32000
+    says; PDFium stops at it instead, so #11's cross-check sees such a page as
+    a disagreement.
     """
     node: object = page
     seen: set[tuple[int, int]] = set()

@@ -128,6 +128,16 @@ def test_the_user_unit_is_not_inherited():
     assert (page.user_unit, page.user_unit_invalid) == (None, False)
 
 
+def read_in_a_thread(document_: QpdfDocument) -> PageObject:
+    """page_object(0), so that a loop fails the test instead of hanging the run."""
+    pages: list[PageObject] = []
+    reader = threading.Thread(target=lambda: pages.append(document_.page_object(0)), daemon=True)
+    reader.start()
+    reader.join(timeout=10)
+    assert not reader.is_alive(), "following /Parent did not end"
+    return pages[0]
+
+
 def test_a_parent_chain_that_returns_to_the_page_ends():
     data = build(
         {
@@ -138,14 +148,46 @@ def test_a_parent_chain_that_returns_to_the_page_ends():
         },
         1,
     )
-    document_ = opened(data)
-    pages: list[PageObject] = []
-    # In a thread, so that a loop fails the test instead of hanging the run.
-    reader = threading.Thread(target=lambda: pages.append(document_.page_object(0)), daemon=True)
-    reader.start()
-    reader.join(timeout=10)
-    assert not reader.is_alive(), "following /Parent did not end"
-    assert (pages[0].media_box, pages[0].rotate) == (None, 90)
+    page_ = read_in_a_thread(opened(data))
+    assert (page_.media_box, page_.rotate) == (None, 90)
+
+
+def test_a_parent_chain_that_returns_in_two_steps_ends():
+    data = build(
+        {
+            1: CATALOG,
+            2: b"<< /Type /Pages /Kids [4 0 R] /Count 1 >>",
+            4: b"<< /Type /Page /Parent 7 0 R /Rotate 90 /Contents 5 0 R >>",
+            5: stream(b""),
+            7: b"<< /Type /Pages /Parent 4 0 R >>",
+        },
+        1,
+    )
+    page_ = read_in_a_thread(opened(data))
+    assert (page_.media_box, page_.rotate) == (None, 90)
+
+
+def test_a_value_on_the_page_that_is_not_usable_is_not_replaced_by_the_parent_one():
+    # As in PDFium: the first value found counts.
+    data = document([PageSpec(b"/MediaBox [0 0 200]")], pages_entries=b"/MediaBox [0 0 400 300]")
+    assert opened(data).page_object(0).media_box is None
+
+
+def test_an_explicit_null_is_absent_and_the_parent_value_counts():
+    # ISO 32000: a null value is the same as no entry. PDFium stops at it.
+    data = document([PageSpec(b"/MediaBox null")], pages_entries=b"/MediaBox [0 0 400 300]")
+    assert opened(data).page_object(0).media_box == (0.0, 0.0, 400.0, 300.0)
+
+
+def with_offset_zero(data: bytes, number: int) -> bytes:
+    """`data` whose cross-reference entry for `number` says offset 0.
+
+    QPDF then reads the object as null and warns each time a view reads it.
+    """
+    table = data.rindex(b"\nxref\n") + 1
+    lines = data[table:].split(b"\n")
+    lines[2 + number] = b"%010d" % 0 + lines[2 + number][10:]
+    return data[:table] + b"\n".join(lines)
 
 
 def test_a_warning_both_views_give_is_kept_once():
@@ -159,13 +201,29 @@ def test_a_warning_both_views_give_is_kept_once():
         },
         1,
     )
-    # The cross-reference entry of object 6 says offset 0; QPDF reads the
-    # object as null and warns each time a view reads it.
-    table = data.rindex(b"\nxref\n") + 1
-    lines = data[table:].split(b"\n")
-    lines[2 + 6] = b"%010d" % 0 + lines[2 + 6][10:]
-    document_ = opened(data[:table] + b"\n".join(lines))
+    # QPDF's walk reads the media box, and so does the backend.
+    document_ = opened(with_offset_zero(data, 6))
     assert document_.page_object(0).media_box is None
+    offsets = [warning for warning in document_.warnings() if "has offset 0" in warning]
+    assert len(offsets) == 1
+
+
+def test_a_warning_only_the_unwalked_view_gives_is_kept():
+    data = build(
+        {
+            1: CATALOG,
+            2: b"<< /Type /Pages /Kids [4 0 R] /Count 1 >>",
+            4: b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /CropBox 6 0 R "
+            b"/Contents 5 0 R >>",
+            5: stream(b""),
+            6: b"[0 0 400 300]",
+        },
+        1,
+    )
+    # QPDF's walk does not read the crop box; only the backend does.
+    document_ = opened(with_offset_zero(data, 6))
+    assert not any("has offset 0" in warning for warning in document_.warnings())
+    assert document_.page_object(0).crop_box is None
     offsets = [warning for warning in document_.warnings() if "has offset 0" in warning]
     assert len(offsets) == 1
 
@@ -183,38 +241,137 @@ def test_a_page_without_a_usable_media_box_has_none_although_qpdf_put_one_in(ent
     assert "MediaBox is undefined" in warning
 
 
-def test_a_page_written_directly_into_the_kids_has_no_object_of_the_file():
-    kid = b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Contents 3 0 R >>"
+def page(parent: int, box: bytes = b"[0 0 400 300]") -> bytes:
+    return b"<< /Type /Page /Parent %d 0 R /MediaBox %s /Contents 9 0 R >>" % (parent, box)
+
+
+def refused_pages(data: bytes) -> list[str]:
+    """The detail of the failure of every page; a page with values fails the test."""
+    document_ = opened(data)
+    details = []
+    for index in range(document_.page_count()):
+        with pytest.raises(EngineFailure) as raised:
+            document_.page_object(index)
+        assert raised.value.kind is FailureKind.FORMAT
+        details.append(raised.value.detail)
+    return details
+
+
+def test_a_page_tree_with_levels_is_read_in_order():
     data = build(
-        {1: CATALOG, 2: b"<< /Type /Pages /Kids [%s] /Count 1 >>" % kid, 3: stream(b"")}, 1
+        {
+            1: CATALOG,
+            2: b"<< /Type /Pages /Kids [7 0 R 8 0 R] /Count 3 >>",
+            7: b"<< /Type /Pages /Parent 2 0 R /Kids [4 0 R] /Count 1 >>",
+            8: b"<< /Type /Pages /Parent 2 0 R /Kids [5 0 R 6 0 R] /Count 2 >>",
+            4: page(7, b"[0 0 100 100]"),
+            5: page(8, b"[0 0 200 200]"),
+            6: page(8, b"[0 0 300 300]"),
+            9: stream(b""),
+        },
+        1,
+    )
+    document_ = opened(data)
+    pages = [document_.page_object(index) for index in range(document_.page_count())]
+    assert [(p.object_number, p.media_box) for p in pages] == [
+        (4, (0.0, 0.0, 100.0, 100.0)),
+        (5, (0.0, 0.0, 200.0, 200.0)),
+        (6, (0.0, 0.0, 300.0, 300.0)),
+    ]
+
+
+def test_a_page_written_directly_into_the_kids_leaves_every_page_without_values():
+    kid = b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Contents 9 0 R >>"
+    data = build(
+        {
+            1: CATALOG,
+            2: b"<< /Type /Pages /Kids [4 0 R %s] /Count 2 >>" % kid,
+            4: page(2),
+            9: stream(b""),
+        },
+        1,
+    )
+    details = refused_pages(data)
+    assert len(details) == 2
+    assert all("changed the page tree" in detail for detail in details)
+    assert any("is direct" in warning for warning in opened(data).warnings())
+
+
+def test_a_page_listed_twice_leaves_every_page_without_values():
+    data = build(
+        {
+            1: CATALOG,
+            2: b"<< /Type /Pages /Kids [4 0 R 4 0 R] /Count 2 >>",
+            4: page(2),
+            9: stream(b""),
+        },
+        1,
+    )
+    assert len(refused_pages(data)) == 2
+    assert any("more than once" in warning for warning in opened(data).warnings())
+
+
+def test_a_kid_that_is_missing_leaves_every_page_without_values():
+    # QPDF drops the kid and moves the pages after it one index forward, so
+    # its page 1 would be object 6 where the file lists object 4.
+    data = build(
+        {
+            1: CATALOG,
+            2: b"<< /Type /Pages /Kids [20 0 R 4 0 R 6 0 R] /Count 2 >>",
+            4: page(2),
+            6: page(2),
+            9: stream(b""),
+        },
+        1,
+    )
+    assert opened(data).page_count() == 2
+    assert len(refused_pages(data)) == 2
+
+
+def test_a_loop_in_the_tree_the_catalog_names_ends():
+    # QPDF walks from the root it finds through /Parent, where there is no
+    # loop; the tree the catalog names lists its own root again.
+    data = build(
+        {
+            1: CATALOG,
+            2: b"<< /Type /Pages /Kids [4 0 R 2 0 R] /Count 1 /Parent 7 0 R >>",
+            7: b"<< /Type /Pages /Kids [6 0 R] /Count 1 >>",
+            4: page(2),
+            6: page(7),
+            9: stream(b""),
+        },
+        1,
+    )
+    documents: list[QpdfDocument] = []
+    # In a thread, so that a loop fails the test instead of hanging the run.
+    reader = threading.Thread(target=lambda: documents.append(opened(data)), daemon=True)
+    reader.start()
+    reader.join(timeout=10)
+    assert not reader.is_alive(), "reading the page tree did not end"
+    assert documents[0].page_count() == 1
+    with pytest.raises(EngineFailure) as raised:
+        documents[0].page_object(0)
+    assert "changed the page tree" in raised.value.detail
+
+
+def test_a_root_with_a_parent_leaves_every_page_without_values():
+    # QPDF then walks from another node than the one the catalog names.
+    data = build(
+        {
+            1: CATALOG,
+            2: b"<< /Type /Pages /Kids [4 0 R] /Count 1 /Parent 7 0 R >>",
+            7: b"<< /Type /Pages /Kids [6 0 R] /Count 1 >>",
+            4: page(2),
+            6: page(7),
+            9: stream(b""),
+        },
+        1,
     )
     document_ = opened(data)
     assert document_.page_count() == 1
     with pytest.raises(EngineFailure) as raised:
         document_.page_object(0)
-    assert raised.value.kind is FailureKind.FORMAT
-    assert "not an object of the file" in raised.value.detail
-    assert any("is direct" in warning for warning in document_.warnings())
-
-
-def test_a_page_listed_twice_is_known_once():
-    data = build(
-        {
-            1: CATALOG,
-            2: b"<< /Type /Pages /Kids [4 0 R 4 0 R] /Count 2 >>",
-            4: b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Contents 5 0 R >>",
-            5: stream(b""),
-        },
-        1,
-    )
-    document_ = opened(data)
-    assert document_.page_count() == 2
-    assert document_.page_object(0).object_number == 4
-    with pytest.raises(EngineFailure) as raised:
-        document_.page_object(1)
-    assert raised.value.kind is FailureKind.FORMAT
-    assert "not an object of the file" in raised.value.detail
-    assert any("more than once" in warning for warning in document_.warnings())
+    assert "changed the page tree" in raised.value.detail
 
 
 def test_the_generation_comes_from_the_file():
@@ -415,17 +572,17 @@ def test_a_failed_open_closes_the_view_already_opened(monkeypatch):
     assert engine_closes[0] is opens[0]
 
 
-def test_the_file_is_opened_with_recovery_off(monkeypatch):
-    seen = {}
+def test_both_views_are_opened_with_recovery_off(monkeypatch):
+    calls = []
     original = pikepdf.open
 
     def watching(*args, **kwargs):
-        seen.update(kwargs)
+        calls.append(kwargs)
         return original(*args, **kwargs)
 
     monkeypatch.setattr(pikepdf, "open", watching)
     opened(cases.plain_page().data)
-    assert seen["attempt_recovery"] is False
+    assert [call["attempt_recovery"] for call in calls] == [False, False]
 
 
 @pytest.mark.parametrize("exception", [MemoryError, KeyboardInterrupt])
