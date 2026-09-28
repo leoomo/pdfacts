@@ -577,3 +577,73 @@ def test_a_form_field_is_not_taken_for_encryption():
 def test_a_filter_name_alone_is_not_taken_for_encryption():
     extra = b"<< /Filter /FlateDecode /DecodeParms << /Predictor 12 >> >>"
     assert pdfacts.recover(one_page_with(extra)).page_count == 1
+
+
+def test_the_seed_values_of_a_signature_field_are_not_taken_for_encryption():
+    # A seed value dictionary names a handler in /Filter and has /V, but the
+    # form reaches it, and only a trailer names an encryption dictionary.
+    data = build(
+        {
+            1: b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>",
+            2: b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            3: b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Resources << >> "
+            b"/Contents 4 0 R >>",
+            4: stream(cases.rectangle_content(cases.RECTANGLE, cases.BLACK)),
+            5: b"<< /FT /Sig /T (signature) /SV 6 0 R >>",
+            6: b"<< /Type /SV /Filter /Adobe.PPKLite /V 1 >>",
+        },
+        1,
+    )
+    cut = data[: data.rindex(b"\nxref\n") + 1]
+    assert pdfacts.recover(cut).page_count == 1
+    assert pdfacts.recover(data).warnings == ()
+
+
+def test_a_filter_that_is_not_a_name_is_not_taken_for_encryption():
+    assert pdfacts.recover(one_page_with(b"<< /Filter [/FlateDecode] /V 1 >>")).page_count == 1
+
+
+def cut_after_the_update() -> cases.Updated:
+    """incremental_update() cut after the object of its update, before its table."""
+    updated = cases.incremental_update()
+    end = updated.data.index(b"endobj", len(updated.source.data)) + len(b"endobj\n")
+    return dataclasses.replace(updated, data=updated.data[:end])
+
+
+def test_an_update_cut_after_its_object_is_kept():
+    # QPDF would read the earlier revision through its startxref, without a
+    # word; it rebuilds the file from its objects, the later one counting.
+    case = cut_after_the_update()
+    result = pdfacts.recover(case.data)
+    assert result.warnings
+    with pdfacts.open(result.data) as document:
+        box = document.pages[0].geometry.visible_box
+    assert (box.x0, box.y0, box.x1, box.y1) == case.media_box
+
+
+def test_an_update_cut_inside_its_object_is_not_returned_as_the_earlier_revision():
+    # QPDF takes the later, broken object and finds no page; the earlier
+    # revision, without a word about the update, is not what was asked for.
+    with pytest.raises(RecoveryFailedError):
+        pdfacts.recover(cases.cut_inside_the_update().data)
+
+
+def test_a_form_cut_off_before_its_acroform_raises_no_python_warning():
+    # pikepdf's save() warns about widgets the form does not reach.
+    data = build(
+        {
+            1: b"<< /Type /Catalog /Pages 2 0 R /AcroForm 6 0 R >>",
+            2: b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            3: b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Contents 4 0 R "
+            b"/Annots [5 0 R] >>",
+            4: stream(cases.rectangle_content(cases.RECTANGLE, cases.BLACK)),
+            5: b"<< /Type /Annot /Subtype /Widget /FT /Tx /T (field) /Rect [10 10 100 30] "
+            b"/P 3 0 R >>",
+            6: b"<< /Fields [5 0 R] >>",
+        },
+        1,
+    )
+    cut = data[: data.index(b"\n6 0 obj") + 1]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert pdfacts.recover(cut).page_count == 1

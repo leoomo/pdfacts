@@ -16,6 +16,10 @@ import pikepdf
 
 from pdfacts.backends.protocols import Box, EngineFailure, FailureKind, PageObject, RecoveredBytes
 
+# How far from the end QPDF looks for startxref (measured: it finds one that
+# starts 1054 bytes before the end, not one that starts 1055 bytes before).
+_STARTXREF_SEARCH = 1054
+
 
 @dataclass(frozen=True)
 class QpdfVersions:
@@ -287,13 +291,16 @@ def rewrite_recovered(data: bytes, password: str | None) -> RecoveredBytes:
     The warnings are those QPDF gave while it rebuilt the file, walked its
     pages and wrote it: it reads streams only when it writes them.
     """
-    # QPDF drops an object that only white space follows to the end of the
-    # file ("EOF after endobj"), the last one of a file cut after it. A
-    # comment after it keeps it; comments mean nothing, and QPDF does not
-    # write them. Not after a file that ends with %%EOF: there a byte more can
-    # put startxref beyond the end of QPDF's search.
+    # A file that does not end with %%EOF is cut short or has bytes appended.
+    # QPDF would read it through a startxref it finds in its last bytes, in a
+    # file cut short perhaps an earlier revision's, and leave out what follows
+    # without a word; and it drops an object that only white space follows to
+    # the end ("EOF after endobj"). A comment longer than its search makes it
+    # rebuild the file from its objects, the last of each number counting.
+    # Comments mean nothing, and QPDF does not write them. A file that ends
+    # with %%EOF is read as it is.
     if not data.rstrip(b"\x00\t\n\x0c\r ").endswith(b"%%EOF"):
-        data += b"%"
+        data += b"%" + b" " * (2 * _STARTXREF_SEARCH)
     sources: list[_Input] = []
     try:
         with _translated():
@@ -312,7 +319,10 @@ def rewrite_recovered(data: bytes, password: str | None) -> RecoveredBytes:
                 pdf.trailer["/Size"] = 1
                 written = io.BytesIO()
                 encrypted = pdf.is_encrypted
-                pdf.save(written, encryption=encrypted, deterministic_id=not encrypted)
+                # pikepdf's save() adds a warning about widgets the form does
+                # not reach, a form cut off before its /AcroForm; _save is what
+                # it calls to write.
+                pdf._save(written, encryption=encrypted, deterministic_id=not encrypted)
                 # Everything QPDF reported since the file was opened.
                 reported = tuple(str(message) for message in pdf.get_warnings())
             finally:
@@ -324,8 +334,32 @@ def rewrite_recovered(data: bytes, password: str | None) -> RecoveredBytes:
 
 
 def _lost_encryption(pdf: pikepdf.Pdf) -> bool:
-    """Whether a document QPDF reads as unencrypted holds an encryption dictionary."""
-    return not pdf.is_encrypted and any(_encryption_dictionary(obj) for obj in pdf.objects)
+    """Whether a document QPDF reads as unencrypted holds an encryption dictionary.
+
+    One that the catalog does not reach: only a trailer names an encryption
+    dictionary, and one the document uses, such as the seed values of a
+    signature field, is none.
+    """
+    if pdf.is_encrypted:
+        return False
+    found = {obj.objgen for obj in pdf.objects if _encryption_dictionary(obj)}
+    return bool(found - _reachable(pdf.Root))
+
+
+def _reachable(root: pikepdf.Object) -> set[tuple[int, int]]:
+    """The indirect objects reached from `root` through dictionaries and arrays."""
+    seen: set[tuple[int, int]] = set()
+    stack: list[object] = [root]
+    while stack:
+        node = stack.pop()
+        if not isinstance(node, pikepdf.Dictionary | pikepdf.Array | pikepdf.Stream):
+            continue
+        if node.is_indirect:
+            if node.objgen in seen:
+                continue
+            seen.add(node.objgen)
+        stack.extend(node if isinstance(node, pikepdf.Array) else node.values())
+    return seen
 
 
 def _encryption_dictionary(obj: object) -> bool:

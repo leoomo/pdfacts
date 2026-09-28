@@ -15,6 +15,7 @@ import typing
 import pikepdf
 import pytest
 
+from pdfacts.backends import qpdf as qpdf_backend
 from pdfacts.backends.protocols import (
     EngineFailure,
     FailureKind,
@@ -790,3 +791,53 @@ def test_an_unencrypted_file_stays_unencrypted():
     with pikepdf.open(io.BytesIO(rewritten.data)) as pdf:
         assert not pdf.is_encrypted
     assert rewritten.warnings == ()
+
+
+def watching_opens(monkeypatch) -> tuple[list[pikepdf.Pdf], list[pikepdf.Pdf], list[object]]:
+    """The documents pikepdf opens, those closed, and every input the backend makes."""
+    opened: list[pikepdf.Pdf] = []
+    closed: list[pikepdf.Pdf] = []
+    inputs: list[object] = []
+    original_open, original_close = pikepdf.open, pikepdf.Pdf.close
+
+    def opening(*args, **kwargs):
+        pdf = original_open(*args, **kwargs)
+        opened.append(pdf)
+        return pdf
+
+    def closing(self):
+        closed.append(self)
+        return original_close(self)
+
+    class Recorded(qpdf_backend._Input):
+        def __init__(self, data: bytes) -> None:
+            super().__init__(data)
+            inputs.append(self)
+
+    monkeypatch.setattr(pikepdf, "open", opening)
+    monkeypatch.setattr(pikepdf.Pdf, "close", closing)
+    monkeypatch.setattr(qpdf_backend, "_Input", Recorded)
+    return opened, closed, inputs
+
+
+@pytest.mark.parametrize(
+    ("make", "password", "opens"),
+    [
+        (cases.owner_password_only, None, 3),
+        # Opened without the password first, then again with it.
+        (cases.owner_password_only, "owner", 6),
+        # The first open, without a password, is refused.
+        (cases.user_password, "user", 3),
+    ],
+    ids=["owner password, none given", "owner password given", "user password given"],
+)
+def test_every_document_and_input_the_backend_opens_is_closed(monkeypatch, make, password, opens):
+    # Built before the watching starts: the encrypted cases are made with pikepdf.
+    data = make().data
+    opened, closed, inputs = watching_opens(monkeypatch)
+    rewrite_recovered(data, password)
+    opened_once = QpdfDocument.open(data, password)
+    opened_once.close()
+    assert len(opened) == opens
+    assert all(any(pdf is done for done in closed) for pdf in opened)
+    assert inputs and all(source.closed for source in inputs)
