@@ -547,6 +547,33 @@ def test_an_engine_failure_while_closing_is_an_engine_error_and_the_document_is_
     document.close()
 
 
+def failing_engine_close(monkeypatch) -> None:
+    """pypdfium2's close frees the handle and then raises something unexpected."""
+    original = pypdfium2.PdfDocument.close
+
+    def failing(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        raise RuntimeError("closing failed")
+
+    monkeypatch.setattr(pypdfium2.PdfDocument, "close", failing)
+
+
+def test_an_unexpected_failure_of_the_engine_close_does_not_hide_the_limit(monkeypatch):
+    failing_engine_close(monkeypatch)
+    with pytest.raises(LimitExceededError):
+        pdfacts.open(cases.three_pages().data, limits=Limits(max_pages=2))
+
+
+def test_an_unexpected_failure_of_the_engine_close_is_an_engine_error(monkeypatch):
+    document = pdfacts.open(cases.plain_page().data)
+    failing_engine_close(monkeypatch)
+    with pytest.raises(EngineError) as raised:
+        document.close()
+    assert raised.value.detail == "closing failed"
+    assert document.closed is True
+    document.close()
+
+
 def test_an_empty_password_counts_as_given():
     with pytest.raises(PasswordRequiredError) as raised:
         pdfacts.open(cases.user_password().data, password="")
