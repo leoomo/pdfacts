@@ -48,7 +48,8 @@ def recover(data: bytes, *, password: str | None = None, limits: Limits | None =
     RecoveryFailedError when QPDF cannot rebuild the file, and when the result
     fails a check: it has to open as open() opens a file, with both engines
     agreeing on its pages, without a warning from QPDF, and with /Size in its
-    trailer. max_pages and max_objects are checked on the result.
+    trailer. max_pages and max_objects are checked on the result. EngineError
+    when an engine fails otherwise.
 
     Pages, and objects a page uses, can be lost without a failure: QPDF has
     repaired the page tree before anything can be read, so neither engine
@@ -62,9 +63,10 @@ def recover(data: bytes, *, password: str | None = None, limits: Limits | None =
     An encrypted file stays encrypted, and its result differs from run to
     run; an unencrypted result is the same for the same input. When QPDF
     finds no trailer, it does not know that the file is encrypted: if the
-    encryption dictionary is left, RecoveryFailedError; if the cut took that
-    too, nothing tells, and the result is unencrypted with its strings and
-    streams still encrypted (docs/conventions.md, "Damaged files").
+    encryption dictionary is left, RecoveryFailedError, also for an
+    unencrypted file that holds one nothing names; if the cut took that too,
+    nothing tells, and the result is unencrypted with its strings and streams
+    still encrypted (docs/conventions.md, "Damaged files").
     """
     limits = classified(data, password, limits)
     # The runtime starts in open(), before PDFium sees the result.

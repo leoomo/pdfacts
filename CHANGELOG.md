@@ -66,8 +66,8 @@ may break callers.
   kept, an unencrypted result the same bytes for the same input. The result
   has to open as `open()` opens a file, without a warning and with `/Size`;
   otherwise, when QPDF cannot rebuild the file, and when an encrypted file
-  has lost the trailer that names its encryption dictionary,
-  `RecoveryFailedError`. `max_pages` and `max_objects` are checked on the
+  has lost the trailer that names its encryption dictionary but kept the
+  dictionary, `RecoveryFailedError`. `max_pages` and `max_objects` are checked on the
   result. An intact file is rewritten with no warnings. The capability
   `RECOVERY` is available.
 - A password given for a file that needs none no longer lets pikepdf warn:

@@ -13,8 +13,9 @@ import io
 import pikepdf
 
 
-def encrypt(data: bytes, *, user: str, owner: str) -> bytes:
+def encrypt(data: bytes, *, user: str, owner: str, R: int = 4) -> bytes:  # noqa: N803
+    """`data` encrypted by the standard security handler of revision `R`."""
     with pikepdf.open(io.BytesIO(data)) as pdf:
         out = io.BytesIO()
-        pdf.save(out, encryption=pikepdf.Encryption(user=user, owner=owner, R=4))
+        pdf.save(out, encryption=pikepdf.Encryption(user=user, owner=owner, R=R))
     return out.getvalue()
