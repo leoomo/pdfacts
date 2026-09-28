@@ -14,7 +14,7 @@ from decimal import Decimal
 
 import pikepdf
 
-from pdfacts.backends.protocols import Box, EngineFailure, FailureKind, PageObject
+from pdfacts.backends.protocols import Box, EngineFailure, FailureKind, PageObject, RecoveredBytes
 
 
 @dataclass(frozen=True)
@@ -231,6 +231,46 @@ class QpdfDocument:
         # is not something to rely on.
         if self._closed:
             raise EngineFailure(FailureKind.OTHER, "closed")
+
+
+def rewrite_recovered(data: bytes, password: str | None) -> RecoveredBytes:
+    """The document QPDF rebuilds from `data`, with recovery on, written anew.
+
+    A FORMAT failure when QPDF cannot rebuild it. /Size is set in the trailer
+    before saving, so that QPDF writes the right one: when it could not read
+    the damaged file's trailer, it would write one without /Size, and the
+    result would be damaged again. Encryption is kept; pikepdf would drop it.
+    Object streams are kept as they are and none are generated (issue #13,
+    decision 3; without /Size set, QPDF could not open what it generated even
+    with recovery on); nothing is linearized. The warnings are those QPDF gave
+    while it rebuilt the file and walked its pages.
+    """
+    source = _Input(data)
+    try:
+        with _translated():
+            try:
+                pdf = pikepdf.open(
+                    source,
+                    password="" if password is None else password,
+                    attempt_recovery=True,
+                    inherit_page_attributes=False,
+                )
+            except ValueError as error:
+                # For a file too short to hold a trailer, QPDF's search for one
+                # fails in the stream it reads from.
+                raise EngineFailure(FailureKind.FORMAT, str(error)) from error
+            try:
+                page_count = len(pdf.pages)
+                warnings = tuple(str(message) for message in pdf.get_warnings())
+                # Any value: QPDF writes the number of objects it writes.
+                pdf.trailer["/Size"] = 1
+                written = io.BytesIO()
+                pdf.save(written, encryption=pdf.is_encrypted)
+            finally:
+                pdf.close()
+    finally:
+        source.close()
+    return RecoveredBytes(data=written.getvalue(), page_count=page_count, warnings=warnings)
 
 
 def _page_objects_as_written(pdf: pikepdf.Pdf) -> tuple[tuple[int, int] | None, ...] | None:

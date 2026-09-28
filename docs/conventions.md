@@ -208,6 +208,13 @@ Reason: recovery rewrites the file. Object numbers may change and the bytes and
 their hash do change. Facts read from recovered bytes describe the recovered
 file, so the caller has to hold those bytes.
 
+A recovery can lose pages and still succeed, and the library cannot tell: the
+engine that rebuilds the file has repaired its page tree before anything can
+be read, so the number of pages the damaged file was meant to have is not
+known. The result states its own page count; a caller who knows how many
+pages to expect compares the two. Whether a partly recovered file is
+acceptable is the caller's decision.
+
 These count as files the engine cannot load:
 
 | Case | Reason |

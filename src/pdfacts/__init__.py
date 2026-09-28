@@ -22,6 +22,7 @@ from pdfacts.core.errors import (
 )
 from pdfacts.core.geometry import Matrix, PageGeometry, Point, Rect
 from pdfacts.core.limits import Limits
+from pdfacts.core.recovery import Recovery, recover
 from pdfacts.core.refs import PageRef
 from pdfacts.core.runtime import FontPolicy, configure
 from pdfacts.core.values import Unknown, UnknownReason
@@ -53,6 +54,7 @@ __all__ = [
     "PasswordRequiredError",
     "PdfactsError",
     "Point",
+    "Recovery",
     "RecoveryFailedError",
     "Rect",
     "Unknown",
@@ -63,5 +65,6 @@ __all__ = [
     "configure",
     "engine_info",
     "open",
+    "recover",
     "require",
 ]

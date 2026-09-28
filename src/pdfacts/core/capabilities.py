@@ -29,7 +29,7 @@ _TABLE: Mapping[Capability, bool] = MappingProxyType(
         Capability.USER_UNIT: True,
         Capability.OBJECT_NUMBERS: True,
         Capability.RENDERING: True,
-        Capability.RECOVERY: False,
+        Capability.RECOVERY: True,
         Capability.FONT_POLICY_EMBEDDED_ONLY: True,
         Capability.FONT_POLICY_HOST: False,
     }

@@ -10,7 +10,7 @@ does not decide what is unknown; the core does.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Protocol
 
@@ -69,6 +69,17 @@ class RawBitmap:
     channels: int
     # row_length * height bytes; row 0 is the top.
     data: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class RecoveredBytes:
+    """A damaged file as QPDF rebuilt it, written anew."""
+
+    data: bytes = field(repr=False)
+    # Pages in the rebuilt document.
+    page_count: int
+    # What QPDF reported while it read the damaged file.
+    warnings: tuple[str, ...]
 
 
 class GeometryReader(Protocol):

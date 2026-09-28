@@ -19,6 +19,7 @@ on. Three states are used throughout:
 | Page geometry (`PAGE_GEOMETRY`) | proven | `tests/test_pages.py`, including where PDFium draws a rectangle of known position |
 | Object numbers of pages (`OBJECT_NUMBERS`), `UserUnit` (`USER_UNIT`) | proven | `tests/test_pages.py`; on the corpus both engines agree on all 467 pages |
 | Rendering a page or a region (`RENDERING`) | proven | `tests/test_render.py`; the first pages of five corpus files gave the same bytes on macOS arm64, Linux arm64 and Linux x86_64 |
+| Recovering a damaged file (`RECOVERY`) | proven | `tests/test_recovery.py`. Five corpus forms cut at 70 % and 95 %: three of the ten recovered, with the geometry and the form fields of the original; seven refused, QPDF finding no `/Kids` in the root of the page tree. All five keep their objects in object streams |
 | Everything else | planned | [ROADMAP.md](../ROADMAP.md) |
 
 ## Milestone M0: install gate
@@ -78,6 +79,9 @@ glyphs). These are findings about the engines, not features of pdfacts.
 | Rewrite | produces a file that other libraries can read and write |
 | Decryption | removes owner-password encryption on save |
 | Truncated files | recovered |
+| Rewriting a rebuilt file (2026-09-28) | when QPDF could not read the damaged file's trailer, it writes a trailer without `/Size`: the result opens only with recovery on, with warnings. With `/Size` set before saving, the result opens with recovery off and without warnings |
+| Object streams in a rebuilt file (2026-09-28) | generated without `/Size` set, the result does not open even with recovery on; with `/Size` set, it opens as the others do |
+| Encryption on save (2026-09-28) | `save()` drops encryption, a user password's too, unless `encryption=True`, which keeps it; an encrypted result differs from run to run |
 | Page attributes | inherited attributes are pushed onto the pages |
 | Incremental save | not available; every save rewrites the file |
 | Minimum Python version | 3.11 for pikepdf 10.14.0 |
