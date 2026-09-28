@@ -54,7 +54,11 @@ def configure(*, font_policy: FontPolicy | str = FontPolicy.EMBEDDED_ONLY) -> No
 
 
 def start() -> None:
-    """Install the font policy. Idempotent; open() and recover() call it."""
+    """Install the font policy. Idempotent.
+
+    Every operation that reads a document has to call it first, so that a
+    caller of the library never has to.
+    """
     global _active
     with engine_lock:
         if _active is not None:
