@@ -400,14 +400,44 @@ class Updated:
     media_box: Box
 
 
+UPDATED_MEDIA_BOX: Box = (0, 0, 300, 200)
+
+
+def _updated_page() -> bytes:
+    """The page of plain_page() with UPDATED_MEDIA_BOX."""
+    resources = b"/Resources << /Font << /F1 %d 0 R >> >>" % FONT_OBJECT
+    return b"<< /Type /Page /Parent %d 0 R /MediaBox %s %s /Contents %d 0 R >>" % (
+        PAGE_TREE,
+        box_text(UPDATED_MEDIA_BOX),
+        resources,
+        FIRST_PAGE + 1,
+    )
+
+
 def incremental_update() -> Updated:
     source = plain_page()
-    media_box: Box = (0, 0, 300, 200)
-    page = b"<< /Type /Page /Parent %d 0 R /MediaBox %s " % (PAGE_TREE, box_text(media_box)) + (
-        b"/Resources << /Font << /F1 %d 0 R >> >> /Contents %d 0 R >>"
-        % (FONT_OBJECT, FIRST_PAGE + 1)
-    )
-    return Updated(append_update(source.data, {FIRST_PAGE: page}, 1), source, media_box)
+    data = append_update(source.data, {FIRST_PAGE: _updated_page()}, 1)
+    return Updated(data, source, UPDATED_MEDIA_BOX)
+
+
+def cut_inside_the_last_offset() -> Updated:
+    """The update of incremental_update(), padded, cut inside its last offset.
+
+    A string that nothing uses pads the update until its table lies at ten
+    times the offset of the source's table; the cut leaves the digits of the
+    latter after the last startxref. The objects of the update are whole.
+    """
+    source = plain_page()
+    _, earlier = _startxref(source.data)
+
+    def padded(padding: int) -> bytes:
+        objects = {FIRST_PAGE: _updated_page(), size_of_document(1): b"(%s)" % (b"x" * padding)}
+        return append_update(source.data, objects, 1)
+
+    _, table = _startxref(padded(0))
+    data = padded(10 * earlier - table)
+    start, _ = _startxref(data)
+    return Updated(data[: start + len(b"%d" % earlier)], source, UPDATED_MEDIA_BOX)
 
 
 def cut_inside_the_update() -> Changed:

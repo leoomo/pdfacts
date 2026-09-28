@@ -621,6 +621,31 @@ def test_an_update_cut_after_its_object_is_kept():
     assert (box.x0, box.y0, box.x1, box.y1) == case.media_box
 
 
+@pytest.mark.parametrize("kept", [b"startxref", b"startxref\n"])
+def test_an_update_cut_after_its_startxref_is_kept(kept):
+    # QPDF passes over a startxref without an offset and would read the
+    # earlier revision through the one before, without a word.
+    updated = cases.incremental_update()
+    end = updated.data.rindex(b"startxref") + len(kept)
+    result = pdfacts.recover(updated.data[:end])
+    assert result.warnings
+    with pdfacts.open(result.data) as document:
+        box = document.pages[0].geometry.visible_box
+    assert (box.x0, box.y0, box.x1, box.y1) == updated.media_box
+
+
+def test_an_update_cut_inside_the_offset_of_its_table_is_kept():
+    # The digits left name the earlier table, which QPDF would read through
+    # without a word, and does while it rebuilds the file from its objects:
+    # an offset that runs to the end of the file may be cut short.
+    case = cases.cut_inside_the_last_offset()
+    result = pdfacts.recover(case.data)
+    assert result.warnings
+    with pdfacts.open(result.data) as document:
+        box = document.pages[0].geometry.visible_box
+    assert (box.x0, box.y0, box.x1, box.y1) == case.media_box
+
+
 def test_an_update_cut_inside_its_object_is_not_returned_as_the_earlier_revision():
     # QPDF takes the later, broken object and finds no page; the earlier
     # revision, without a word about the update, is not what was asked for.
@@ -647,3 +672,41 @@ def test_a_form_cut_off_before_its_acroform_raises_no_python_warning():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         assert pdfacts.recover(cut).page_count == 1
+
+
+def without_its_end(data: bytes) -> bytes:
+    """`data` without its last %%EOF, which is all that is damaged."""
+    end = data.rindex(b"%%EOF")
+    return data[:end] + data[end + len(b"%%EOF") :]
+
+
+def test_a_file_whose_end_alone_is_damaged_is_read_as_it_is_written():
+    # QPDF finds its startxref and nothing after it: no rebuild, no warning.
+    case = cases.three_pages()
+    result = pdfacts.recover(without_its_end(case.data))
+    assert result.warnings == ()
+    assert result.page_count == len(case.page_objects)
+
+
+def test_an_encrypted_file_with_object_streams_whose_end_alone_is_damaged_is_recovered():
+    # QPDF cannot rebuild such a file from its objects; read through its
+    # startxref it needs no rebuilding.
+    data = encrypt(cases.three_pages().data, user="", owner="owner", object_streams=True)
+    result = pdfacts.recover(without_its_end(data))
+    assert result.page_count == 3
+    with reopened(result.data) as recovered_pdf:
+        assert recovered_pdf.is_encrypted
+
+
+def test_an_update_cut_inside_an_object_the_pages_do_not_need_loses_it():
+    # The later, broken copy counts, and the earlier one is lost with it: the
+    # page keeps no content (docs/conventions.md, "Damaged files").
+    source = cases.plain_page()
+    content = cases.page_object(0) + 1
+    updated = cases.append_update(source.data, {content: stream(b"0 0 1 rg 0 0 10 10 re f")}, 1)
+    cut = updated[: len(source.data) + 40]
+    result = pdfacts.recover(cut)
+    assert result.page_count == 1
+    assert result.warnings
+    with reopened(result.data) as pdf:
+        assert "/Contents" not in pdf.pages[0].obj

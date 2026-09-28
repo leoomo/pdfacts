@@ -69,10 +69,12 @@ may break callers.
   has lost the trailer that names its encryption dictionary but kept the
   dictionary, `RecoveryFailedError`. `max_pages` and `max_objects` are checked on the
   result. An intact file is rewritten with no warnings. The capability
-  `RECOVERY` is available. A file that does not end with `%%EOF` is rebuilt
-  from its objects: an incremental update cut short is kept where its objects
-  are whole, and otherwise the recovery fails; the earlier revision is never
-  given in its place.
+  `RECOVERY` is available. An incremental update cut short is rebuilt from
+  the file's objects rather than read as the earlier revision: it is kept
+  where its objects are whole; an object cut after its `obj` keyword is lost,
+  its earlier version included, and where the pages need it the recovery
+  fails. A file damaged only after the offset of its last `startxref` is read
+  as it is written.
 - A password given for a file that needs none no longer lets pikepdf warn:
   `open()` failed to open such a file with QPDF under a filter that turns
   warnings into errors.

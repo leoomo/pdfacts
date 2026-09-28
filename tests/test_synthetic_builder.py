@@ -437,6 +437,18 @@ def test_the_cut_update_ends_inside_the_object_of_its_update():
     assert b"endobj" not in case.data[len(case.source.data) :]
 
 
+def test_the_offset_left_after_the_last_startxref_names_the_earlier_table():
+    case = cases.cut_inside_the_last_offset()
+    earlier = int(re.findall(rb"startxref\n(\d+)", case.source.data)[-1])
+    assert case.data.startswith(case.source.data)
+    assert case.data.endswith(b"startxref\n%d" % earlier)
+    assert case.data[earlier:].startswith(b"xref\n")
+    assert case.data[10 * earlier :].startswith(b"xref\n")
+    update = case.data[len(case.source.data) : 10 * earlier]
+    assert update.startswith(b"4 0 obj\n<< /Type /Page ")
+    assert update.count(b" obj\n") == update.count(b"\nendobj\n") == 2
+
+
 def test_the_cases_without_pages_are_what_their_names_say():
     empty = cases.empty_page_tree().data
     assert b"/Kids [] /Count 0" in empty
