@@ -20,13 +20,13 @@ from pdfacts.backends.protocols import Box, EngineFailure, FailureKind, PageObje
 # How far from the end QPDF looks for startxref (measured: it finds one that
 # starts 1054 bytes before the end, not one that starts 1055 bytes before).
 _STARTXREF_SEARCH = 1054
-# startxref and an offset, which QPDF reads through (measured: it passes over
-# one without an offset, one glued to its offset and one whose offset other
-# characters follow, for the startxref before it). Stricter than QPDF, which
-# also takes a comment or a sign before the offset, and an offset that runs to
-# the end of the file, which may be cut short and name an earlier table.
-# Passing over a startxref QPDF takes can only make the file be rebuilt from
-# its objects.
+# startxref and an offset that something follows, as QPDF reads through it
+# (measured: it passes over a startxref without an offset, one glued to its
+# offset and one whose offset other characters follow, for the one before).
+# Stricter than QPDF, which also takes a comment or a sign before the offset,
+# and an offset that runs to the end of the file, which may be cut short and
+# name an earlier table. A file whose last startxref this does not match is
+# rebuilt from its objects.
 _STARTXREF = re.compile(rb"startxref[\x00\t\n\x0c\r ]+[0-9]+(?=[\x00\t\n\x0c\r ()<>\[\]{}/%])")
 # What may follow a startxref whose offset the end of the file cut short.
 _CUT_OFFSET = re.compile(rb"[\x00\t\n\x0c\r ]*[0-9]*")
@@ -341,26 +341,26 @@ def rewrite_recovered(data: bytes, password: str | None) -> RecoveredBytes:
 
 
 def _objects_left_out(data: bytes) -> bool:
-    """Whether QPDF, as it would read `data`, leaves out objects at its end.
+    """Whether QPDF, as it would read `data`, can leave out objects at its end.
 
-    For a file that does not end with %%EOF. QPDF reads through the last
-    startxref in its reach that an offset follows. An object after it is
-    part of an update cut short, which QPDF would leave out without a word;
-    an offset that runs to the end of the file may be cut short itself and
-    name an earlier table; with no startxref in reach, QPDF rebuilds the
-    file from its objects anyway, and drops the last one if only white space
-    follows it ("EOF after endobj"). Otherwise only the end of the file is
-    damaged, and QPDF reads it as it is written; it cannot rebuild every
-    file, one with its objects in streams and encrypted for one.
+    For a file that does not end with %%EOF. It is read as it is written
+    only where the last startxref in QPDF's reach is whole and no object
+    follows it: an object after it is part of an update cut short, which
+    QPDF would leave out without a word; a startxref QPDF passes over, or an
+    offset cut short, can make it read an earlier revision; with no
+    startxref in reach, QPDF rebuilds the file from its objects anyway, and
+    drops the last one if only white space follows it ("EOF after endobj").
+    QPDF cannot rebuild every file, one with its objects in streams and
+    encrypted for one.
     """
     if data.rstrip(b"\x00\t\n\x0c\r ").endswith(b"%%EOF"):
         return False
-    start, end = max(0, len(data) - _STARTXREF_SEARCH), len(data)
-    while (last := data.rfind(b"startxref", start, end)) >= 0:
-        if _STARTXREF.match(data, last):
-            return _OBJECT_HEADER.search(data, last) is not None
-        end = last
-    return True
+    last = data.rfind(b"startxref", max(0, len(data) - _STARTXREF_SEARCH))
+    return (
+        last < 0
+        or _STARTXREF.match(data, last) is None
+        or _OBJECT_HEADER.search(data, last) is not None
+    )
 
 
 def _from_its_objects(data: bytes) -> bytes:
