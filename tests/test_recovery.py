@@ -356,3 +356,12 @@ def test_inherited_attributes_stay_where_the_file_writes_them():
         assert pdf.Root.Pages.Rotate == case.pages_rotate
     with pdfacts.open(result.data) as document:
         assert document.pages[0].geometry.rotation == case.pages_rotate
+
+
+def test_a_repair_qpdf_makes_while_walking_the_pages_is_among_the_warnings():
+    # QPDF gives a page without a media box US letter and says so; the result
+    # carries that media box.
+    result = pdfacts.recover(cases.no_media_box().data)
+    assert any("MediaBox is undefined" in warning for warning in result.warnings)
+    with reopened(result.data) as pdf:
+        assert list(pdf.pages[0].obj.MediaBox) == [0, 0, 612, 792]

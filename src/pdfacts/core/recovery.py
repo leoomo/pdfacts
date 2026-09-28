@@ -54,8 +54,11 @@ def recover(data: bytes, *, password: str | None = None, limits: Limits | None =
     before anything can be read, so neither engine tells how many pages the
     damaged file was meant to have. A caller who knows how many to expect
     compares that number with page_count; the warnings may name lost pages.
-    The object numbers of the result differ from those of the input. An
-    encrypted file stays encrypted, and its result differs from run to run.
+    QPDF may repair the page tree while it walks it, for example give a page
+    without a media box US letter; the repair is written into the result and
+    named among the warnings. The object numbers of the result differ from
+    those of the input. An encrypted file stays encrypted, and its result
+    differs from run to run.
     """
     limits = classified(data, password, limits)
     # The runtime starts in open(), before PDFium sees the result.
