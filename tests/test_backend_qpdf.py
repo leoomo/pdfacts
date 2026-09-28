@@ -7,6 +7,7 @@ are the numbers the cases were built from.
 from __future__ import annotations
 
 import dataclasses
+import io
 import re
 import threading
 import typing
@@ -14,8 +15,14 @@ import typing
 import pikepdf
 import pytest
 
-from pdfacts.backends.protocols import EngineFailure, FailureKind, ObjectReader, PageObject
-from pdfacts.backends.qpdf import QpdfDocument
+from pdfacts.backends.protocols import (
+    EngineFailure,
+    FailureKind,
+    ObjectReader,
+    PageObject,
+    RecoveredBytes,
+)
+from pdfacts.backends.qpdf import QpdfDocument, rewrite_recovered
 from synthetic import cases
 from synthetic.builder import PageSpec, build, document, stream
 
@@ -728,3 +735,58 @@ def test_it_implements_the_object_reader():
     members = typing.get_protocol_members(ObjectReader)
     assert members == {"page_count", "object_count", "page_object", "warnings", "close"}
     assert all(callable(getattr(QpdfDocument, name)) for name in members)
+
+
+# --- rewrite_recovered -----------------------------------------------------------------
+
+
+def test_a_truncated_file_is_rebuilt_and_written_anew():
+    case = cases.cut_before_xref_table()
+    rewritten = rewrite_recovered(case.data, None)
+    assert type(rewritten) is RecoveredBytes
+    assert type(rewritten.data) is bytes and rewritten.data != case.data
+    assert rewritten.page_count == case.pages_built
+    assert rewritten.warnings and all(type(w) is str for w in rewritten.warnings)
+    # The input is named without a memory address.
+    assert all("0x" not in warning for warning in rewritten.warnings)
+    assert any(warning.startswith("stream <input>") for warning in rewritten.warnings)
+
+
+def test_the_rewritten_file_has_a_size_and_opens_with_recovery_off():
+    rewritten = rewrite_recovered(cases.cut_before_xref_table().data, None)
+    with pikepdf.open(io.BytesIO(rewritten.data), attempt_recovery=False) as pdf:
+        assert "/Size" in pdf.trailer
+        assert pdf.get_warnings() == []
+
+
+@pytest.mark.parametrize(
+    "data",
+    [cases.cut_inside_catalog().data, cases.header_only().data],
+    ids=["cut inside the catalog", "header only"],
+)
+def test_a_file_qpdf_cannot_rebuild_is_a_format_failure(data):
+    with pytest.raises(EngineFailure) as raised:
+        rewrite_recovered(data, None)
+    assert raised.value.kind is FailureKind.FORMAT
+
+
+def test_a_missing_password_is_a_password_failure():
+    with pytest.raises(EngineFailure) as raised:
+        rewrite_recovered(cases.user_password().data, None)
+    assert raised.value.kind is FailureKind.PASSWORD
+
+
+def test_encryption_is_kept():
+    case = cases.user_password()
+    rewritten = rewrite_recovered(case.data, case.user_password)
+    with pytest.raises(pikepdf.PasswordError):
+        pikepdf.open(io.BytesIO(rewritten.data))
+    with pikepdf.open(io.BytesIO(rewritten.data), password=case.user_password) as pdf:
+        assert pdf.is_encrypted
+
+
+def test_an_unencrypted_file_stays_unencrypted():
+    rewritten = rewrite_recovered(cases.three_pages().data, None)
+    with pikepdf.open(io.BytesIO(rewritten.data)) as pdf:
+        assert not pdf.is_encrypted
+    assert rewritten.warnings == ()

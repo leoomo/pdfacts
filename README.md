@@ -4,10 +4,10 @@ Structured, verifiable facts from PDF files: text, paths, images, annotations
 and forms, each with explicit geometry.
 
 > **Status: private, pre-alpha (milestone M1).** `pdfacts.open()` reads a
-> document and the geometry and object numbers of its pages, and renders a
-> page or a region of it to raw bytes; nothing else described below exists
-> yet. See [ROADMAP.md](ROADMAP.md) for what is planned and how each step is
-> accepted.
+> document and the geometry and object numbers of its pages, renders a page
+> or a region of it to raw bytes, and `pdfacts.recover()` rebuilds a damaged
+> file; nothing else described below exists yet. See [ROADMAP.md](ROADMAP.md)
+> for what is planned and how each step is accepted.
 
 ## What it is for
 
@@ -52,6 +52,19 @@ with pdfacts.open(data) as document:
     print(bitmap.width, bitmap.height, bitmap.row_length, bitmap.display_to_pixel)
 
 print(pdfacts.engine_info())  # the versions the facts depend on
+```
+
+`open()` repairs nothing. A damaged file is recovered in a step of its own,
+which writes new bytes:
+
+```python
+try:
+    document = pdfacts.open(data)
+except pdfacts.DamagedFileError:
+    recovery = pdfacts.recover(data)  # rebuilt, written anew and checked
+    print(recovery.page_count, recovery.warnings)  # pages may have been lost
+    data = recovery.data  # new bytes, new object numbers: keep these
+    document = pdfacts.open(data)
 ```
 
 ## Development
