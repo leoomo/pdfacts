@@ -1,6 +1,7 @@
 """pdfacts: structured, verifiable facts from PDF files."""
 
 from pdfacts.core.capabilities import Capability, capabilities, require
+from pdfacts.core.document import Document, open
 from pdfacts.core.engines import EngineInfo, engine_info
 from pdfacts.core.errors import (
     ClosedError,
@@ -19,6 +20,7 @@ from pdfacts.core.errors import (
     UnsupportedError,
 )
 from pdfacts.core.geometry import Matrix, PageGeometry, Point, Rect
+from pdfacts.core.limits import Limits
 from pdfacts.core.runtime import FontPolicy, configure
 from pdfacts.core.values import Unknown, UnknownReason
 
@@ -29,6 +31,7 @@ __all__ = [
     "ClosedError",
     "ConfigurationError",
     "DamagedFileError",
+    "Document",
     "EmptyInputError",
     "EngineError",
     "EngineInfo",
@@ -37,6 +40,7 @@ __all__ = [
     "LimitError",
     "LimitExceededError",
     "LimitUncheckedError",
+    "Limits",
     "Matrix",
     "NotPdfError",
     "PageGeometry",
@@ -52,5 +56,6 @@ __all__ = [
     "capabilities",
     "configure",
     "engine_info",
+    "open",
     "require",
 ]
