@@ -584,12 +584,52 @@ def test_the_bitmap_is_destroyed_also_when_copying_its_bytes_fails(monkeypatch):
     assert len(made) == len(destroyed) == 1
 
 
-def test_the_page_at_a_scale_beyond_what_pdfium_addresses_is_a_value_error():
-    # 400 x 300 units at scale 10**7: 4 * 10**9 pixels wide, more than a C int
-    # holds. The crop leaves 100 x 100, so that nothing large is allocated.
-    crop = (0, 0, 399.99999, 299.99999)
+@pytest.mark.parametrize(
+    ("make", "crop"),
+    [
+        (cases.one_rectangle, (0, 0, 399.99999, 299.99999)),
+        (lambda: cases.rotated(90), (0, 0, 299.99999, 399.99999)),
+    ],
+    ids=["too wide", "too high"],
+)
+def test_the_page_at_a_scale_beyond_what_pdfium_addresses_is_a_value_error(make, crop):
+    # At scale 6 * 10**6 the side of 400 units is 2.4 * 10**9 pixels, more than
+    # a C int holds, and the side of 300 units is not. The crop leaves 60 x
+    # 60, so that nothing large is allocated.
     with pytest.raises(ValueError, match="more than PDFium addresses"):
-        render(opened(cases.one_rectangle().data), 0, scale=10**7, crop=crop)
+        render(opened(make().data), 0, scale=6 * 10**6, crop=crop)
+
+
+@pytest.mark.parametrize(("side", "allowed"), [(2**31 - 1, True), (2**31, False)])
+def test_a_page_side_of_up_to_2_31_minus_1_pixels_goes_to_pdfium(monkeypatch, side, allowed):
+    # A stand-in for pypdfium2's render, so that no page of that size is drawn.
+    def stand_in(self, **kwargs):
+        raise RuntimeError("would have rendered")
+
+    monkeypatch.setattr(pypdfium2.PdfPage, "render", stand_in)
+    document = opened(cases.one_rectangle().data)
+    # The page is 400 units wide; the product is exact in floating point.
+    scale = side / 400
+    if allowed:
+        with pytest.raises(EngineFailure, match="would have rendered"):
+            render(document, 0, scale=scale)
+    else:
+        with pytest.raises(ValueError, match="more than PDFium addresses"):
+            render(document, 0, scale=scale)
+
+
+def test_the_bitmap_is_destroyed_also_when_an_interrupt_comes_inside_pypdfium2(monkeypatch):
+    made, destroyed = counting_bitmaps(monkeypatch)
+
+    def interrupted(*args):
+        raise KeyboardInterrupt
+
+    # pypdfium2 has made the bitmap and not yet returned it.
+    monkeypatch.setattr(pypdfium2.raw, "FPDF_RenderPageBitmap", interrupted)
+    document = opened(cases.one_rectangle().data)
+    with pytest.raises(KeyboardInterrupt):
+        render(document, 0)
+    assert len(made) == len(destroyed) == 1
 
 
 def test_it_implements_the_renderer():

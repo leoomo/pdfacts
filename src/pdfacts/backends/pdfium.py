@@ -292,17 +292,21 @@ def _rendered(
     width, height = page.get_width() * scale, page.get_height() * scale
     if not (width <= _MOST_PIXELS and height <= _MOST_PIXELS):
         return f"at scale {scale} the page is {width} x {height} pixels, more than PDFium addresses"
+    # Every bitmap made is closed here, under the engine lock, also when an
+    # interrupt arrives inside pypdfium2 before it returns the bitmap.
+    made: list[pypdfium2.PdfBitmap] = []
+
+    def make(*args: object, **kwargs: object) -> pypdfium2.PdfBitmap:
+        made.append(_PACKED_BITMAP(*args, **kwargs))
+        return made[-1]
+
     try:
-        bitmap = page.render(
-            scale=scale,
-            crop=crop,
-            grayscale=not rgb,
-            rev_byteorder=rgb,
-            bitmap_maker=_PACKED_BITMAP,
-        )
-    except ValueError:
-        return f"at scale {scale}, less than one pixel is left of the page after the crop {crop}"
-    try:
+        try:
+            bitmap = page.render(
+                scale=scale, crop=crop, grayscale=not rgb, rev_byteorder=rgb, bitmap_maker=make
+            )
+        except ValueError:
+            return f"at scale {scale} less than one pixel is left after the crop {crop}"
         return RawBitmap(
             width=bitmap.width,
             height=bitmap.height,
@@ -311,7 +315,8 @@ def _rendered(
             data=bytes(bitmap.buffer),
         )
     finally:
-        bitmap.close()
+        for made_bitmap in made:
+            made_bitmap.close()
 
 
 def _bounding_box(page: pypdfium2.PdfPage) -> Box:

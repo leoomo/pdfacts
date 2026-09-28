@@ -111,9 +111,11 @@ may break callers.
 - A region to render is given in user space and cut to the displayed page.
   Pixel coordinates count from the top left corner; `display_to_pixel` is
   `Matrix(s, 0, 0, -s, -rx0·s, ry1·s)` for the region `(rx0, ry0, rx1, ry1)` in
-  display space at scale s. The engine's own transform differs from it by less
-  than one pixel, and the edges it fills may snap to whole pixels. The pixels
-  of one rendering are a limit, checked before the engine is called.
+  display space at scale s. On pages of up to 2^20 pixels a side the engine's
+  own transform differs from it by up to about one pixel, and the edges it
+  fills may snap to whole pixels; on larger pages, whose points the engine
+  places in 32-bit floating point, by more. The pixels of one rendering are a
+  limit, checked before the engine is called.
 - There are two coordinate spaces, user and display. There is no third space
   with y pointing downwards.
 - The digest is a tool under `bench/`, not part of the public interface.
