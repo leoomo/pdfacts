@@ -42,6 +42,7 @@ def test_engine_identity_is_complete():
     assert "V8" not in info.pdfium_flags and "XFA" not in info.pdfium_flags
     assert set(info.as_dict()) == {
         "pdfacts", "pypdfium2", "pdfium", "pdfium_origin", "pdfium_flags", "pikepdf", "qpdf",
+        "font_policy",
     }  # fmt: skip
 
 

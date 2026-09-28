@@ -100,7 +100,8 @@ parameter exists so that another policy can be added without changing the
 interface.
 
 PDFium's font configuration belongs to the process, so one process has one
-policy.
+policy. It is installed before the first document is opened, and
+`engine_info()` names it in `font_policy`, because it changes the facts.
 
 Reason: 28 of 104 files gave different glyph facts on macOS and Linux. With
 host fonts ignored, all 104 were identical on macOS arm64, Linux arm64 and
