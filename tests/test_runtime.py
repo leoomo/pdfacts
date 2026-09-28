@@ -140,12 +140,43 @@ import json
 from pdfacts.backends import pdfium
 from pdfacts.core import runtime
 runtime.start()
-first = pdfium._FONT_INFO
 runtime.start()
 runtime.configure(font_policy="embedded-only")
-print(json.dumps({"same": pdfium._FONT_INFO is first, "kept": first is not None}))
+print(json.dumps({
+    "installed": pdfium._font_policy_installed,
+    "handed_to_pdfium": len(pdfium._FONT_INFOS),
+    "active": runtime.active_font_policy(),
+}))
 """
-    assert run(code) == {"same": True, "kept": True}
+    assert run(code) == {"installed": True, "handed_to_pdfium": 1, "active": "embedded-only"}
+
+
+def test_start_holds_the_engine_lock_while_it_installs():
+    # Another thread must not get the lock while start() calls into PDFium.
+    code = """
+import json, threading
+from pdfacts.backends import pdfium
+from pdfacts.core import runtime
+original = pdfium.install_font_policy
+held = []
+def watching(policy):
+    got = []
+    def probe():
+        if runtime.engine_lock.acquire(blocking=False):
+            runtime.engine_lock.release()
+            got.append(True)
+        else:
+            got.append(False)
+    thread = threading.Thread(target=probe)
+    thread.start()
+    thread.join()
+    held.append(not got[0])
+    return original(policy)
+pdfium.install_font_policy = watching
+runtime.start()
+print(json.dumps({"held": held}))
+"""
+    assert run(code) == {"held": [True]}
 
 
 def test_the_backend_installs_the_font_info_once():
@@ -163,47 +194,49 @@ def counting(info):
     return original(info)
 c.FPDF_SetSystemFontInfo = counting
 pdfium.install_font_policy("embedded-only")
-first = pdfium._FONT_INFO
 pdfium.install_font_policy("embedded-only")
 passed = calls[0]
 names = [name for name, _ in type(passed)._fields_ if name != "version"]
 print(json.dumps({
     "calls": len(calls),
-    "same": pdfium._FONT_INFO is first,
-    "kept": passed is first,
+    "kept": len(pdfium._FONT_INFOS) == 1 and pdfium._FONT_INFOS[0] is passed,
     "version": passed.version,
     "callbacks": [name for name in names if getattr(passed, name)],
 }))
 """
-    assert run(code) == {
-        "calls": 1,
-        "same": True,
-        "kept": True,
-        "version": 1,
-        "callbacks": [],
-    }
+    assert run(code) == {"calls": 1, "kept": True, "version": 1, "callbacks": []}
 
 
-def test_the_font_info_is_referenced_before_pdfium_gets_it():
+def test_a_font_info_handed_to_pdfium_is_never_dropped():
+    # An exception can arrive right after PDFium took the pointer, raised by a
+    # signal handler for example. The installation then counts as not done and
+    # is repeated, and both structures stay referenced.
     code = """
-import ctypes, json
+import json
 import pypdfium2.raw as c
 from pdfacts.backends import pdfium
+original = c.FPDF_SetSystemFontInfo
 during = []
-def refusing(info):
-    during.append(pdfium._FONT_INFO is info._obj)
-    raise ctypes.ArgumentError("refused")
-c.FPDF_SetSystemFontInfo = refusing
+def interrupted(info):
+    during.append(any(kept is info._obj for kept in pdfium._FONT_INFOS))
+    original(info)
+    raise TimeoutError("raised by a signal handler after the call")
+c.FPDF_SetSystemFontInfo = interrupted
 try:
     pdfium.install_font_policy("embedded-only")
-    raised = False
-except ctypes.ArgumentError:
-    raised = True
-print(json.dumps({"during": during, "raised": raised, "after": pdfium._FONT_INFO is None}))
+except TimeoutError:
+    pass
+after_failure = [pdfium._font_policy_installed, len(pdfium._FONT_INFOS)]
+c.FPDF_SetSystemFontInfo = original
+pdfium.install_font_policy("embedded-only")
+after_retry = [pdfium._font_policy_installed, len(pdfium._FONT_INFOS)]
+print(json.dumps({"during": during, "after_failure": after_failure, "after_retry": after_retry}))
 """
-    # Referenced while PDFium could take the pointer; dropped when the call
-    # was refused, so that the next start installs it.
-    assert run(code) == {"during": [True], "raised": True, "after": True}
+    assert run(code) == {
+        "during": [True],
+        "after_failure": [False, 1],
+        "after_retry": [True, 2],
+    }
 
 
 def test_a_start_that_failed_can_be_repeated():
@@ -227,7 +260,7 @@ print(json.dumps({
     "raised": raised,
     "after_failure": after_failure,
     "after_retry": runtime.active_font_policy(),
-    "installed": pdfium._FONT_INFO is not None,
+    "installed": pdfium._font_policy_installed,
 }))
 """
     assert run(code) == {
@@ -246,9 +279,13 @@ try:
     pdfium.install_font_policy("host")
     print(json.dumps({"raised": False}))
 except ValueError:
-    print(json.dumps({"raised": True, "installed": pdfium._FONT_INFO is not None}))
+    print(json.dumps({
+        "raised": True,
+        "installed": pdfium._font_policy_installed,
+        "handed_to_pdfium": len(pdfium._FONT_INFOS),
+    }))
 """
-    assert run(code) == {"raised": True, "installed": False}
+    assert run(code) == {"raised": True, "installed": False, "handed_to_pdfium": 0}
 
 
 def test_the_host_policy_is_unsupported():
@@ -257,6 +294,13 @@ def test_the_host_policy_is_unsupported():
     assert raised.value.capability is pdfacts.Capability.FONT_POLICY_HOST
     with pytest.raises(UnsupportedError):
         configure(font_policy="host")
+
+
+def test_the_host_policy_is_unsupported_after_the_start_too(monkeypatch):
+    # Issue #9: UnsupportedError at any time, not ConfigurationError.
+    monkeypatch.setattr(runtime, "_active", FontPolicy.EMBEDDED_ONLY)
+    with pytest.raises(UnsupportedError):
+        configure(font_policy=FontPolicy.HOST)
 
 
 def test_an_unknown_policy_name_is_refused():
