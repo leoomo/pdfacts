@@ -589,3 +589,191 @@ def test_the_reasons_come_before_what_qpdf_reported():
     warnings = document_.warnings
     assert warnings[0].startswith("page 0:")
     assert "MediaBox is undefined" in warnings[1]
+
+
+# --- from the review of #29 --------------------------------------------------------
+
+
+def test_time_the_engines_spend_in_open_counts_toward_the_deadline(monkeypatch):
+    now = [0.0]
+    original = pdfium_backend.PdfiumDocument.open.__func__
+
+    def slow(cls, data, password):
+        now[0] = 10.0
+        return original(cls, data, password)
+
+    monkeypatch.setattr(pdfium_backend.PdfiumDocument, "open", classmethod(slow))
+    document_ = pdfacts.open(
+        cases.three_pages().data, limits=Limits(deadline_seconds=5), _clock=lambda: now[0]
+    )
+    with pytest.raises(LimitExceededError):
+        document_.pages[0]
+
+
+def test_a_page_past_the_deadline_is_not_read(monkeypatch):
+    now = [0.0]
+    document_ = pdfacts.open(
+        cases.three_pages().data, limits=Limits(deadline_seconds=5), _clock=lambda: now[0]
+    )
+    read = []
+    original = pdfium_backend.PdfiumDocument.visible_box
+
+    def watching(self, index):
+        read.append(index)
+        return original(self, index)
+
+    monkeypatch.setattr(pdfium_backend.PdfiumDocument, "visible_box", watching)
+    now[0] = 10.0
+    with pytest.raises(LimitExceededError):
+        document_.pages[1]
+    assert read == []
+
+
+@pytest.mark.parametrize(("x1", "agree"), [(400.0009, True), (400.0011, False)])
+def test_boxes_agree_within_a_thousandth_and_no_further(monkeypatch, x1, agree):
+    original = qpdf.QpdfDocument.page_object
+
+    def moved(self, index):
+        page = original(self, index)
+        return PageObject(
+            page.object_number, page.generation, (0.0, 0.0, x1, 300.0), None, None, None, False
+        )
+
+    monkeypatch.setattr(qpdf.QpdfDocument, "page_object", moved)
+    assert known(first_page(cases.plain_page().data).ref) is agree
+
+
+def test_a_password_failure_of_qpdf_leaves_its_values_unreadable(monkeypatch):
+    def refusing(cls, data, password):
+        raise EngineFailure(FailureKind.PASSWORD, "invalid password")
+
+    monkeypatch.setattr(qpdf.QpdfDocument, "open", classmethod(refusing))
+    document_ = pdfacts.open(cases.plain_page().data)
+    assert document_.pages[0].ref.object_number.reason is UnknownReason.UNREADABLE
+    assert document_.warnings == ("QPDF could not open the file: invalid password",)
+
+
+def test_a_failing_pdfium_close_still_closes_qpdf(monkeypatch):
+    closes = record_closes(monkeypatch)
+    original = pdfium_backend.PdfiumDocument.close
+
+    def failing(self):
+        original(self)
+        raise EngineFailure(FailureKind.OTHER, "pdfium close failed")
+
+    document_ = pdfacts.open(cases.plain_page().data)
+    monkeypatch.setattr(pdfium_backend.PdfiumDocument, "close", failing)
+    with pytest.raises(EngineError) as raised:
+        document_.close()
+    assert raised.value.engine == "pdfium"
+    assert "QpdfDocument" in closes
+
+
+def test_when_both_closes_fail_the_second_failure_is_noted(monkeypatch):
+    def failing(name):
+        def close(self):
+            raise EngineFailure(FailureKind.OTHER, f"{name} close failed")
+
+        return close
+
+    document_ = pdfacts.open(cases.plain_page().data)
+    monkeypatch.setattr(pdfium_backend.PdfiumDocument, "close", failing("pdfium"))
+    monkeypatch.setattr(qpdf.QpdfDocument, "close", failing("qpdf"))
+    with pytest.raises(EngineError) as raised:
+        document_.close()
+    assert raised.value.engine == "pdfium"
+    assert any("qpdf close failed" in note for note in raised.value.__notes__)
+
+
+def test_a_document_nobody_closed_closes_qpdf_when_pdfium_fails_to_close(monkeypatch):
+    import gc
+
+    closes = record_closes(monkeypatch)
+    original = pdfium_backend.PdfiumDocument.close
+
+    def failing(self):
+        original(self)
+        raise EngineFailure(FailureKind.OTHER, "pdfium close failed")
+
+    monkeypatch.setattr(pdfium_backend.PdfiumDocument, "close", failing)
+    document_ = pdfacts.open(cases.plain_page().data)
+    del document_
+    gc.collect()
+    assert "QpdfDocument" in closes
+
+
+def test_a_failure_of_qpdf_counting_pages_closes_qpdf(monkeypatch):
+    closes = record_closes(monkeypatch)
+
+    def failing(self):
+        raise EngineFailure(FailureKind.OTHER, "count failed")
+
+    monkeypatch.setattr(qpdf.QpdfDocument, "page_count", failing)
+    with pytest.raises(EngineError):
+        pdfacts.open(cases.plain_page().data)
+    assert sorted(closes) == ["PdfiumDocument", "QpdfDocument"]
+
+
+def test_a_media_box_pdfium_reads_otherwise_than_qpdf_disagrees():
+    # QPDF finds no usable media box; PDFium reads the string as 0.
+    page = first_page(document([PageSpec(b"/MediaBox [(50) 0 400 300]")]))
+    box = page.geometry.visible_box
+    assert (box.x0, box.y0, box.x1, box.y1) == (0.0, 0.0, 400.0, 300.0)
+    assert page.ref.object_number.reason is UnknownReason.ENGINES_DISAGREE
+
+
+def test_no_media_box_and_a_flat_crop_box_is_damaged():
+    data = document([PageSpec(b"/CropBox [0 0 0 300]")])
+    with pytest.raises(DamagedFileError) as raised:
+        pdfacts.open(data).pages[0]
+    assert "no visible area" in raised.value.detail
+
+
+def test_a_crop_box_touching_the_media_box_is_damaged_also_without_qpdf():
+    data = document([PageSpec(b"/MediaBox [0 0 400 300] /CropBox [400 0 500 300]")])
+    with pytest.raises(DamagedFileError) as raised:
+        pdfacts.open(b"x" * JUNK_ACCEPTED + data).pages[0]
+    assert "no visible area: (400.0, 0.0, 400.0, 300.0)" in raised.value.detail
+
+
+@pytest.mark.parametrize("reason", ["engines disagree", "invalid"])
+def test_an_object_limit_with_any_unknown_count_cannot_be_checked(monkeypatch, reason):
+    if reason == "engines disagree":
+        original = qpdf.QpdfDocument.page_count
+        monkeypatch.setattr(qpdf.QpdfDocument, "page_count", lambda self: original(self) - 1)
+        data, expected = cases.three_pages().data, UnknownReason.ENGINES_DISAGREE
+    else:
+        data = cases.plain_page().data.replace(b"/Size 6 ", b"/Size 0 ")
+        expected = UnknownReason.INVALID
+    with pytest.raises(LimitUncheckedError) as raised:
+        pdfacts.open(data, limits=Limits(max_objects=100))
+    assert raised.value.reason.reason is expected
+
+
+def test_two_threads_reading_a_page_for_the_first_time_get_the_same_page(monkeypatch):
+    import threading
+    import time
+
+    original = pdfium_backend.PdfiumDocument.visible_box
+
+    def slow(self, index):
+        time.sleep(0.05)
+        return original(self, index)
+
+    monkeypatch.setattr(pdfium_backend.PdfiumDocument, "visible_box", slow)
+    document_ = pdfacts.open(cases.plain_page().data)
+    pages: list[Page] = []
+    threads = [threading.Thread(target=lambda: pages.append(document_.pages[0])) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert len(pages) == 2
+    assert pages[0] is pages[1]
+
+
+def test_a_rotation_pdfium_brings_into_its_form_otherwise_disagrees():
+    # PDFium turns 135 into 90; decision 7 counts it as 0.
+    page = first_page(cases.rotated(135).data)
+    assert page.geometry.rotation == 90
+    assert page.ref.object_number.reason is UnknownReason.ENGINES_DISAGREE

@@ -121,7 +121,7 @@ checked at run time:
 | When | Check |
 | --- | --- |
 | on open | both engines report the same number of pages |
-| before a value from QPDF is used for a page or an annotation | the object at the same position is the same in both engines |
+| before a value from QPDF is used for a page or an annotation | the object at the same position is the same in both engines; for a page, PDFium not exposing object numbers, that means the same visible box (within 0.001) and rotation, QPDF's values brought into PDFium's form first |
 
 When a check fails, the values that depend on it are unknown and the reason is
 stated. Facts read through PDFium are returned as usual.
@@ -220,10 +220,11 @@ A page counts as damaged when it is read, and reading it raises
 `DamagedFileError` while the other pages are read as usual, when PDFium's
 visible box for it is not finite (the file writes a number beyond what PDFium
 holds) or has no area, or when the file's media box intersected with its crop
-box has no area. PDFium puts in US letter for a flat media box and answers
-`(0, 0, 0, 0)` for a crop box outside the media box; neither is a box the file
-writes. The file's boxes are read through QPDF, so the last case is seen only
-where QPDF can read the page.
+box has no area; where the file has no media box QPDF can use, US letter
+stands for it, as in PDFium. PDFium puts in US letter for a flat media box,
+ignores a flat crop box and answers `(0, 0, 0, 0)` for a crop box outside the
+media box; none of these is a box the file writes. The file's boxes are read
+through QPDF, so the flat cases are seen only where QPDF can read the page.
 
 Measured: every one of the 104 intact corpus files ends with `%%EOF` and white
 space, has a cross-reference table PDFium accepts as written, and has a page
