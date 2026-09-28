@@ -20,20 +20,24 @@ from pdfacts.backends.protocols import Box, EngineFailure, FailureKind, PageObje
 # How far from the end QPDF looks for startxref (measured: it finds one that
 # starts 1054 bytes before the end, not one that starts 1055 bytes before).
 _STARTXREF_SEARCH = 1054
-# startxref and an offset that something follows, as QPDF reads through it
-# (measured: it passes over a startxref without an offset, one glued to its
-# offset and one whose offset other characters follow, for the one before).
-# Stricter than QPDF, which also takes a comment or a sign before the offset,
-# and an offset that runs to the end of the file, which may be cut short and
-# name an earlier table. A file whose last startxref this does not match is
-# rebuilt from its objects.
-_STARTXREF = re.compile(rb"startxref[\x00\t\n\x0c\r ]+[0-9]+(?=[\x00\t\n\x0c\r ()<>\[\]{}/%])")
-# What may follow a startxref whose offset the end of the file cut short.
-_CUT_OFFSET = re.compile(rb"[\x00\t\n\x0c\r ]*[0-9]*")
+# startxref and an offset, as QPDF reads through them (measured: it passes
+# over a startxref without an offset, one glued to its offset and one whose
+# offset other characters follow). Stricter than QPDF, which also takes a
+# comment or a sign before the offset.
+_STARTXREF = re.compile(rb"startxref[\x00\t\n\x0c\r ]+([0-9]+)(?![^\x00\t\n\x0c\r ()<>\[\]{}/%])")
+# What the offset after startxref names: a cross-reference table, or an object,
+# which may be a cross-reference stream. QPDF skips white space before it
+# (measured).
+_SECTION = re.compile(
+    rb"[\x00\t\n\x0c\r ]*(?:xref|[0-9]+[\x00\t\n\x0c\r ]+[0-9]+[\x00\t\n\x0c\r ]+obj)"
+)
 # "N G obj", where an object begins.
 _OBJECT_HEADER = re.compile(
     rb"(?<![0-9])[0-9]+[\x00\t\n\x0c\r ]+[0-9]+[\x00\t\n\x0c\r ]+obj(?![A-Za-z])"
 )
+# The end of the first page, in the linearization dictionary of a linearized
+# file, which lies within its first 1024 bytes (ISO 32000-1, F.2).
+_FIRST_PAGE_END = re.compile(rb"/E[\x00\t\n\x0c\r ]+([0-9]+)")
 
 
 @dataclass(frozen=True)
@@ -303,11 +307,33 @@ def rewrite_recovered(data: bytes, password: str | None) -> RecoveredBytes:
     holds an encryption dictionary: QPDF did not find the trailer that names
     it, and read the encrypted strings and streams as they are.
 
+    QPDF reads the file up to the end of its last whole revision, and what
+    follows is left out. Where objects follow, the file ends inside an
+    incremental update: a FORMAT failure, since QPDF would read the revision
+    before without a word, or, rebuilding the file from its objects, mix the
+    update with it; it places objects in object streams only through a
+    cross-reference stream, which a cut update lacks. A file without a whole
+    revision is rebuilt from its objects.
+
     The warnings are those QPDF gave while it rebuilt the file, walked its
     pages and wrote it: it reads streams only when it writes them.
     """
-    if _objects_left_out(data):
-        data = _from_its_objects(data)
+    end = _last_revision(data)
+    if end is None:
+        # A comment longer than QPDF's search for startxref makes it rebuild
+        # the file from its objects, the last of each number counting, and
+        # keeps it from dropping an object that only white space follows to
+        # the end ("EOF after endobj"). Comments mean nothing, and QPDF does
+        # not write them.
+        data += b"%" + b" " * (2 * _STARTXREF_SEARCH)
+    elif _OBJECT_HEADER.search(data, end):
+        raise EngineFailure(
+            FailureKind.FORMAT,
+            "it ends inside an incremental update, which QPDF would drop without a word "
+            "or, rebuilding the file from its objects, mix with the revision before",
+        )
+    else:
+        data = data[:end]
     sources: list[_Input] = []
     try:
         with _translated():
@@ -328,8 +354,15 @@ def rewrite_recovered(data: bytes, password: str | None) -> RecoveredBytes:
                 encrypted = pdf.is_encrypted
                 # pikepdf's save() adds a warning about widgets the form does
                 # not reach, a form cut off before its /AcroForm; _save is what
-                # it calls to write.
-                pdf._save(written, encryption=encrypted, deterministic_id=not encrypted)
+                # it calls to write. pikepdf would also write the XMP metadata
+                # anew to set the PDF version in it, an empty packet in place
+                # of metadata it cannot parse.
+                pdf._save(
+                    written,
+                    encryption=encrypted,
+                    deterministic_id=not encrypted,
+                    fix_metadata_version=False,
+                )
                 # Everything QPDF reported since the file was opened.
                 reported = tuple(str(message) for message in pdf.get_warnings())
             finally:
@@ -340,44 +373,34 @@ def rewrite_recovered(data: bytes, password: str | None) -> RecoveredBytes:
     return RecoveredBytes(data=written.getvalue(), page_count=page_count, warnings=reported)
 
 
-def _objects_left_out(data: bytes) -> bool:
-    """Whether QPDF, as it would read `data`, can leave out objects at its end.
+def _last_revision(data: bytes) -> int | None:
+    """Where the offset after the startxref of the last whole revision ends.
 
-    For a file that does not end with %%EOF. It is read as it is written
-    only where the last startxref in QPDF's reach is whole and no object
-    follows it: an object after it is part of an update cut short, which
-    QPDF would leave out without a word; a startxref QPDF passes over, or an
-    offset cut short, can make it read an earlier revision; with no
-    startxref in reach, QPDF rebuilds the file from its objects anyway, and
-    drops the last one if only white space follows it ("EOF after endobj").
-    QPDF cannot rebuild every file, one with its objects in streams and
-    encrypted for one.
+    None where the file has no whole revision. A startxref ends a revision
+    where QPDF reads through it, its offset names a cross-reference section,
+    and that section lies after the startxref of the revision before: a
+    later revision's section lies nowhere else, and an offset cut short, or
+    cut short and followed by other bytes, can name an earlier one. In a
+    linearized file, a startxref before the end of the first page ends the
+    first-page section, not a revision; its offset is often 0, which names
+    no section, but need not be.
     """
-    if data.rstrip(b"\x00\t\n\x0c\r ").endswith(b"%%EOF"):
-        return False
-    last = data.rfind(b"startxref", max(0, len(data) - _STARTXREF_SEARCH))
-    return (
-        last < 0
-        or _STARTXREF.match(data, last) is None
-        or _OBJECT_HEADER.search(data, last) is not None
-    )
-
-
-def _from_its_objects(data: bytes) -> bytes:
-    """`data` as QPDF has to read it to rebuild the file from its objects.
-
-    A comment longer than QPDF's search for startxref makes it rebuild the
-    file, the last object of each number counting; comments mean nothing,
-    and QPDF does not write them. Rebuilding, QPDF reads through a startxref
-    that follows the last object, where its offset leads to a page tree
-    (measured: warning that startxref was more than 1024 bytes before the
-    end). A startxref at the end whose offset runs to the end of the file is
-    dropped first: the offset may be cut short and name an earlier table.
-    """
-    last = data.rfind(b"startxref")
-    if last >= 0 and _CUT_OFFSET.fullmatch(data, last + len(b"startxref")):
-        data = data[:last]
-    return data + b"%" + b" " * (2 * _STARTXREF_SEARCH)
+    head = data[:1024]
+    first_page_end = 0
+    if b"/Linearized" in head:
+        match = _FIRST_PAGE_END.search(head, 0, max(head.find(b"endobj"), 0))
+        first_page_end = int(match.group(1)) if match else 0
+    previous = end = None
+    for found in re.finditer(rb"startxref", data):
+        if found.start() < first_page_end:
+            continue
+        match = _STARTXREF.match(data, found.start())
+        if match is None:
+            continue
+        offset = int(match.group(1))
+        if _SECTION.match(data, offset) and (previous is None or offset > previous):
+            previous, end = found.start(), match.end()
+    return end
 
 
 def _lost_encryption(pdf: pikepdf.Pdf) -> bool:

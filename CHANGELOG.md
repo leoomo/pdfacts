@@ -61,21 +61,20 @@ may break callers.
 - Recovery: `recover(data, *, password=None, limits=None)` returns a
   `Recovery` with the recovered `data`, its `page_count` and the `warnings`
   QPDF gave while rebuilding and writing the file. The input is classified as
-  `open()` classifies it, without the rule on the end of the file. QPDF
-  rebuilds the file; it is written with `/Size` in the trailer, encryption
-  kept, an unencrypted result the same bytes for the same input. The result
-  has to open as `open()` opens a file, without a warning and with `/Size`;
-  otherwise, when QPDF cannot rebuild the file, and when an encrypted file
+  `open()` classifies it, without the rule on the end of the file. QPDF reads
+  the file up to the end of its last whole revision, leaving out a damaged
+  end, and rebuilds a file without one from its objects. The result is
+  written with `/Size` in the trailer, encryption kept, the metadata as it
+  is, an unencrypted result the same bytes for the same input; it has to open
+  as `open()` opens a file, without a warning and with `/Size`.
+  `RecoveryFailedError` otherwise, when QPDF cannot rebuild the file, when the
+  file ends inside an incremental update, which QPDF would read as the
+  earlier revision without a word or mix with it, and when an encrypted file
   has lost the trailer that names its encryption dictionary but kept the
-  dictionary, `RecoveryFailedError`. `max_pages` and `max_objects` are checked on the
-  result. An intact file is rewritten, with no warnings unless QPDF reports a
-  defect in it. The capability `RECOVERY` is available. An incremental update cut short is rebuilt from
-  the file's objects rather than read as the earlier revision: it is kept
-  where its objects are whole; an object cut after its `obj` keyword is lost,
-  its earlier version included, and where the pages need it the recovery
-  fails. A file damaged only after the line with the offset of its last
-  `startxref` is read as it is written; an offset at the very end may be cut
-  short, and the file is rebuilt.
+  dictionary. `max_pages` and `max_objects` are checked on the result,
+  `deadline_seconds` from the start of `recover()`. An intact file is
+  rewritten, with no warnings unless QPDF reports a defect in it. The
+  capability `RECOVERY` is available.
 - A password given for a file that needs none no longer lets pikepdf warn:
   `open()` failed to open such a file with QPDF under a filter that turns
   warnings into errors.

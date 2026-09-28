@@ -8,12 +8,14 @@ those bytes.
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from pdfacts.backends import qpdf
 from pdfacts.backends.protocols import EngineFailure, FailureKind, RecoveredBytes
 from pdfacts.core import runtime
-from pdfacts.core.document import classified, open
+from pdfacts.core.document import _deadline, classified, open
 from pdfacts.core.errors import (
     EngineError,
     InputError,
@@ -37,7 +39,13 @@ class Recovery:
     warnings: tuple[str, ...]
 
 
-def recover(data: bytes, *, password: str | None = None, limits: Limits | None = None) -> Recovery:
+def recover(
+    data: bytes,
+    *,
+    password: str | None = None,
+    limits: Limits | None = None,
+    _clock: Callable[[], float] = time.monotonic,
+) -> Recovery:
     """The file QPDF rebuilds from `data`, written anew and checked.
 
     The input is classified as open() classifies it: EmptyInputError,
@@ -49,20 +57,25 @@ def recover(data: bytes, *, password: str | None = None, limits: Limits | None =
     RecoveryFailedError when QPDF cannot rebuild the file, and when the result
     fails a check: it has to open as open() opens a file, with both engines
     agreeing on its pages, without a warning from QPDF, and with /Size in its
-    trailer. max_pages and max_objects are checked on the result. EngineError
-    when an engine fails otherwise.
+    trailer. max_pages and max_objects are checked on the result.
+    deadline_seconds counts from the start of recover(); it is checked once
+    the file is rebuilt and once the result is checked. EngineError when an
+    engine fails otherwise.
 
-    A file that does not end with %%EOF is rebuilt from its objects, unless
-    its last startxref is whole, with an offset that something follows, and
-    no object comes after it: QPDF would read an update cut short as the
-    earlier revision without a word. An update cut after its objects is
-    kept; an object of it cut after its `obj` keyword is lost, its earlier
-    version included, and where the pages need it QPDF fails; an update cut
-    before the `obj` of its first object leaves nothing of it. QPDF cannot
-    rebuild an encrypted file whose objects are in object streams. To have
-    QPDF rebuild the file, a comment is added to its end, and two warnings
-    of the rebuild count it: that QPDF cannot find startxref, and that
-    startxref was more than 1024 bytes before the end of the file.
+    The file is read up to the end of its last whole revision: the last
+    startxref that QPDF reads through, whose offset names a cross-reference
+    section after the revision before. What follows, a damaged end, is left
+    out. Where objects follow, the file ends inside an incremental update:
+    RecoveryFailedError, since QPDF would read the revision before without a
+    word, or, rebuilding the file from its objects, mix the update with it;
+    it places objects in object streams only through a cross-reference
+    stream, which an unfinished update lacks. A file without a whole
+    revision, one cut short, is rebuilt from its objects, and an object cut
+    short is lost. QPDF cannot rebuild an encrypted file whose objects are
+    in object streams. To have QPDF rebuild a file, a comment is added to
+    its end, and two warnings of the rebuild count it: that QPDF cannot find
+    startxref, and, where QPDF then reads through one that follows the last
+    object, that startxref was more than 1024 bytes before the end.
 
     Pages, and objects a page uses, can be lost without a failure: QPDF has
     repaired the page tree before anything can be read, so neither engine
@@ -73,26 +86,33 @@ def recover(data: bytes, *, password: str | None = None, limits: Limits | None =
     repair is written into the result and named among the warnings. The
     object numbers of the result differ from those of the input.
 
-    An encrypted file stays encrypted, and its result differs from run to
-    run; an unencrypted result is the same for the same input. When QPDF
-    finds no trailer, it does not know that the file is encrypted: if the
-    encryption dictionary is left, RecoveryFailedError, also for an
-    unencrypted file that holds one nothing names; if the cut took that too,
-    nothing tells, and the result is unencrypted with its strings and streams
-    still encrypted (docs/conventions.md, "Damaged files").
+    The metadata is written as it is. An encrypted file stays encrypted, and
+    its result differs from run to run; an unencrypted result is the same
+    for the same input. When QPDF finds no trailer, it does not know that
+    the file is encrypted: if the encryption dictionary is left,
+    RecoveryFailedError, also for an unencrypted file that holds one nothing
+    names; if the cut took that too, nothing tells, and the result is
+    unencrypted with its strings and streams still encrypted
+    (docs/conventions.md, "Damaged files").
+
+    `_clock` is for tests.
     """
+    started = _clock()
     limits = classified(data, password, limits)
+    deadline = _deadline(limits.deadline_seconds, started, _clock)
     # The runtime starts in open(), before PDFium sees the result.
     with runtime.engine():
         try:
             rewritten = qpdf.rewrite_recovered(data, password)
         except EngineFailure as failure:
             raise _recovery_error(failure, password) from failure
+    deadline()
     if limits.max_pages is not None and rewritten.page_count > limits.max_pages:
         raise LimitExceededError(
             limit="max_pages", allowed=limits.max_pages, found=rewritten.page_count
         )
     object_count = _verified(rewritten, password)
+    deadline()
     if limits.max_objects is not None and object_count > limits.max_objects:
         raise LimitExceededError(
             limit="max_objects", allowed=limits.max_objects, found=object_count
