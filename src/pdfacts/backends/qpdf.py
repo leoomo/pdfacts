@@ -17,9 +17,6 @@ import pikepdf
 
 from pdfacts.backends.protocols import Box, EngineFailure, FailureKind, PageObject, RecoveredBytes
 
-# How far from the end QPDF looks for startxref (measured: it finds one that
-# starts 1054 bytes before the end, not one that starts 1055 bytes before).
-_STARTXREF_SEARCH = 1054
 # startxref and the white space and comments before its offset, matched once
 # and never inside the run of another, so that the file is read once however
 # its startxrefs are laid out.
@@ -340,12 +337,12 @@ def rewrite_recovered(data: bytes, password: str | None) -> RecoveredBytes:
     elif any(closed for _, closed in ends[:-1]):
         raise _unfinished()
     else:
-        # A comment longer than QPDF's search for startxref makes it rebuild
-        # the file from its objects, the last of each number counting, and
+        # No startxref leads QPDF to a whole revision, and it rebuilds the
+        # file from its objects, the last of each number counting. A comment
         # keeps it from dropping an object that only white space follows to
-        # the end ("EOF after endobj"). Comments mean nothing, and QPDF does
+        # the end ("EOF after endobj"); comments mean nothing, and QPDF does
         # not write them.
-        data += b"%" + b" " * (2 * _STARTXREF_SEARCH)
+        data += b"%"
     sources: list[_Input] = []
     try:
         with _translated():
