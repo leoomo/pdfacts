@@ -476,6 +476,17 @@ def test_the_linearized_case_has_the_layout_of_annex_f(first_page_offset):
         assert pdf.get_warnings() == []
 
 
+def test_the_linearized_case_without_a_first_page_trailer_has_one_table():
+    case = cases.linearized(first_page_trailer=False)
+    data = case.data
+    assert [int(offset) for offset in re.findall(rb"startxref\n(\d+)", data)] == [case.main_table]
+    assert data[case.main_table :].startswith(b"xref\n0 6\n")
+    assert data.index(b"/Linearized") < 1024
+    with pikepdf.open(io.BytesIO(data), attempt_recovery=False) as pdf:
+        assert len(pdf.pages) == 1
+        assert pdf.get_warnings() == []
+
+
 def test_the_cases_without_pages_are_what_their_names_say():
     empty = cases.empty_page_tree().data
     assert b"/Kids [] /Count 0" in empty
