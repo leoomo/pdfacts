@@ -436,16 +436,22 @@ def test_the_pixel_limit_counts_each_side_rounded_up(allowed, refused):
 
 
 @pytest.mark.parametrize(
-    ("scale", "region"),
-    [(1e307, None), (1e306, Rect(50, 40, 51, 41))],
-    ids=["page", "small region"],
+    ("make", "scale", "region"),
+    [
+        (cases.one_rectangle, 1e307, None),
+        (cases.one_rectangle, 1e306, Rect(50, 40, 51, 41)),
+        (cases.one_rectangle, 5e305, None),
+        (lambda: cases.rotated(90), 5e305, None),
+    ],
+    ids=["page", "small region", "only the width", "only the height"],
 )
 def test_a_scale_at_which_the_page_has_no_finite_size_is_refused_before_the_engine(
-    monkeypatch, scale, region
+    monkeypatch, make, scale, region
 ):
-    # The engine scales the whole page, not only the region.
+    # The engine scales the whole page, not only the region. At 5e305 the
+    # side of 400 units overflows and the side of 300 units does not.
     calls = recording_renders(monkeypatch)
-    page = first_page(cases.one_rectangle().data)
+    page = first_page(make().data)
     with pytest.raises(ValueError, match="finite size"):
         page.render(scale, region=region)
     assert calls == []
@@ -453,14 +459,14 @@ def test_a_scale_at_which_the_page_has_no_finite_size_is_refused_before_the_engi
 
 @pytest.mark.parametrize(
     ("make", "scale"),
-    [(cases.one_rectangle, 10**7), (lambda: cases.rotated(90), 6 * 10**6)],
+    [(cases.one_rectangle, 6 * 10**6), (lambda: cases.rotated(90), 6 * 10**6)],
     ids=["too wide", "too high"],
 )
 def test_a_scale_at_which_the_page_is_more_pixels_than_the_engine_addresses_is_a_value_error(
     make, scale
 ):
-    # A side of more than 2**31 - 1 pixels, more than a C int holds: 400
-    # units at 10**7, or 400 units high at 6 * 10**6 on the turned page, whose
-    # width, 300 units, stays within. The region stays small.
+    # A side of more than 2**31 - 1 pixels, more than a C int holds: at
+    # 6 * 10**6 the side of 400 units is, the side of 300 units is not; the
+    # page is 400 wide, or on the turned page 400 high. The region stays small.
     with pytest.raises(ValueError, match="more than PDFium addresses"):
         first_page(make().data).render(scale, region=Rect(50, 40, 50.0001, 40.0001))

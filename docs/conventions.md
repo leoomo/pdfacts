@@ -274,10 +274,13 @@ count columns and rows from the top left corner. A bitmap of the region
 `(rx0, ry0, rx1, ry1)` in display space at scale s carries `display_to_pixel`,
 `Matrix(s, 0, 0, -s, -rx0·s, ry1·s)`: column = (x - rx0)·s, row = (ry1 - y)·s.
 The engine decides how it rounds the size of the bitmap and the edges of the
-region: its own transform to the pixels differs from `display_to_pixel` by
-less than one pixel, and it may snap the edges of what it fills to whole
-pixels, further off. Where the page, the region and the scale give whole
-pixels, the two transforms are the same.
+region, and it places points in 32-bit floating point. On a page of up to
+2^20 pixels a side, its own transform to the pixels differs from
+`display_to_pixel` by up to about one pixel, and the two are the same where
+the page, the region and the scale give whole pixels; the edges of what it
+fills may snap to whole pixels, further off. On larger pages the difference
+grows: more than three pixels on a page of about 4·10^8 pixels a side
+(measured).
 
 ## Digest
 
