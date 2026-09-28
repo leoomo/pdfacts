@@ -19,6 +19,7 @@ from pdfacts.core.errors import (
     UnsupportedError,
 )
 from pdfacts.core.geometry import Matrix, PageGeometry, Point, Rect
+from pdfacts.core.runtime import FontPolicy, configure
 from pdfacts.core.values import Unknown, UnknownReason
 
 __version__ = "0.0.1"
@@ -31,6 +32,7 @@ __all__ = [
     "EmptyInputError",
     "EngineError",
     "EngineInfo",
+    "FontPolicy",
     "InputError",
     "LimitError",
     "LimitExceededError",
@@ -48,6 +50,7 @@ __all__ = [
     "UnsupportedError",
     "__version__",
     "capabilities",
+    "configure",
     "engine_info",
     "require",
 ]

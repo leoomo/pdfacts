@@ -11,15 +11,20 @@ may break callers.
 - Error types: `PdfactsError` and its subclasses, listed under "Errors" in
   `docs/conventions.md`.
 - `Unknown` and `UnknownReason` for values that could not be determined.
-- The capability table: `Capability`, `capabilities()`, `require()`. No
-  capability is available yet; each becomes available with the change that
-  implements it.
+- The capability table: `Capability`, `capabilities()`, `require()`. Each
+  capability becomes available with the change that implements it.
 - Geometry: `Point`, `Rect`, `Matrix` and `PageGeometry`, with the transforms
   between user space and display space listed under "Coordinate spaces" in
   `docs/conventions.md`.
+- The runtime: `configure(font_policy=...)` and `FontPolicy`. The policy
+  "embedded-only" ignores fonts installed on the host; "host" exists and is not
+  supported. The capability `FONT_POLICY_EMBEDDED_ONLY` is available.
 
 ### Changed
 
+- `EngineInfo` has a new required field `font_policy`: the active font policy,
+  or `"not-started"`. Constructing an `EngineInfo` without it, for example
+  from a receipt written by 0.0.1, raises `TypeError`.
 - The minimum Python version is 3.13. It was 3.11.
 - The order of milestones follows what the first consumer needs in order to
   switch: M1, M2 (forms), M3, M4a (text, first level), M5a (inspection, repair
@@ -30,13 +35,14 @@ may break callers.
 - The comparison with other libraries moved from M0 to M7.
 - The division of work between the engines is described by kind of work:
   PDFium for what needs interpretation, QPDF for file structure.
-
 - The repository uses no hosted continuous integration. The checks of every
   change run on the development machine: natively on macOS, and in containers
   for Linux arm64 and Linux x86_64.
 
 ### Conventions
 
+- The font policy is installed before the first document is opened, and
+  `engine_info()` names it in `font_policy`, because it changes the facts.
 - The transform from user space to display space is the table under
   "Coordinate spaces"; display space is measured in user space units, and
   `UserUnit` does not scale it.
