@@ -63,22 +63,24 @@ def recover(
     engine fails otherwise.
 
     The file is read up to the end of its last whole revision: the last
-    startxref that QPDF reads through, whose offset, counted from the
-    header, names a cross-reference section after the revision before and
-    which QPDF, recovery off, reads; a linearized file's first-page section
-    is no revision. What follows, a damaged end, is left out. Where part of
-    a revision follows, an object, a cross-reference table or a trailer, or
-    where QPDF cannot read the last revision after one that %%EOF closes,
-    the file ends inside an incremental update: RecoveryFailedError, since
-    QPDF would read the revision before without a word, or, rebuilding the
-    file from its objects, mix the update with it; it places objects in
-    object streams only through a cross-reference stream, which an
-    unfinished update lacks. A file without a whole revision, one cut
-    short, is rebuilt from its objects, and an object cut short is lost.
-    QPDF cannot rebuild an encrypted file whose objects are in object
-    streams. A file that is rebuilt gets a one-byte comment at its end, so
-    that QPDF keeps an object that only white space follows; a warning that
-    names the offset of the end of the file counts it.
+    startxref outside the data of a stream that QPDF reads through, whose
+    offset, counted from the header, names a cross-reference section after
+    the revision before and which QPDF, recovery off, reads; a linearized
+    file's first-page section is no revision. What follows, a damaged end,
+    is left out. Where part of a revision follows, an object, a
+    cross-reference table or a trailer, the last revision is unfinished;
+    where QPDF cannot read the last revision after another, its startxref
+    leads nowhere. Either is RecoveryFailedError, since QPDF would read the
+    revision before without a word, or, rebuilding the file from its
+    objects, mix the two; it places objects in object streams only through
+    a cross-reference stream, which an unfinished update lacks. A file
+    without a whole revision, one cut short, is rebuilt from its objects,
+    and an object cut short is lost. QPDF cannot rebuild an encrypted file
+    whose objects are in object streams. A file that is rebuilt gets a
+    comment at its end, longer than QPDF's search for startxref, so that
+    QPDF rebuilds it without reading a startxref first and keeps an object
+    that only white space follows. Its warnings count the comment: that QPDF
+    cannot find startxref, and the offsets of the end of the file.
 
     Pages, and objects a page uses, can be lost without a failure: QPDF has
     repaired the page tree before anything can be read, so neither engine

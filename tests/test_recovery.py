@@ -652,6 +652,11 @@ def unfinished_updates() -> dict[str, bytes]:
         b"/Info 9 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (earlier_table, len(source))
     )
     return {
+        "an earlier revision without %%EOF, the update cut inside its last offset": (
+            cases.cut_inside_the_last_offset(closed=False).data
+        ),
+        "the last startxref three bytes off": data[:start]
+        + b"startxref\n%d\n%%%%EOF\n" % (int(table) + 3),
         "cut after its object": data[:after_object],
         "cut inside its object": cases.cut_inside_the_update().data,
         "cut inside its table": data[: data.index(b"xref", len(source)) + len(b"xref\n4")],
@@ -684,17 +689,22 @@ UNFINISHED = unfinished_updates()
 
 
 # Other bytes before the header: offsets count from the header.
-PREFIXES = {"the header first": b"", "bytes before the header": b"%comment\n"}
+PREFIXES = {
+    "the header first": b"",
+    "bytes before the header": b"%comment\n",
+    # QPDF takes the first %PDF- that a version follows.
+    "a header without a version before it": b"%PDF-\n",
+}
 
 
 @pytest.mark.parametrize("prefix", list(PREFIXES))
 @pytest.mark.parametrize("name", list(UNFINISHED))
-def test_a_file_that_ends_inside_an_incremental_update_is_refused(name, prefix):
+def test_a_file_whose_last_revision_is_unfinished_or_unreadable_is_refused(name, prefix):
     # Objects follow the last whole revision. QPDF would read the revision
     # before without a word, or, rebuilding the file from its objects, mix the
     # update with it: it places objects in object streams only through a
     # cross-reference stream, which an unfinished update lacks.
-    with pytest.raises(RecoveryFailedError, match="incremental update"):
+    with pytest.raises(RecoveryFailedError, match="last revision is unfinished"):
         pdfacts.recover(PREFIXES[prefix] + UNFINISHED[name])
 
 
@@ -774,11 +784,24 @@ def test_an_updated_file_whose_end_alone_is_damaged_is_read_as_its_last_revision
     ],
     ids=["plain", "updated", "encrypted, with object streams"],
 )
-def test_a_file_whose_header_follows_other_bytes_is_read_as_it_is_written(make, pages):
+@pytest.mark.parametrize(
+    "prefix", ["bytes before the header", "a header without a version before it"]
+)
+def test_a_file_whose_header_follows_other_bytes_is_read_as_it_is_written(make, pages, prefix):
     # Offsets count from the header, as QPDF and PDFium count them.
-    result = pdfacts.recover(PREFIXES["bytes before the header"] + make())
+    result = pdfacts.recover(PREFIXES[prefix] + make())
     assert result.warnings == ()
     assert result.page_count == pages
+
+
+@pytest.mark.parametrize("digits", [20, 4301])
+def test_an_offset_too_long_to_name_anything_is_no_revision(digits):
+    # Neither too large for an index nor too long for an int: no error but
+    # the library's own; the file, without a whole revision, is rebuilt.
+    source = cases.plain_page().data
+    start = source.rindex(b"startxref\n") + len(b"startxref\n")
+    data = source[:start] + b"9" * digits + source[source.index(b"\n", start) :]
+    assert pdfacts.recover(data).page_count == 1
 
 
 @pytest.mark.parametrize("damage", list(END_DAMAGE))
@@ -807,13 +830,15 @@ def with_first_page_end(case: cases.Linearized, first_page_end: int) -> cases.Li
     )
 
 
-def with_startxref_in_its_content(case: cases.Linearized) -> cases.Linearized:
-    """`case` with a comment in its page content: startxref and the offset of
-    the first-page table, written in as many bytes as the content it replaces."""
+def with_startxref_in_its_content(case: cases.Linearized, text: bytes) -> cases.Linearized:
+    """`case` with `text`, a comment, in place of its page content: startxref and
+    an offset, written in as many bytes as the content it replaces."""
     content = cases.rectangle_content(cases.RECTANGLE, cases.BLACK)
-    first_table = case.data.index(b"xref\n5 1\n")
-    comment = (b"%%startxref %010d" % first_table).ljust(len(content))
-    return dataclasses.replace(case, data=case.data.replace(content, comment, 1))
+    return dataclasses.replace(case, data=case.data.replace(content, text.ljust(len(content)), 1))
+
+
+def first_table(case: cases.Linearized) -> int:
+    return case.data.index(b"xref\n5 1\n")
 
 
 LINEARIZED = {
@@ -832,7 +857,14 @@ LINEARIZED = {
         cases.linearized(first_page_offset=True), 9_999_999_999
     ),
     "a startxref in the page content naming the first-page table": lambda: (
-        with_startxref_in_its_content(cases.linearized(first_page_offset=True))
+        (case := cases.linearized(first_page_offset=True))
+        and with_startxref_in_its_content(case, b"%%startxref %010d" % first_table(case))
+    ),
+    "a startxref and %%EOF in the page content naming an object": lambda: (
+        (case := cases.linearized(first_page_offset=True))
+        and with_startxref_in_its_content(
+            case, b"%%startxref %d\n%%%%EOF" % case.data.index(b"1 0 obj")
+        )
     ),
     "no first-page trailer": lambda: cases.linearized(first_page_trailer=False),
     # The first-page trailer, too far from the dictionary to be known as one,
@@ -866,7 +898,7 @@ def test_a_linearized_file_whose_first_page_end_is_wrong_still_ends_its_revision
     data = case.data.replace(b"/E %010d" % case.main_table, b"/E 9999999999", 1)
     updated = cases.append_update(data, {3: b"<< >>"}, 1)
     cut = updated[: updated.index(b"endobj", len(data)) + len(b"endobj\n")]
-    with pytest.raises(RecoveryFailedError, match="incremental update"):
+    with pytest.raises(RecoveryFailedError, match="last revision is unfinished"):
         pdfacts.recover(cut)
 
 
