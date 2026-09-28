@@ -6,6 +6,8 @@ are the numbers the cases were built from.
 
 from __future__ import annotations
 
+import threading
+
 import pypdfium2
 import pytest
 
@@ -27,6 +29,7 @@ from pdfacts import (
 from pdfacts.backends import pdfium as pdfium_backend
 from pdfacts.backends import qpdf
 from pdfacts.backends.protocols import EngineFailure, FailureKind, PageObject
+from pdfacts.core import runtime
 from synthetic import cases
 from synthetic.builder import PageSpec, build, document, stream
 
@@ -37,19 +40,15 @@ LETTER = (0.0, 0.0, 612.0, 792.0)
 JUNK_ACCEPTED = 1024
 
 
+def ordered(box: tuple[float, ...]) -> tuple[float, ...]:
+    return (min(box[0], box[2]), min(box[1], box[3]), max(box[0], box[2]), max(box[1], box[3]))
+
+
 def expected_visible_box(case: cases.Pages, index: int = 0) -> tuple[float, ...]:
-    """The media box intersected with the crop box, corners in order."""
-    media = case.media_boxes[index] or case.pages_media_box
-    if media is None:
-        return LETTER
-    x0, y0, x1, y1 = (
-        min(media[0], media[2]),
-        min(media[1], media[3]),
-        max(media[0], media[2]),
-        max(media[1], media[3]),
-    )
+    """The media box, US letter without one, intersected with the crop box; corners in order."""
+    x0, y0, x1, y1 = ordered(case.media_boxes[index] or case.pages_media_box or LETTER)
     if case.crop_box is not None:
-        c0, d0, c1, d1 = case.crop_box
+        c0, d0, c1, d1 = ordered(case.crop_box)
         x0, y0, x1, y1 = max(x0, c0), max(y0, d0), min(x1, c1), min(y1, d1)
     return (float(x0), float(y0), float(x1), float(y1))
 
@@ -417,6 +416,9 @@ def test_facts_outlive_the_document_and_the_page_does_not():
         (b"/MediaBox [0 0 0 300]", "no visible area"),
         (b"/MediaBox [0 0 400 300] /CropBox [0 0 0 300]", "no visible area"),
         (b"/MediaBox [0 0 400 300] /CropBox [400 0 500 300]", "no visible area"),
+        (b"/MediaBox [0 0 400 0]", "no visible area"),
+        (b"/MediaBox [0 0 400 300] /CropBox [0 0 400 0]", "no visible area"),
+        (b"/MediaBox [0 0 400 300] /CropBox [0 300 400 400]", "no visible area"),
     ],
     ids=[
         "a number beyond what PDFium holds",
@@ -424,6 +426,9 @@ def test_facts_outlive_the_document_and_the_page_does_not():
         "flat media box",
         "flat crop box",
         "crop box touching the media box",
+        "media box without height",
+        "crop box without height",
+        "crop box touching the top of the media box",
     ],
 )
 def test_a_page_whose_box_is_not_one_is_damaged_and_the_others_are_read(entries, reason):
@@ -462,10 +467,6 @@ def test_page_and_page_ref_are_exported():
 
 
 def lock_is_held() -> bool:
-    import threading
-
-    from pdfacts.core import runtime
-
     free = []
 
     def probe():
@@ -629,15 +630,22 @@ def test_a_page_past_the_deadline_is_not_read(monkeypatch):
     assert read == []
 
 
-@pytest.mark.parametrize(("x1", "agree"), [(400.0009, True), (400.0011, False)])
-def test_boxes_agree_within_a_thousandth_and_no_further(monkeypatch, x1, agree):
+@pytest.mark.parametrize(
+    ("theirs", "agree"),
+    [
+        ((0.0, 0.0, 400.0009, 300.0), True),
+        ((0.0, 0.0, 400.0011, 300.0), False),
+        # 0.001 away from 0 is exactly the tolerance, also in binary.
+        ((0.001, 0.0, 400.0, 300.0), True),
+    ],
+    ids=["less", "more", "exactly"],
+)
+def test_boxes_agree_within_a_thousandth_and_no_further(monkeypatch, theirs, agree):
     original = qpdf.QpdfDocument.page_object
 
     def moved(self, index):
         page = original(self, index)
-        return PageObject(
-            page.object_number, page.generation, (0.0, 0.0, x1, 300.0), None, None, None, False
-        )
+        return PageObject(page.object_number, page.generation, theirs, None, None, None, False)
 
     monkeypatch.setattr(qpdf.QpdfDocument, "page_object", moved)
     assert known(first_page(cases.plain_page().data).ref) is agree
@@ -702,14 +710,22 @@ def test_a_document_nobody_closed_closes_qpdf_when_pdfium_fails_to_close(monkeyp
     assert "QpdfDocument" in closes
 
 
-def test_a_failure_of_qpdf_counting_pages_closes_qpdf(monkeypatch):
+@pytest.mark.parametrize(
+    ("failure", "raised_as"),
+    [
+        (lambda: EngineFailure(FailureKind.OTHER, "count failed"), EngineError),
+        (KeyboardInterrupt, KeyboardInterrupt),
+    ],
+    ids=["engine failure", "interrupt"],
+)
+def test_a_failure_of_qpdf_counting_pages_closes_qpdf(monkeypatch, failure, raised_as):
     closes = record_closes(monkeypatch)
 
     def failing(self):
-        raise EngineFailure(FailureKind.OTHER, "count failed")
+        raise failure()
 
     monkeypatch.setattr(qpdf.QpdfDocument, "page_count", failing)
-    with pytest.raises(EngineError):
+    with pytest.raises(raised_as):
         pdfacts.open(cases.plain_page().data)
     assert sorted(closes) == ["PdfiumDocument", "QpdfDocument"]
 
@@ -729,11 +745,19 @@ def test_no_media_box_and_a_flat_crop_box_is_damaged():
     assert "no visible area" in raised.value.detail
 
 
-def test_a_crop_box_touching_the_media_box_is_damaged_also_without_qpdf():
-    data = document([PageSpec(b"/MediaBox [0 0 400 300] /CropBox [400 0 500 300]")])
+@pytest.mark.parametrize(
+    ("crop_box", "visible"),
+    [
+        (b"[400 0 500 300]", "(400.0, 0.0, 400.0, 300.0)"),
+        (b"[0 300 400 400]", "(0.0, 300.0, 400.0, 300.0)"),
+    ],
+    ids=["at the right", "at the top"],
+)
+def test_a_crop_box_touching_the_media_box_is_damaged_also_without_qpdf(crop_box, visible):
+    data = document([PageSpec(b"/MediaBox [0 0 400 300] /CropBox " + crop_box)])
     with pytest.raises(DamagedFileError) as raised:
         pdfacts.open(b"x" * JUNK_ACCEPTED + data).pages[0]
-    assert "no visible area: (400.0, 0.0, 400.0, 300.0)" in raised.value.detail
+    assert f"no visible area: {visible}" in raised.value.detail
 
 
 @pytest.mark.parametrize("reason", ["engines disagree", "invalid"])
@@ -751,7 +775,6 @@ def test_an_object_limit_with_any_unknown_count_cannot_be_checked(monkeypatch, r
 
 
 def test_two_threads_reading_a_page_for_the_first_time_get_the_same_page(monkeypatch):
-    import threading
     import time
 
     original = pdfium_backend.PdfiumDocument.visible_box
@@ -777,3 +800,143 @@ def test_a_rotation_pdfium_brings_into_its_form_otherwise_disagrees():
     page = first_page(cases.rotated(135).data)
     assert page.geometry.rotation == 90
     assert page.ref.object_number.reason is UnknownReason.ENGINES_DISAGREE
+
+
+# --- from the second review of #29 -------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("crop_box", "visible", "agree"),
+    [
+        (b"[100 100 400 400]", (100.0, 100.0, 400.0, 400.0), True),
+        (b"[700 900 1000 1000]", (700.0, 900.0, 1000.0, 1000.0), False),
+        (b"[612 0 700 792]", (612.0, 0.0, 700.0, 792.0), False),
+    ],
+    ids=["inside US letter", "outside US letter", "touching US letter"],
+)
+def test_without_a_media_box_qpdf_can_use_letter_and_the_crop_box_are_compared(
+    crop_box, visible, agree
+):
+    # QPDF finds no usable media box; PDFium reads the string as 0. US letter
+    # standing in for it says nothing about the file: where it leaves no area
+    # with the crop box, the page disagrees and is not damaged.
+    entries = b"/MediaBox [(0) 0 1000 1000] /CropBox " + crop_box
+    page = first_page(document([PageSpec(entries)]))
+    box = page.geometry.visible_box
+    assert (box.x0, box.y0, box.x1, box.y1) == visible
+    if agree:
+        assert known(page.ref)
+    else:
+        assert page.ref.object_number.reason is UnknownReason.ENGINES_DISAGREE
+
+
+def test_a_reversed_crop_box_passes_the_cross_check():
+    page = first_page(document([PageSpec(b"/MediaBox [0 0 400 300] /CropBox [380 290 20 10]")]))
+    box = page.geometry.visible_box
+    assert (box.x0, box.y0, box.x1, box.y1) == (20.0, 10.0, 380.0, 290.0)
+    assert known(page.ref)
+
+
+@pytest.mark.parametrize(
+    "theirs",
+    [(10.0, 0.0, 410.0, 300.0), (0.0, 10.0, 400.0, 310.0)],
+    ids=["moved right", "moved up"],
+)
+def test_a_box_of_the_same_size_elsewhere_disagrees(monkeypatch, theirs):
+    original = qpdf.QpdfDocument.page_object
+
+    def moved(self, index):
+        page = original(self, index)
+        return PageObject(page.object_number, page.generation, theirs, None, None, None, False)
+
+    monkeypatch.setattr(qpdf.QpdfDocument, "page_object", moved)
+    ref = first_page(cases.plain_page().data).ref
+    assert ref.object_number.reason is UnknownReason.ENGINES_DISAGREE
+
+
+@pytest.mark.parametrize(
+    ("number", "read"),
+    [
+        (b"2147483648", True),
+        (b"-2147483648", True),
+        (b"4294967296", False),
+        (b"-2147483649", False),
+    ],
+)
+def test_an_integer_pdfium_cannot_hold_is_read_as_0(number, read):
+    # Measured: PDFium reads an integer outside -2**31 .. 2**32 - 1 as 0, QPDF
+    # as written. The media box becomes flat and PDFium puts in US letter;
+    # the engines disagree (docs/conventions.md, "Damaged files").
+    page = first_page(document([PageSpec(b"/MediaBox [0 0 " + number + b" 300]")]))
+    box = page.geometry.visible_box
+    if read:
+        assert (box.x0, box.y0, box.x1, box.y1) == ordered((0.0, 0.0, float(number), 300.0))
+        assert known(page.ref)
+    else:
+        assert (box.x0, box.y0, box.x1, box.y1) == LETTER
+        assert page.ref.object_number.reason is UnknownReason.ENGINES_DISAGREE
+
+
+class WatchedLock:
+    """The engine lock; it tells when a thread other than the test's waits for it."""
+
+    def __init__(self) -> None:
+        self._lock = runtime.engine_lock
+        self._test = threading.get_ident()
+        self.waited = threading.Event()
+
+    def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+        if blocking and threading.get_ident() != self._test:
+            self.waited.set()
+        return self._lock.acquire(blocking, timeout)
+
+    def release(self) -> None:
+        self._lock.release()
+
+    def __enter__(self) -> WatchedLock:
+        self.acquire()
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.release()
+
+
+def read_first_page_after_waiting(monkeypatch, document_, meanwhile) -> object:
+    """Page 0 asked for in another thread, which waits for the lock while `meanwhile` runs."""
+    lock = WatchedLock()
+    monkeypatch.setattr(runtime, "engine_lock", lock)
+    outcome: list[object] = []
+
+    def read() -> None:
+        try:
+            outcome.append(document_.pages[0])
+        except Exception as error:
+            outcome.append(error)
+
+    thread = threading.Thread(target=read)
+    with lock:
+        thread.start()
+        assert lock.waited.wait(timeout=10)
+        meanwhile()
+    thread.join(timeout=10)
+    assert not thread.is_alive()
+    return outcome[0]
+
+
+def test_a_page_asked_for_while_the_document_closes_is_refused_as_closed(monkeypatch):
+    document_ = pdfacts.open(cases.plain_page().data)
+    outcome = read_first_page_after_waiting(monkeypatch, document_, document_.close)
+    assert isinstance(outcome, ClosedError)
+
+
+def test_a_thread_that_waited_past_the_deadline_does_not_read_the_page(monkeypatch):
+    now = [0.0]
+    document_ = pdfacts.open(
+        cases.plain_page().data, limits=Limits(deadline_seconds=5), _clock=lambda: now[0]
+    )
+
+    def time_passes() -> None:
+        now[0] = 10.0
+
+    outcome = read_first_page_after_waiting(monkeypatch, document_, time_passes)
+    assert isinstance(outcome, LimitExceededError)
