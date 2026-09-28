@@ -82,6 +82,10 @@ glyphs). These are findings about the engines, not features of pdfacts.
 | Rewriting a rebuilt file (2026-09-28) | when QPDF could not read the damaged file's trailer, it writes a trailer without `/Size`: the result opens only with recovery on, with warnings. With `/Size` set before saving, the result opens with recovery off and without warnings |
 | Object streams in a rebuilt file (2026-09-28) | generated without `/Size` set, the result does not open even with recovery on; with `/Size` set, it opens as the others do |
 | Encryption on save (2026-09-28) | `save()` drops encryption, a user password's too, unless `encryption=True`, which keeps it; an encrypted result differs from run to run |
+| `/ID` on save (2026-09-28) | made from the current second, so the same document saved twice gives other bytes; `deterministic_id=True` makes it from the content, and cannot be used with encryption |
+| An object at the end of a cut file (2026-09-28) | dropped when only white space follows its `endobj` to the end ("EOF after endobj"); a comment after it keeps it |
+| A file whose trailer is lost (2026-09-28) | rebuilt as unencrypted, the encryption dictionary no longer named: encrypted strings and streams stay as they are |
+| Warnings while saving (2026-09-28) | streams are read only when they are written, so a broken stream is reported by `save()`, not on opening |
 | Page attributes | inherited attributes are pushed onto the pages |
 | Incremental save | not available; every save rewrites the file |
 | Minimum Python version | 3.11 for pikepdf 10.14.0 |

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import io
 import math
+import warnings
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
@@ -53,6 +54,18 @@ def _translated() -> Iterator[None]:
         raise EngineFailure(FailureKind.FORMAT, str(error)) from error
     except Exception as error:
         raise EngineFailure(FailureKind.OTHER, str(error)) from error
+
+
+@contextmanager
+def _needless_password_unsaid() -> Iterator[None]:
+    """pikepdf's warning that a password was given for a file that needs none.
+
+    It is no error, and not the caller's to see; under a filter that turns
+    warnings into errors it would fail the open.
+    """
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="A password was provided", category=UserWarning)
+        yield
 
 
 def _check_index(index: int, count: int) -> None:
@@ -120,14 +133,15 @@ class QpdfDocument:
         try:
             with _translated():
                 for source in sources:
-                    views.append(
-                        pikepdf.open(
-                            source,
-                            password="" if password is None else password,
-                            attempt_recovery=False,
-                            inherit_page_attributes=False,
+                    with _needless_password_unsaid():
+                        views.append(
+                            pikepdf.open(
+                                source,
+                                password="" if password is None else password,
+                                attempt_recovery=False,
+                                inherit_page_attributes=False,
+                            )
                         )
-                    )
                 walked, unwalked = views
                 # Walked now, so that what QPDF changed is among the warnings
                 # from the start.
@@ -242,35 +256,71 @@ def rewrite_recovered(data: bytes, password: str | None) -> RecoveredBytes:
     result would be damaged again. Encryption is kept; pikepdf would drop it.
     Object streams are kept as they are and none are generated (issue #13,
     decision 3; without /Size set, QPDF could not open what it generated even
-    with recovery on); nothing is linearized. The warnings are those QPDF gave
-    while it rebuilt the file and walked its pages.
+    with recovery on); nothing is linearized. An unencrypted result gets an
+    /ID made from its content, not from the time, so that the same input
+    gives the same bytes.
+
+    A FORMAT failure also when the rebuilt document is not encrypted and yet
+    holds an encryption dictionary: QPDF did not find the trailer that names
+    it, and read the encrypted strings and streams as they are.
+
+    The warnings are those QPDF gave while it rebuilt the file, walked its
+    pages and wrote it: it reads streams only when it writes them.
     """
-    source = _Input(data)
+    # QPDF drops an object that only white space follows to the end of the
+    # file ("EOF after endobj"), the last one of a file cut after it. A
+    # comment after it keeps it; comments mean nothing, and QPDF does not
+    # write them.
+    source = _Input(data + b"%")
     try:
         with _translated():
             try:
-                pdf = pikepdf.open(
-                    source,
-                    password="" if password is None else password,
-                    attempt_recovery=True,
-                    inherit_page_attributes=False,
-                )
+                with _needless_password_unsaid():
+                    pdf = pikepdf.open(
+                        source,
+                        password="" if password is None else password,
+                        attempt_recovery=True,
+                        inherit_page_attributes=False,
+                    )
             except ValueError as error:
                 # For a file too short to hold a trailer, QPDF's search for one
                 # fails in the stream it reads from.
                 raise EngineFailure(FailureKind.FORMAT, str(error)) from error
             try:
                 page_count = len(pdf.pages)
-                warnings = tuple(str(message) for message in pdf.get_warnings())
+                if _lost_encryption(pdf):
+                    raise EngineFailure(
+                        FailureKind.FORMAT,
+                        "the file is encrypted, and QPDF did not find the trailer that names "
+                        "its encryption dictionary",
+                    )
+                reported = [str(message) for message in pdf.get_warnings()]
                 # Any value: QPDF writes the number of objects it writes.
                 pdf.trailer["/Size"] = 1
                 written = io.BytesIO()
-                pdf.save(written, encryption=pdf.is_encrypted)
+                encrypted = pdf.is_encrypted
+                pdf.save(written, encryption=encrypted, deterministic_id=not encrypted)
+                reported.extend(str(message) for message in pdf.get_warnings())
             finally:
                 pdf.close()
     finally:
         source.close()
-    return RecoveredBytes(data=written.getvalue(), page_count=page_count, warnings=warnings)
+    return RecoveredBytes(data=written.getvalue(), page_count=page_count, warnings=tuple(reported))
+
+
+def _lost_encryption(pdf: pikepdf.Pdf) -> bool:
+    """Whether a document QPDF reads as unencrypted holds an encryption dictionary.
+
+    One of the standard security handler, with /O and /U, or of a public-key
+    handler, with /Recipients.
+    """
+    if pdf.is_encrypted:
+        return False
+    for obj in pdf.objects:
+        if isinstance(obj, pikepdf.Dictionary) and "/Filter" in obj:
+            if ("/O" in obj and "/U" in obj) or "/Recipients" in obj:
+                return True
+    return False
 
 
 def _page_objects_as_written(pdf: pikepdf.Pdf) -> tuple[tuple[int, int] | None, ...] | None:
