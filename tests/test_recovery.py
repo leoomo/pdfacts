@@ -834,6 +834,7 @@ LINEARIZED = {
     "a startxref in the page content naming the first-page table": lambda: (
         with_startxref_in_its_content(cases.linearized(first_page_offset=True))
     ),
+    "no first-page trailer": lambda: cases.linearized(first_page_trailer=False),
 }
 
 
