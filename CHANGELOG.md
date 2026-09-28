@@ -40,9 +40,12 @@ may break callers.
   Geometry comes from PDFium. Object numbers, `UserUnit` and
   `Document.object_count` come from QPDF, and are `Unknown` with the reason
   where QPDF cannot open or read the file or the engines disagree on the
-  page count or on a page's visible box or rotation. `Document.warnings`
-  says why, and holds what QPDF reported. The capabilities `PAGE_GEOMETRY`,
-  `USER_UNIT` and `OBJECT_NUMBERS` are available.
+  page count or on a page's visible box or rotation; a `UserUnit` that is
+  not a number above 0 and a `/Size` that is not a whole number above 0 are
+  `Unknown(INVALID)`. `UserUnit` is 1.0 where the file does not write it.
+  `Document.warnings` gives the reasons first, then what QPDF reported; it
+  grows as pages are read. The capabilities `PAGE_GEOMETRY`, `USER_UNIT` and
+  `OBJECT_NUMBERS` are available.
 
 ### Changed
 

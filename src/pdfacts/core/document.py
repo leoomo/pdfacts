@@ -46,6 +46,8 @@ WHITE_SPACE = b"\x00\t\n\x0c\r "
 # Two boxes are equal when every coordinate differs by at most this much:
 # PDFium holds coordinates as 32-bit numbers, QPDF as decimal text.
 BOX_TOLERANCE = 0.001
+# The media box PDFium takes for a page without one it can use: US letter.
+LETTER: Box = (0.0, 0.0, 612.0, 792.0)
 
 
 class Page:
@@ -114,6 +116,8 @@ class Document:
         self._page_count = opened.page_count
         self._object_count = opened.object_count
         self._notes = list(opened.notes)
+        # The same notes as a set: one note per page can come to thousands.
+        self._noted = set(self._notes)
         self._deadline = opened.deadline
         self._read: dict[int, Page] = {}
         self._pages = Pages(self)
@@ -178,6 +182,8 @@ class Document:
                     _qpdf_call(self._qpdf.close)
             self._finalizer.detach()
             if failures:
+                for other in failures[1:]:
+                    failures[0].add_note(f"also: {other}")
                 raise failures[0]
 
     def __enter__(self) -> Document:
@@ -205,12 +211,16 @@ class Document:
         if not 0 <= index < self._page_count:
             raise IndexError(f"page index {index} is outside the {self._page_count} pages")
         page = self._read.get(index)
-        if page is None:
-            self._deadline()
-            with runtime.engine():
-                self._check_open()
+        if page is not None:
+            return page
+        self._deadline()
+        with runtime.engine():
+            self._check_open()
+            # Another thread may have read it while this one waited.
+            page = self._read.get(index)
+            if page is None:
                 page = self._read_page(index)
-            self._read[index] = page
+                self._read[index] = page
         return page
 
     def _read_page(self, index: int) -> Page:
@@ -227,8 +237,8 @@ class Document:
                 unknown = Unknown(UnknownReason.UNREADABLE, failure.detail)
                 self._note(f"QPDF cannot give the values of pages: {failure.detail}")
         if page_object is not None:
-            written = _written_visible_box(index, page_object)
-            disagreement = _disagreement(box, rotation, written, page_object.rotate)
+            theirs = _qpdf_visible_box(index, page_object)
+            disagreement = _disagreement(box, rotation, theirs, page_object.rotate)
             if disagreement is not None:
                 unknown = Unknown(UnknownReason.ENGINES_DISAGREE, disagreement)
                 self._note(f"page {index}: {disagreement}")
@@ -249,7 +259,8 @@ class Document:
         return Page(self, geometry, ref)
 
     def _note(self, note: str) -> None:
-        if note not in self._notes:
+        if note not in self._noted:
+            self._noted.add(note)
             self._notes.append(note)
 
 
@@ -414,7 +425,13 @@ def _open_qpdf(
         return None, Unknown(
             UnknownReason.UNREADABLE, f"QPDF could not open the file: {failure.detail}"
         )
-    count = _qpdf_call(qpdf.page_count)
+    try:
+        count = _qpdf_call(qpdf.page_count)
+    except BaseException:
+        # open() does not know of this document yet, so it would not close it.
+        with suppress(EngineFailure):
+            qpdf.close()
+        raise
     if count != page_count:
         return qpdf, Unknown(
             UnknownReason.ENGINES_DISAGREE, f"PDFium counts {page_count} pages, QPDF {count}"
@@ -465,40 +482,42 @@ def _visible_box(index: int, box: Box) -> Rect:
     return rect
 
 
-def _written_visible_box(index: int, page: PageObject) -> Box | None:
-    """The media box intersected with the crop box, as the file writes them.
+def _qpdf_visible_box(index: int, page: PageObject) -> Box:
+    """The visible box from QPDF's values, in PDFium's form.
 
-    None without a usable media box, which leaves PDFium's US letter nothing
-    to be compared with. DamagedFileError when the file's visible area is
-    empty or flat: PDFium puts in US letter for a flat media box and ignores
-    a flat crop box, both of which are values the file does not write.
+    The media box intersected with the crop box, corners in order. Where the
+    file has no media box QPDF can use, PDFium takes US letter, and so does
+    this, so that the crop box and a box PDFium read differently are still
+    compared.
+
+    DamagedFileError when the visible area is empty or flat: PDFium puts in US
+    letter for a flat media box and ignores a flat crop box, both of which
+    are values the file does not write (docs/conventions.md, "Damaged files").
     """
-    if page.media_box is None:
-        return None
-    visible: Box | None = _ordered(page.media_box)
+    media = _ordered(page.media_box) if page.media_box is not None else LETTER
+    visible: Box | None = media
     if page.crop_box is not None:
-        visible = _intersection(visible, _ordered(page.crop_box))
+        visible = _intersection(media, _ordered(page.crop_box))
     if visible is None or visible[0] == visible[2] or visible[1] == visible[3]:
         written = f"media box {page.media_box}, crop box {page.crop_box}"
         raise DamagedFileError(detail=f"page {index} has no visible area: {written}")
     return visible
 
 
-def _disagreement(box: Box, rotation: int, written: Box | None, rotate: int | None) -> str | None:
+def _disagreement(box: Box, rotation: int, theirs: Box, rotate: int | None) -> str | None:
     """How QPDF's page differs from PDFium's, or None.
 
     QPDF's values are brought into PDFium's form first: corners in order, the
     media box intersected with the crop box, the rotation into 0..270
-    (issue #11, decision 7). Without a usable media box only the rotation is
-    compared.
+    (issue #11, decision 7). A rotation that is not a multiple of 90 counts
+    as 0 here, while PDFium turns 135 into 90: such a page disagrees, which is
+    the safe answer.
     """
-    theirs = _normal_rotation(rotate)
-    if theirs != rotation:
-        return f"PDFium turns it by {rotation}, QPDF by {theirs}"
-    if written is None:
-        return None
-    if any(abs(a - b) > BOX_TOLERANCE for a, b in zip(box, written, strict=True)):
-        return f"PDFium's visible box is {box}, QPDF's {written}"
+    turned = _normal_rotation(rotate)
+    if turned != rotation:
+        return f"PDFium turns it by {rotation}, QPDF by {turned}"
+    if any(abs(a - b) > BOX_TOLERANCE for a, b in zip(box, theirs, strict=True)):
+        return f"PDFium's visible box is {box}, QPDF's {theirs}"
     return None
 
 
