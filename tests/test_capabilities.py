@@ -38,6 +38,7 @@ def test_nothing_is_claimed_that_is_not_implemented():
         Capability.PAGE_GEOMETRY,
         Capability.USER_UNIT,
         Capability.OBJECT_NUMBERS,
+        Capability.RENDERING,
         Capability.FONT_POLICY_EMBEDDED_ONLY,
     }
 
@@ -50,7 +51,7 @@ def test_require_raises_for_a_capability_that_is_not_available():
 
 def test_require_takes_a_capability_by_its_value_and_rejects_other_names():
     with pytest.raises(UnsupportedError):
-        require("rendering")
+        require("recovery")
     with pytest.raises(ValueError):
         require("bogus")
 

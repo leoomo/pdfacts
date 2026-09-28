@@ -57,6 +57,20 @@ class PageObject:
     user_unit_invalid: bool
 
 
+@dataclass(frozen=True, slots=True)
+class RawBitmap:
+    """The pixels an engine rendered, copied out of its memory."""
+
+    width: int
+    height: int
+    # Bytes per row; may be more than width * channels.
+    row_length: int
+    # 1 for grey, 3 for red, green, blue in that order.
+    channels: int
+    # row_length * height bytes; row 0 is the top.
+    data: bytes
+
+
 class GeometryReader(Protocol):
     """Page geometry as an engine that interprets the page sees it."""
 
@@ -67,6 +81,19 @@ class GeometryReader(Protocol):
     def rotation(self, index: int) -> int: ...
 
     def close(self) -> None: ...
+
+
+class Renderer(Protocol):
+    """A page drawn by an engine that interprets it.
+
+    `crop` is (left, bottom, right, top): how much is cut off each side of the
+    displayed page, in display units before scaling. The backend knows
+    nothing of user space; the core computes `crop`.
+    """
+
+    def render(
+        self, index: int, *, scale: float, crop: tuple[float, float, float, float], rgb: bool
+    ) -> RawBitmap: ...
 
 
 class ObjectReader(Protocol):

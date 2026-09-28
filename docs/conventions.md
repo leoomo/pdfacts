@@ -267,6 +267,15 @@ A page or a region of it is rendered at a given scale to grey or RGB. The
 result is raw bytes with width, height and row length. No type of an imaging
 library appears in the public interface.
 
+The region is given in user space, like every fact, and is cut to the
+displayed page; the scale is pixels per user space unit. Pixel coordinates
+count columns and rows from the top left corner. A bitmap of the region
+`(rx0, ry0, rx1, ry1)` in display space at scale s carries `display_to_pixel`,
+`Matrix(s, 0, 0, -s, -rx0·s, ry1·s)`: column = (x - rx0)·s, row = (ry1 - y)·s.
+The engine decides how it rounds the size of the bitmap and the edges of the
+region, so the matrix places a point within one pixel of where the engine
+draws it.
+
 ## Digest
 
 The digest is a tool under `bench/`. It is not part of the public interface.
