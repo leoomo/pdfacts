@@ -87,9 +87,11 @@ def recover(
     repaired the page tree before anything can be read, so neither engine
     tells how many pages the damaged file was meant to have. A caller who
     knows how many to expect compares that number with page_count; the
-    warnings may name what was lost. QPDF may repair the page tree while it
-    walks it, for example give a page without a media box US letter; the
-    repair is written into the result and named among the warnings. The
+    warnings may name what was lost, though QPDF sends some messages to
+    pikepdf's logger instead, for example about a kid it drops. QPDF may
+    repair the page tree while it walks it, for example give a page without
+    a media box US letter; the repair is written into the result and named
+    among the warnings. The
     object numbers of the result differ from those of the input.
 
     The metadata keeps its content, as every stream does, though QPDF may

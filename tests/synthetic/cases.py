@@ -444,6 +444,37 @@ def cut_inside_the_last_offset(*, naming_the_update: bool = False, closed: bool 
     return Updated(data[: start + len(b"%d" % named)], source, UPDATED_MEDIA_BOX)
 
 
+def update_in_a_cross_reference_stream(*, gap: bytes = b" ", sign: bytes = b"") -> Updated:
+    """The update of incremental_update() written with a cross-reference stream.
+
+    Its entries are not compressed. `gap` separates the numbers and the
+    keyword of the update's two object headers, and `sign` comes before each
+    number, as QPDF reads them.
+    """
+    source = plain_page()
+    _, earlier = _startxref(source.data)
+
+    def header(number: int) -> bytes:
+        return sign + b"%d" % number + gap + sign + b"0" + gap + b"obj\n"
+
+    out = bytearray(source.data)
+    page = len(out)
+    out += header(FIRST_PAGE) + _updated_page() + b"\nendobj\n"
+    table = len(out)
+    number = size_of_document(1) + 1
+    entries = b"".join(bytes([1]) + at.to_bytes(4, "big") + bytes([0]) for at in (page, table))
+    out += header(number)
+    out += b"<< /Type /XRef /Size %d /W [1 4 1] /Index [%d 1 %d 1] /Root 1 0 R /Prev %d " % (
+        number + 1,
+        FIRST_PAGE,
+        number,
+        earlier,
+    )
+    out += b"/Length %d >>\nstream\n%s\nendstream\nendobj\n" % (len(entries), entries)
+    out += b"startxref\n%d\n%%%%EOF\n" % table
+    return Updated(bytes(out), source, UPDATED_MEDIA_BOX)
+
+
 @dataclass(frozen=True)
 class Linearized:
     """A one-page file laid out as a linearized one, and where its main table begins."""

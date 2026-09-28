@@ -865,6 +865,34 @@ def test_a_file_whose_stream_ends_directly_before_endstream_is_read_as_it_is_wri
     assert (visible.x0, visible.y0, visible.x1, visible.y1) == box
 
 
+# How the update's object headers are written, all read by QPDF (measured).
+HEADER_FORMS = {
+    "a space": {},
+    "a comment": {"gap": b" %c\n"},
+    "a vertical tab": {"gap": b"\x0b"},
+    "a plus sign": {"sign": b"+"},
+}
+
+
+@pytest.mark.parametrize("form", list(HEADER_FORMS))
+def test_an_update_in_a_cross_reference_stream_is_read_as_its_last_revision(form):
+    # The last startxref names the object of the cross-reference stream.
+    case = cases.update_in_a_cross_reference_stream(**HEADER_FORMS[form])
+    result = pdfacts.recover(case.data)
+    assert result.warnings == ()
+    with pdfacts.open(result.data) as document:
+        box = document.pages[0].geometry.visible_box
+    assert (box.x0, box.y0, box.x1, box.y1) == case.media_box
+
+
+@pytest.mark.parametrize("form", list(HEADER_FORMS))
+def test_an_update_in_a_cross_reference_stream_cut_after_its_page_is_refused(form):
+    case = cases.update_in_a_cross_reference_stream(**HEADER_FORMS[form])
+    cut = case.data[: case.data.index(b"endobj", len(case.source.data)) + len(b"endobj\n")]
+    with pytest.raises(RecoveryFailedError, match="last revision is unfinished"):
+        pdfacts.recover(cut)
+
+
 def test_a_stream_keyword_inside_a_string_after_the_last_stream_hides_nothing():
     # The text of a stream's beginning, with no endstream after it, begins no
     # stream: the startxref after it ends the revision.
@@ -942,6 +970,18 @@ def first_table(case: cases.Linearized) -> int:
     return case.data.index(b"xref\n5 1\n")
 
 
+def with_content_opened_after_a_vertical_tab(
+    case: cases.Linearized, text: bytes
+) -> cases.Linearized:
+    """`case` with `text` in place of its page content, whose stream keyword
+    follows its dictionary after a vertical tab, in as many bytes."""
+    content = cases.rectangle_content(cases.RECTANGLE, cases.BLACK)
+    written = b">>\nstream\n%s\nendstream" % content
+    replaced = b">>\x0bstream\n%s\nendstream" % text.ljust(len(content))
+    assert len(replaced) == len(written)
+    return dataclasses.replace(case, data=case.data.replace(written, replaced, 1))
+
+
 def with_content_ended_directly(case: cases.Linearized, text: bytes) -> cases.Linearized:
     """`case` with `text` and a letter in place of its page content, the letter
     directly before endstream, in as many bytes as the stream it replaces."""
@@ -981,6 +1021,10 @@ LINEARIZED = {
     "a startxref in page content that ends directly before endstream": lambda: (
         (case := cases.linearized(first_page_offset=True))
         and with_content_ended_directly(case, b"%%startxref %010d" % first_table(case))
+    ),
+    "a startxref in page content whose stream keyword follows a vertical tab": lambda: (
+        (case := cases.linearized(first_page_offset=True))
+        and with_content_opened_after_a_vertical_tab(case, b"%%startxref %010d" % first_table(case))
     ),
     "no first-page trailer": lambda: cases.linearized(first_page_trailer=False),
     # The first-page trailer, too far from the dictionary to be known as one,

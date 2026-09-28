@@ -32,8 +32,13 @@ _SPACE = rb"[\x00\t\n\x0b\x0c\r ]"
 _HEADER = re.compile(rb"%PDF-[0-9]+\.[0-9]+")
 # startxref and the white space and comments before its offset, matched once
 # and never inside the run of another, so that the file is read once however
-# its startxrefs are laid out.
-_STARTXREF = re.compile(rb"startxref(?>(?:" + _SPACE + rb"|%[^\r\n]*)+)")
+# its startxrefs are laid out; possessive, so that a long run costs no memory.
+_STARTXREF = re.compile(rb"startxref(?:" + _SPACE + rb"|%[^\r\n]*)++")
+# White space and comments between the numbers and the keyword of an object
+# header, and a plus sign on a number, which QPDF reads there (measured,
+# review, round 9).
+_HEADER_GAP = rb"(?:" + _SPACE + rb"|%[^\r\n]*)++"
+_NUMBER = rb"\+?[0-9]+"
 # The offset after startxref, in the forms QPDF reads through (measured): white
 # space or comments before it, as above, a plus sign on it, a delimiter or the
 # end of the file after it. It passes over a startxref without an offset, one
@@ -47,18 +52,25 @@ _OFFSET_DIGITS = 20
 # (measured: one blank, not ten), and only the first bytes are looked at, so
 # that a crafted file whose offsets all name a long run of white space is not
 # read over and over.
-_SECTION = re.compile(_SPACE + rb"*(?:xref|[0-9]+" + _SPACE + rb"+[0-9]+" + _SPACE + rb"+obj)")
+_SECTION = re.compile(
+    _SPACE + rb"*(?:xref|" + _NUMBER + _HEADER_GAP + _NUMBER + _HEADER_GAP + rb"obj)"
+)
 _REACH = 64
 # Where the data of a stream begins, after its dictionary, and where it ends;
 # endstream may follow the data directly (6 corpus files write it after a
 # letter). The text of a startxref between the two ends no revision.
 _STREAM_BOUNDARY = re.compile(rb">>" + _SPACE + rb"*stream(?=[\r\n])|endstream")
-# "N G obj", where an object begins.
+# "N G obj", where an object begins, counted where a linearized file's
+# first-page trailer is looked for.
 _OBJECT_HEADER = re.compile(
-    rb"(?<![0-9])[0-9]+" + _SPACE + rb"+[0-9]+" + _SPACE + rb"+obj(?![A-Za-z])"
+    rb"(?<![0-9+])" + _NUMBER + _SPACE + rb"+" + _NUMBER + _SPACE + rb"+obj(?![A-Za-z])"
 )
-# What a revision is written of: objects, a cross-reference table, a trailer.
-_REVISION_PART = re.compile(_OBJECT_HEADER.pattern + rb"|(?<![A-Za-z])(?:xref|trailer)(?![A-Za-z])")
+# The keywords a revision is written with: objects and streams, a
+# cross-reference table, a trailer. Found by keyword, an object is seen in
+# any form of its header.
+_REVISION_PART = re.compile(
+    rb"(?<![A-Za-z])(?:obj|endobj|stream|endstream|xref|trailer)(?![A-Za-z])"
+)
 
 
 @dataclass(frozen=True)
