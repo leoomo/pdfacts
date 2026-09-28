@@ -73,8 +73,13 @@ may break callers.
   and when PDFium finds no page in it or no page dictionary for a page it
   counts.
 - A page counts as damaged when it is read if PDFium's visible box for it is
-  not finite or has no area, or the file's media box intersected with its
-  crop box has no area; the other pages are read as usual.
+  not finite or has no area, or the boxes the file writes leave no area (a
+  flat crop box, or a media box that is flat or that, intersected with the
+  crop box, has no area); the other pages are read as usual.
+- The run-time check of a page compares its visible box, within 0.001, and its
+  rotation. On QPDF's side the visible box is the media box, US letter where
+  QPDF has none it can use, intersected with the crop box; the rotation is
+  taken modulo 360, and a value that is not a multiple of 90 counts as 0.
 - The font policy is installed before the first document is opened, and
   `engine_info()` names it in `font_policy`, because it changes the facts.
 - The transform from user space to display space is the table under

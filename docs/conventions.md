@@ -121,7 +121,7 @@ checked at run time:
 | When | Check |
 | --- | --- |
 | on open | both engines report the same number of pages |
-| before a value from QPDF is used for a page or an annotation | the object at the same position is the same in both engines; for a page, PDFium not exposing object numbers, that means the same visible box (within 0.001) and rotation, QPDF's values brought into PDFium's form first |
+| before a value from QPDF is used for a page or an annotation | the object at the same position is the same in both engines. For a page, PDFium not exposing object numbers, that means the same visible box, within 0.001, and the same rotation. QPDF's visible box is its media box, US letter where it has none it can use, intersected with its crop box, corners in order; its rotation is taken modulo 360, and a value that is not a multiple of 90 counts as 0 |
 
 When a check fails, the values that depend on it are unknown and the reason is
 stated. Facts read through PDFium are returned as usual.
@@ -219,12 +219,17 @@ These count as files the engine cannot load:
 A page counts as damaged when it is read, and reading it raises
 `DamagedFileError` while the other pages are read as usual, when PDFium's
 visible box for it is not finite (the file writes a number beyond what PDFium
-holds) or has no area, or when the file's media box intersected with its crop
-box has no area; where the file has no media box QPDF can use, US letter
-stands for it, as in PDFium. PDFium puts in US letter for a flat media box,
-ignores a flat crop box and answers `(0, 0, 0, 0)` for a crop box outside the
-media box; none of these is a box the file writes. The file's boxes are read
-through QPDF, so the flat cases are seen only where QPDF can read the page.
+holds) or has no area, or when the boxes the file writes leave no area: a flat
+crop box, or a media box that is flat or that, intersected with the crop box,
+has no area. PDFium puts in US letter for a flat media box, ignores a flat
+crop box and answers `(0, 0, 0, 0)` for a crop box outside the media box; none
+of these is a box the file writes. The file's boxes are read through QPDF, so
+the flat cases are seen only where QPDF can read the page.
+
+Not seen as damage: PDFium reads an integer outside -2^31 to 2^32 - 1 as 0,
+QPDF reads it as written (measured). Where the engines then read a box
+differently, the page's values from QPDF are unknown, and its geometry is what
+PDFium makes of the box: US letter where the 0 leaves the media box flat.
 
 Measured: every one of the 104 intact corpus files ends with `%%EOF` and white
 space, has a cross-reference table PDFium accepts as written, and has a page

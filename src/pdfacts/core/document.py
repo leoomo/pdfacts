@@ -213,12 +213,14 @@ class Document:
         page = self._read.get(index)
         if page is not None:
             return page
-        self._deadline()
         with runtime.engine():
             self._check_open()
             # Another thread may have read it while this one waited.
             page = self._read.get(index)
             if page is None:
+                # Here, right before the page is read: the wait for the lock
+                # may have taken this thread past the deadline.
+                self._deadline()
                 page = self._read_page(index)
                 self._read[index] = page
         return page
@@ -482,29 +484,35 @@ def _visible_box(index: int, box: Box) -> Rect:
     return rect
 
 
-def _qpdf_visible_box(index: int, page: PageObject) -> Box:
-    """The visible box from QPDF's values, in PDFium's form.
+def _qpdf_visible_box(index: int, page: PageObject) -> Box | None:
+    """The visible box from QPDF's values, in PDFium's form, or None.
 
-    The media box intersected with the crop box, corners in order. Where the
-    file has no media box QPDF can use, PDFium takes US letter, and so does
-    this, so that the crop box and a box PDFium read differently are still
-    compared.
+    The media box intersected with the crop box, corners in order. Where QPDF
+    has no media box it can use, US letter stands for it, as PDFium takes for
+    a page without one, so that the crop box and a box PDFium reads otherwise
+    are still compared. None when US letter and the crop box leave no area:
+    that says nothing about the file, and the page disagrees.
 
-    DamagedFileError when the visible area is empty or flat: PDFium puts in US
-    letter for a flat media box and ignores a flat crop box, both of which
-    are values the file does not write (docs/conventions.md, "Damaged files").
+    DamagedFileError when the boxes the file writes leave no area: a flat crop
+    box, or a media box that is flat or that, intersected with the crop box,
+    has no area. PDFium puts in US letter for a flat media box and ignores a
+    flat crop box, both of which are values the file does not write
+    (docs/conventions.md, "Damaged files").
     """
+    written = f"media box {page.media_box}, crop box {page.crop_box}"
+    crop = _ordered(page.crop_box) if page.crop_box is not None else None
+    if crop is not None and _flat(crop):
+        raise DamagedFileError(detail=f"page {index} has no visible area: {written}")
     media = _ordered(page.media_box) if page.media_box is not None else LETTER
-    visible: Box | None = media
-    if page.crop_box is not None:
-        visible = _intersection(media, _ordered(page.crop_box))
-    if visible is None or visible[0] == visible[2] or visible[1] == visible[3]:
-        written = f"media box {page.media_box}, crop box {page.crop_box}"
+    visible = media if crop is None else _intersection(media, crop)
+    if visible is None or _flat(visible):
+        if page.media_box is None:
+            return None
         raise DamagedFileError(detail=f"page {index} has no visible area: {written}")
     return visible
 
 
-def _disagreement(box: Box, rotation: int, theirs: Box, rotate: int | None) -> str | None:
+def _disagreement(box: Box, rotation: int, theirs: Box | None, rotate: int | None) -> str | None:
     """How QPDF's page differs from PDFium's, or None.
 
     QPDF's values are brought into PDFium's form first: corners in order, the
@@ -516,6 +524,11 @@ def _disagreement(box: Box, rotation: int, theirs: Box, rotate: int | None) -> s
     turned = _normal_rotation(rotate)
     if turned != rotation:
         return f"PDFium turns it by {rotation}, QPDF by {turned}"
+    if theirs is None:
+        return (
+            f"PDFium's visible box is {box}; QPDF has no media box it can use, and "
+            "US letter in its place leaves no area with the crop box"
+        )
     if any(abs(a - b) > BOX_TOLERANCE for a, b in zip(box, theirs, strict=True)):
         return f"PDFium's visible box is {box}, QPDF's {theirs}"
     return None
@@ -532,6 +545,11 @@ def _normal_rotation(rotate: int | None) -> int:
 def _ordered(box: Box) -> Box:
     x0, y0, x1, y1 = box
     return (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+
+
+def _flat(box: Box) -> bool:
+    """No area: a box with ordered corners and no width or no height."""
+    return box[0] == box[2] or box[1] == box[3]
 
 
 def _intersection(first: Box, second: Box) -> Box | None:
