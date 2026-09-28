@@ -293,7 +293,9 @@ def _rendered(
     if not (width <= _MOST_PIXELS and height <= _MOST_PIXELS):
         return f"at scale {scale} the page is {width} x {height} pixels, more than PDFium addresses"
     # Every bitmap made is closed here, under the engine lock, also when an
-    # interrupt arrives inside pypdfium2 before it returns the bitmap.
+    # interrupt arrives inside pypdfium2 before it returns the bitmap. Not
+    # covered: an interrupt while pypdfium2 makes the bitmap, which leaks the
+    # handle or leaves it to pypdfium2's finalizer, outside the lock.
     made: list[pypdfium2.PdfBitmap] = []
 
     def make(*args: object, **kwargs: object) -> pypdfium2.PdfBitmap:

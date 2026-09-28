@@ -276,11 +276,12 @@ count columns and rows from the top left corner. A bitmap of the region
 The engine decides how it rounds the size of the bitmap and the edges of the
 region, and it places points in 32-bit floating point. On a page of up to
 2^20 pixels a side, its own transform to the pixels differs from
-`display_to_pixel` by up to about one pixel, and the two are the same where
-the page, the region and the scale give whole pixels; the edges of what it
-fills may snap to whole pixels, further off. On larger pages the difference
-grows: more than three pixels on a page of about 4·10^8 pixels a side
-(measured).
+`display_to_pixel` by up to about one pixel, and where the page, the region
+and the scale give whole pixels by no more than one step of those floats, 1/8
+pixel at most; the edges of what it fills may snap to whole pixels, further
+off. On larger pages the difference grows with the page's size in pixels, to
+tens of pixels near the 2^31 pixels a side that the engine addresses
+(measured: 4 pixels at 4·10^8, 28 at 2·10^9).
 
 ## Digest
 
