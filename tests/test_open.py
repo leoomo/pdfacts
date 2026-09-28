@@ -34,6 +34,7 @@ from pdfacts.backends import pdfium
 from pdfacts.backends.protocols import EngineFailure, FailureKind
 from pdfacts.core import document as document_module
 from pdfacts.core import runtime
+from pdfium_handles import watch
 from synthetic import cases
 
 # PDFium accepts at most this many bytes before the header (measured).
@@ -335,17 +336,10 @@ def test_a_closed_document_cannot_be_entered():
 
 
 def test_a_document_nobody_closed_is_closed_under_the_engine_lock(monkeypatch):
-    # Documents other tests left to the garbage collector go first; pypdfium2
-    # closes those of the backend tests without the lock.
-    gc.collect()
-    held = []
-    original = pypdfium2.raw.FPDF_CloseDocument
-
-    def watching(handle):
-        held.append(lock_is_held())
-        return original(handle)
-
-    monkeypatch.setattr(pypdfium2.raw, "FPDF_CloseDocument", watching)
+    # Only this test's handles count: pypdfium2 frees those that backend tests
+    # left to the garbage collector without the lock, at any moment.
+    handles = watch(monkeypatch, on_free=lock_is_held)
+    held = handles.seen
     document = pdfacts.open(cases.plain_page().data)
     del document
     gc.collect()
@@ -353,15 +347,8 @@ def test_a_document_nobody_closed_is_closed_under_the_engine_lock(monkeypatch):
 
 
 def test_the_finalizer_does_not_wait_for_the_lock_and_the_next_holder_closes(monkeypatch):
-    gc.collect()
-    held = []
-    original = pypdfium2.raw.FPDF_CloseDocument
-
-    def watching(handle):
-        held.append(lock_is_held())
-        return original(handle)
-
-    monkeypatch.setattr(pypdfium2.raw, "FPDF_CloseDocument", watching)
+    handles = watch(monkeypatch, on_free=lock_is_held)
+    held = handles.seen
     document = pdfacts.open(cases.plain_page().data)
     taken, release = threading.Event(), threading.Event()
 
