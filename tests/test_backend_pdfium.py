@@ -15,6 +15,7 @@ import pypdfium2
 import pypdfium2.raw
 import pytest
 
+from pdfacts.backends import pdfium as pdfium_backend
 from pdfacts.backends.pdfium import PdfiumDocument
 from pdfacts.backends.protocols import (
     EngineFailure,
@@ -538,8 +539,10 @@ def test_an_exception_while_rendering_is_an_other_failure(monkeypatch):
     assert raised.value.kind is FailureKind.OTHER
 
 
-def test_every_bitmap_pdfium_makes_is_destroyed_before_render_returns(monkeypatch):
-    made, destroyed = [], []
+def counting_bitmaps(monkeypatch) -> tuple[list[tuple], list[tuple]]:
+    """The bitmaps PDFium is asked to make, and to destroy, from now on."""
+    made: list[tuple] = []
+    destroyed: list[tuple] = []
     create, destroy = pypdfium2.raw.FPDFBitmap_CreateEx, pypdfium2.raw.FPDFBitmap_Destroy
 
     def counting_create(*args):
@@ -552,11 +555,33 @@ def test_every_bitmap_pdfium_makes_is_destroyed_before_render_returns(monkeypatc
 
     monkeypatch.setattr(pypdfium2.raw, "FPDFBitmap_CreateEx", counting_create)
     monkeypatch.setattr(pypdfium2.raw, "FPDFBitmap_Destroy", counting_destroy)
+    return made, destroyed
+
+
+def test_every_bitmap_pdfium_makes_is_destroyed_before_render_returns(monkeypatch):
+    made, destroyed = counting_bitmaps(monkeypatch)
     document = opened(cases.one_rectangle().data)
     for rgb in (False, True, False):
         render(document, 0, crop=(40, 30, 279, 230), rgb=rgb)
         assert len(destroyed) == len(made)
     assert len(made) == 3
+
+
+def test_the_bitmap_is_destroyed_also_when_copying_its_bytes_fails(monkeypatch):
+    made, destroyed = counting_bitmaps(monkeypatch)
+
+    def failing(buffer):
+        raise RuntimeError("copy failed")
+
+    # The backend's own name for bytes; pypdfium2 keeps the built-in one.
+    monkeypatch.setattr(pdfium_backend, "bytes", failing, raising=False)
+    document = opened(cases.one_rectangle().data)
+    with pytest.raises(EngineFailure) as raised:
+        render(document, 0)
+    # The failure keeps the frame that holds the bitmap alive; it is
+    # destroyed all the same.
+    assert (raised.value.kind, raised.value.detail) == (FailureKind.OTHER, "copy failed")
+    assert len(made) == len(destroyed) == 1
 
 
 def test_the_page_at_a_scale_beyond_what_pdfium_addresses_is_a_value_error():
