@@ -657,6 +657,28 @@ def test_a_failed_open_reports_its_own_failure_when_closing_fails_too(monkeypatc
     assert (raised.kind, raised.detail) == (FailureKind.FORMAT, "the second view failed")
 
 
+def test_a_memory_error_while_closing_after_a_failed_open_is_not_swallowed(monkeypatch):
+    opens = []
+    error = MemoryError()
+    original_open, original_close = pikepdf.open, pikepdf.Pdf.close
+
+    def second_fails(*args, **kwargs):
+        if opens:
+            raise pikepdf.PdfError("the second view failed")
+        opens.append(original_open(*args, **kwargs))
+        return opens[-1]
+
+    def failing_close(self, *args, **kwargs):
+        original_close(self, *args, **kwargs)
+        raise error
+
+    monkeypatch.setattr(pikepdf, "open", second_fails)
+    monkeypatch.setattr(pikepdf.Pdf, "close", failing_close)
+    with pytest.raises(MemoryError) as raised:
+        opened(cases.plain_page().data)
+    assert raised.value is error
+
+
 def test_both_views_are_opened_with_recovery_off(monkeypatch):
     calls = []
     original = pikepdf.open

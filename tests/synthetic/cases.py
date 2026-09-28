@@ -11,7 +11,19 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import partial
 
-from synthetic.builder import PageSpec, document, page_object, size_of_document, truncate
+from synthetic.builder import (
+    FIRST_PAGE,
+    FONT_OBJECT,
+    PAGE_TREE,
+    PageSpec,
+    append_update,
+    build,
+    document,
+    page_object,
+    size_of_document,
+    stream,
+    truncate,
+)
 from synthetic.encryption import encrypt
 
 Box = tuple[float, float, float, float]
@@ -329,4 +341,210 @@ def owner_password_only() -> Encrypted:
 ENCRYPTED: dict[str, Callable[[], Encrypted]] = {
     "user password": user_password,
     "owner password only": owner_password_only,
+}
+
+
+@dataclass(frozen=True)
+class Changed:
+    """A file made from `source` by changing or adding bytes."""
+
+    data: bytes
+    source: Pages
+
+
+def _startxref(data: bytes) -> tuple[int, int]:
+    """Where the number after the last startxref begins, and the number."""
+    start = data.rindex(b"startxref\n") + len(b"startxref\n")
+    return start, int(data[start : data.index(b"\n", start)])
+
+
+def startxref_off_by_three() -> Changed:
+    """The last startxref points three bytes behind the cross-reference table."""
+    source = plain_page()
+    start, table = _startxref(source.data)
+    end = source.data.index(b"\n", start)
+    return Changed(source.data[:start] + b"%d" % (table + 3) + source.data[end:], source)
+
+
+def line_ends_crlf() -> Changed:
+    """Every LF written as CR LF, as a text transfer does: every offset is wrong."""
+    source = plain_page()
+    return Changed(source.data.replace(b"\n", b"\r\n"), source)
+
+
+# PDFium opens these only by rebuilding the cross-reference table.
+REBUILT: dict[str, Callable[[], Changed]] = {
+    "startxref three bytes off": startxref_off_by_three,
+    "line ends CR LF": line_ends_crlf,
+}
+
+
+def junk_after_the_end() -> Changed:
+    """Bytes that are not white space after the last %%EOF."""
+    source = plain_page()
+    return Changed(source.data + b"<html>appended on the way</html>\n", source)
+
+
+def white_space_after_the_end() -> Changed:
+    """Only white space after the last %%EOF, NUL included (ISO 32000, 7.2.2)."""
+    source = plain_page()
+    return Changed(source.data + b"\r\n \t\x0c\x00\n", source)
+
+
+@dataclass(frozen=True)
+class Updated:
+    """`source` with an incremental update that gives its page another media box."""
+
+    data: bytes
+    source: Pages
+    media_box: Box
+
+
+def incremental_update() -> Updated:
+    source = plain_page()
+    media_box: Box = (0, 0, 300, 200)
+    page = b"<< /Type /Page /Parent %d 0 R /MediaBox %s " % (PAGE_TREE, box_text(media_box)) + (
+        b"/Resources << /Font << /F1 %d 0 R >> >> /Contents %d 0 R >>"
+        % (FONT_OBJECT, FIRST_PAGE + 1)
+    )
+    return Updated(append_update(source.data, {FIRST_PAGE: page}, 1), source, media_box)
+
+
+def cut_inside_the_update() -> Changed:
+    """incremental_update() cut inside the object of its update.
+
+    The last %%EOF left is the one of the source, which is complete.
+    """
+    updated = incremental_update()
+    keep = len(updated.source.data) + 20
+    return Changed(truncate(updated.data, keep=keep), updated.source)
+
+
+def no_end_marker() -> Changed:
+    """The %%EOF of plain_page() written as %%END; every offset stays right."""
+    source = plain_page()
+    return Changed(source.data.replace(b"%%EOF", b"%%END"), source)
+
+
+def vertical_tab_after_the_end() -> Changed:
+    """A vertical tab after the last %%EOF: white space in Python, not in PDF."""
+    source = plain_page()
+    return Changed(source.data + b"\x0b", source)
+
+
+# Anything but white space after the last %%EOF, or no %%EOF at all.
+BAD_ENDS: dict[str, Callable[[], Changed]] = {
+    "junk after the end": junk_after_the_end,
+    "cut inside an incremental update": cut_inside_the_update,
+    "no end marker": no_end_marker,
+    "vertical tab after the end": vertical_tab_after_the_end,
+}
+
+
+@dataclass(frozen=True)
+class NoPages:
+    data: bytes
+
+
+def empty_page_tree() -> NoPages:
+    return NoPages(
+        build(
+            {1: b"<< /Type /Catalog /Pages 2 0 R >>", 2: b"<< /Type /Pages /Kids [] /Count 0 >>"}, 1
+        )
+    )
+
+
+def no_page_tree() -> NoPages:
+    return NoPages(build({1: b"<< /Type /Catalog >>"}, 1))
+
+
+def missing_page_tree() -> NoPages:
+    """The catalog names object 7 as its page tree; there is no object 7."""
+    return NoPages(build({1: b"<< /Type /Catalog /Pages 7 0 R >>"}, 1))
+
+
+# PDFium finds no page in these, and cannot tell them apart.
+NO_PAGES: dict[str, Callable[[], NoPages]] = {
+    "empty page tree": empty_page_tree,
+    "no page tree": no_page_tree,
+    "page tree missing": missing_page_tree,
+}
+
+
+def count_without_kids() -> NoPages:
+    """/Count promises one page; /Kids lists none."""
+    return NoPages(
+        build(
+            {1: b"<< /Type /Catalog /Pages 2 0 R >>", 2: b"<< /Type /Pages /Kids [] /Count 1 >>"}, 1
+        )
+    )
+
+
+def missing_kid() -> NoPages:
+    """/Kids names object 7 as the one page; there is no object 7."""
+    return NoPages(
+        build(
+            {
+                1: b"<< /Type /Catalog /Pages 2 0 R >>",
+                2: b"<< /Type /Pages /Kids [7 0 R] /Count 1 >>",
+            },
+            1,
+        )
+    )
+
+
+def page_with_kids_null() -> NoPages:
+    """Three pages, the first with /Kids null.
+
+    QPDF ignores the null value; PDFium takes the page for a node of the tree
+    without kids, so it counts three pages and finds two.
+    """
+
+    def page(box: Box, extra: bytes = b"") -> bytes:
+        return b"<< /Type /Page /Parent 2 0 R /MediaBox %s %s/Contents 9 0 R >>" % (
+            box_text(box),
+            extra,
+        )
+
+    return NoPages(
+        build(
+            {
+                1: b"<< /Type /Catalog /Pages 2 0 R >>",
+                2: b"<< /Type /Pages /Kids [4 0 R 5 0 R 6 0 R] /Count 3 >>",
+                4: page((0, 0, 400, 300), b"/Kids null "),
+                5: page((0, 0, 300, 500)),
+                6: page((0, 0, 595, 842)),
+                9: stream(b""),
+            },
+            1,
+        )
+    )
+
+
+def missing_kid_in_the_middle() -> NoPages:
+    """Three kids, the second of which names object 7; there is no object 7."""
+
+    def page(box: Box) -> bytes:
+        return b"<< /Type /Page /Parent 2 0 R /MediaBox %s /Contents 9 0 R >>" % box_text(box)
+
+    return NoPages(
+        build(
+            {
+                1: b"<< /Type /Catalog /Pages 2 0 R >>",
+                2: b"<< /Type /Pages /Kids [4 0 R 7 0 R 5 0 R] /Count 3 >>",
+                4: page((0, 0, 400, 300)),
+                5: page((0, 0, 300, 500)),
+                9: stream(b""),
+            },
+            1,
+        )
+    )
+
+
+# PDFium counts these pages but finds no page dictionary for one of them.
+MISSING_PAGES: dict[str, Callable[[], NoPages]] = {
+    "count without kids": count_without_kids,
+    "missing kid": missing_kid,
+    "page with /Kids null": page_with_kids_null,
+    "missing kid in the middle": missing_kid_in_the_middle,
 }

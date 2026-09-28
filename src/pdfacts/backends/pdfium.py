@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import ctypes
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from typing import TypeVar
 
@@ -81,6 +81,16 @@ _FAILURE_KINDS = {
     pdfium_c.FPDF_ERR_FORMAT: FailureKind.FORMAT,
     pdfium_c.FPDF_ERR_PASSWORD: FailureKind.PASSWORD,
 }
+# What public/fpdfview.h says each code means.
+_ERROR_NAMES = {
+    pdfium_c.FPDF_ERR_SUCCESS: "no error",
+    pdfium_c.FPDF_ERR_UNKNOWN: "unknown error",
+    pdfium_c.FPDF_ERR_FILE: "file not found or could not be opened",
+    pdfium_c.FPDF_ERR_FORMAT: "file not in PDF format or corrupted",
+    pdfium_c.FPDF_ERR_PASSWORD: "password required or incorrect password",
+    pdfium_c.FPDF_ERR_SECURITY: "unsupported security scheme",
+    pdfium_c.FPDF_ERR_PAGE: "page not found or content error",
+}
 
 
 @contextmanager
@@ -117,20 +127,72 @@ class PdfiumDocument:
     opened for one call and closed before the call returns.
     """
 
-    def __init__(self, document: pypdfium2.PdfDocument) -> None:
+    def __init__(self, document: pypdfium2.PdfDocument, data: bytes) -> None:
         # Use open(); this takes a document that is already open.
         self._document = document
+        # PDFium reads from these bytes for as long as the document is open.
+        self._data = data
         self._closed = False
 
     @classmethod
     def open(cls, data: bytes, password: str | None) -> PdfiumDocument:
+        """Open `data` as the file writes it.
+
+        A FORMAT failure also when PDFium could read the file only by
+        rebuilding its cross-reference table, which is a repair, and when it
+        finds no page (docs/conventions.md, "Damaged files"). Whether every
+        page it counts is there is check_pages(), which takes longer.
+
+        The document is loaded through the raw call, not through pypdfium2's
+        PdfDocument, which leaves the handle of a document without pages open.
+        The handle is wrapped at once, so that pypdfium2 alone closes it: if
+        wrapping fails, the handle leaks rather than being closed twice.
+        """
+        secret = None if password is None else (password + "\x00").encode("utf-8")
         with _translated():
-            return cls(pypdfium2.PdfDocument(data, password=password))
+            raw = pdfium_c.FPDF_LoadMemDocument64(data, len(data), secret)
+            if not raw:
+                code = pdfium_c.FPDF_GetLastError()
+                raise EngineFailure(
+                    _FAILURE_KINDS.get(code, FailureKind.OTHER),
+                    f"PDFium could not load the document: {_ERROR_NAMES.get(code, 'error')} "
+                    f"(code {code})",
+                )
+            document = pypdfium2.PdfDocument(raw)
+            try:
+                _check_as_written(raw)
+            except BaseException:
+                # The first failure is the one to report. MemoryError is
+                # never swallowed.
+                with suppress(EngineFailure), _translated():
+                    document.close()
+                raise
+        return cls(document, data)
 
     def page_count(self) -> int:
         self._check_open()
         with _translated():
             return len(self._document)
+
+    def check_pages(self) -> None:
+        """A FORMAT failure unless PDFium finds a dictionary for every page it counts.
+
+        The count comes from /Count and can promise pages that are not there.
+        Each size is read from the page dictionary without loading the page,
+        but the time still grows with the page count: the core checks its
+        page limit first.
+        """
+        self._check_open()
+        with _translated():
+            count = len(self._document)
+            size = pdfium_c.FS_SIZEF()
+            for index in range(count):
+                if not pdfium_c.FPDF_GetPageSizeByIndexF(self._document.raw, index, size):
+                    raise EngineFailure(
+                        FailureKind.FORMAT,
+                        f"PDFium finds no page dictionary for page {index} of the {count} "
+                        "it counts",
+                    )
 
     def visible_box(self, index: int) -> Box:
         """The crop box intersected with the media box, corners in order.
@@ -145,9 +207,16 @@ class PdfiumDocument:
         return self._read_page(index, lambda page: int(page.get_rotation()))
 
     def close(self) -> None:
-        """Close the document. A second call does nothing."""
-        if self._closed:
-            return
+        """Close the document. A further call does nothing but finish this one.
+
+        Every other method refuses from the start of the first call, whatever
+        happens during it: an interrupt can come after PDFium freed the handle
+        and before pypdfium2 forgot it. A further call finishes a close that
+        was interrupted before pypdfium2 began; pypdfium2 frees the handle at
+        most once. Interrupted after pypdfium2 began and before it reached
+        PDFium, the handle leaks, which is the lesser harm than freeing it
+        twice.
+        """
         self._closed = True
         with _translated():
             self._document.close()
@@ -167,6 +236,17 @@ class PdfiumDocument:
                 return read(page)
             finally:
                 page.close()
+
+
+def _check_as_written(raw: pdfium_c.FPDF_DOCUMENT) -> None:
+    """A FORMAT failure when PDFium repaired the document or finds no page."""
+    if pdfium_c.FPDF_GetPageCount(raw) < 1:
+        raise EngineFailure(FailureKind.FORMAT, "PDFium finds no page in the document")
+    if not pdfium_c.FPDF_DocumentHasValidCrossReferenceTable(raw):
+        raise EngineFailure(
+            FailureKind.FORMAT,
+            "PDFium could read the document only by rebuilding its cross-reference table",
+        )
 
 
 def _bounding_box(page: pypdfium2.PdfPage) -> Box:
