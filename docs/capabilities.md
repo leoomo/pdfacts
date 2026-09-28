@@ -84,6 +84,7 @@ glyphs). These are findings about the engines, not features of pdfacts.
 | Encryption on save (2026-09-28) | `save()` drops encryption, a user password's too, unless `encryption=True`, which keeps it; an encrypted result differs from run to run |
 | `/ID` on save (2026-09-28) | made from the current second, so the same document saved in two different seconds gives other bytes; `deterministic_id=True` makes it from the content, and cannot be used with encryption |
 | An object at the end of a cut file (2026-09-28) | dropped when only white space follows its `endobj` to the end ("EOF after endobj"); a comment after it keeps it |
+| A file cut after an earlier `%%EOF` (2026-09-28) | read through the earlier revision's `startxref` when it lies within the last 1054 bytes, without a warning; with a longer comment appended, the file is rebuilt from its objects, the later object of each number counting |
 | A file whose trailer is lost (2026-09-28) | rebuilt as unencrypted, the encryption dictionary no longer named: encrypted strings and streams stay as they are |
 | Warnings while saving (2026-09-28) | a stream object is parsed when it is first used, at the latest when it is written: a wrong `/Length` can be reported by `save()` |
 | Page attributes | inherited attributes are pushed onto the pages |

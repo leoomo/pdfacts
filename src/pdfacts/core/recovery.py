@@ -51,6 +51,12 @@ def recover(data: bytes, *, password: str | None = None, limits: Limits | None =
     trailer. max_pages and max_objects are checked on the result. EngineError
     when an engine fails otherwise.
 
+    A file that does not end with %%EOF is rebuilt from its objects, never
+    read through a startxref it holds, which in a file cut short can be an
+    earlier revision's: an update cut after its objects is kept, and one cut
+    inside an object that an earlier revision has too makes QPDF fail rather
+    than give that revision without a word.
+
     Pages, and objects a page uses, can be lost without a failure: QPDF has
     repaired the page tree before anything can be read, so neither engine
     tells how many pages the damaged file was meant to have. A caller who
