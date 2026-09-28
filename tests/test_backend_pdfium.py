@@ -627,9 +627,12 @@ def test_the_bitmap_is_destroyed_also_when_an_interrupt_comes_inside_pypdfium2(m
     # pypdfium2 has made the bitmap and not yet returned it.
     monkeypatch.setattr(pypdfium2.raw, "FPDF_RenderPageBitmap", interrupted)
     document = opened(cases.one_rectangle().data)
-    with pytest.raises(KeyboardInterrupt):
+    with pytest.raises(KeyboardInterrupt) as raised:
         render(document, 0)
+    # The traceback keeps pypdfium2's frame, and the bitmap, alive; it is
+    # destroyed all the same.
     assert len(made) == len(destroyed) == 1
+    assert raised.type is KeyboardInterrupt
 
 
 def test_it_implements_the_renderer():
