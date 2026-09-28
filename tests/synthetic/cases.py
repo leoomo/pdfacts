@@ -450,7 +450,9 @@ class Linearized:
     main_table: int
 
 
-def linearized(*, first_page_offset: bool = False, first_page_trailer: bool = True) -> Linearized:
+def linearized(
+    *, first_page_offset: bool = False, first_page_trailer: bool = True, between: int = 0
+) -> Linearized:
     """A one-page file with the layout of ISO 32000-1, Annex F.
 
     A linearization dictionary, its /E the end of the first page; a
@@ -460,7 +462,9 @@ def linearized(*, first_page_offset: bool = False, first_page_trailer: bool = Tr
     `first_page_offset` the offset of the first-page table. Without
     `first_page_trailer`, as some files are written, the first-page section
     has no table and trailer of its own: the main table lists every object,
-    and its startxref names it. Hint streams are left out: no engine reads
+    and its startxref names it. `between` objects that nothing uses lie
+    between the linearization dictionary and the first-page table, a layout
+    the standard does not have. Hint streams are left out: no engine reads
     them without being asked to.
     """
     objects = {
@@ -475,6 +479,8 @@ def linearized(*, first_page_offset: bool = False, first_page_trailer: bool = Tr
     out = bytearray(b"%PDF-1.7\n")
     dictionary = len(out)
     out += b"5 0 obj\n<< /Linearized 1 /E 0000000000 >>\nendobj\n"
+    for number in range(between):
+        out += b"%d 0 obj\n<< >>\nendobj\n" % (6 + number)
     first_table = len(out)
     if first_page_trailer:
         out += b"xref\n5 1\n%010d 00000 n \n" % dictionary

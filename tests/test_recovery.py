@@ -835,6 +835,9 @@ LINEARIZED = {
         with_startxref_in_its_content(cases.linearized(first_page_offset=True))
     ),
     "no first-page trailer": lambda: cases.linearized(first_page_trailer=False),
+    # The first-page trailer, too far from the dictionary to be known as one,
+    # ends no revision: its offset, 0, names no section.
+    "objects before the first-page table": lambda: cases.linearized(between=2),
 }
 
 

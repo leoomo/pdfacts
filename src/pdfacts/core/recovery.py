@@ -76,10 +76,9 @@ def recover(
     unfinished update lacks. A file without a whole revision, one cut
     short, is rebuilt from its objects, and an object cut short is lost.
     QPDF cannot rebuild an encrypted file whose objects are in object
-    streams. To have QPDF rebuild a file, a comment is added to its end, and
-    two warnings of the rebuild count it: that QPDF cannot find startxref,
-    and, where QPDF then reads through one that follows the last object,
-    that startxref was more than 1024 bytes before the end.
+    streams. A file that is rebuilt gets a one-byte comment at its end, so
+    that QPDF keeps an object that only white space follows; a warning that
+    names the offset of the end of the file counts it.
 
     Pages, and objects a page uses, can be lost without a failure: QPDF has
     repaired the page tree before anything can be read, so neither engine
