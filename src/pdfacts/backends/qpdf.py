@@ -5,6 +5,7 @@ The only module allowed to import pikepdf.
 
 from __future__ import annotations
 
+import bisect
 import io
 import math
 import re
@@ -17,6 +18,13 @@ import pikepdf
 
 from pdfacts.backends.protocols import Box, EngineFailure, FailureKind, PageObject, RecoveredBytes
 
+# How far from the end QPDF looks for startxref (measured: it finds one that
+# starts 1054 bytes before the end, not one that starts 1055 bytes before).
+_STARTXREF_SEARCH = 1054
+# The header, as QPDF finds it: %PDF- and a version. Offsets in the file count
+# from it, and it may follow other bytes (measured: QPDF and PDFium read such a
+# file as written).
+_HEADER = re.compile(rb"%PDF-[0-9]+\.[0-9]+")
 # startxref and the white space and comments before its offset, matched once
 # and never inside the run of another, so that the file is read once however
 # its startxrefs are laid out.
@@ -24,21 +32,25 @@ _STARTXREF = re.compile(rb"startxref(?>(?:[\x00\t\n\x0c\r ]|%[^\r\n]*)+)")
 # The offset after startxref, in the forms QPDF reads through (measured): white
 # space or comments before it, as above, a plus sign on it, a delimiter or the
 # end of the file after it. It passes over a startxref without an offset, one
-# glued to its offset and one whose offset other characters follow.
+# glued to its offset and one whose offset other characters follow. An offset
+# of more digits, leading zeros aside, names nothing in any file.
 _OFFSET = re.compile(rb"\+?([0-9]+)(?![^\x00\t\n\x0c\r ()<>\[\]{}/%])")
+_OFFSET_DIGITS = 20
 # What the offset after startxref can name: a cross-reference table, or an
-# object, which may be a cross-reference stream; QPDF tells which. Offsets
-# count from the header, which may follow other bytes (measured: QPDF and
-# PDFium read such a file as written). QPDF skips white space before the
-# section (measured); only the first bytes are looked at, so that a crafted
-# file whose offsets all name a long run of white space is not read over and
-# over.
+# object, which may be a cross-reference stream; QPDF, recovery off, tells
+# whether it reads it. White space before it is allowed, more than QPDF reads
+# (measured: one blank, not ten), and only the first bytes are looked at, so
+# that a crafted file whose offsets all name a long run of white space is not
+# read over and over.
 _SECTION = re.compile(
     rb"[\x00\t\n\x0c\r ]*(?:xref|[0-9]+[\x00\t\n\x0c\r ]+[0-9]+[\x00\t\n\x0c\r ]+obj)"
 )
 _REACH = 64
-# %%EOF after an offset: the revision is closed.
-_CLOSED = re.compile(rb"[\x00\t\n\x0c\r ]*%%EOF")
+# Where the data of a stream begins, after its dictionary, and where it ends:
+# the text of a startxref inside it ends no revision.
+_STREAM_BOUNDARY = re.compile(
+    rb">>[\x00\t\n\x0c\r ]*stream(?=[\r\n])|(?<![A-Za-z])endstream(?![A-Za-z])"
+)
 # "N G obj", where an object begins.
 _OBJECT_HEADER = re.compile(
     rb"(?<![0-9])[0-9]+[\x00\t\n\x0c\r ]+[0-9]+[\x00\t\n\x0c\r ]+obj(?![A-Za-z])"
@@ -316,33 +328,35 @@ def rewrite_recovered(data: bytes, password: str | None) -> RecoveredBytes:
 
     QPDF reads the file up to the end of its last whole revision
     (_revision_ends), and what follows is left out. Where part of a revision
-    follows, an object, a cross-reference table or a trailer, the file ends
-    inside an incremental update, and so it does where QPDF, recovery off,
-    cannot read the last revision after another that %%EOF closes: a FORMAT
+    follows, an object, a cross-reference table or a trailer, the last
+    revision is unfinished; where QPDF, recovery off, cannot read the last
+    revision after another, its startxref leads nowhere. Either is a FORMAT
     failure, since QPDF would read the revision before without a word, or,
-    rebuilding the file from its objects, mix the update with it; it places
-    objects in object streams only through a cross-reference stream, which
-    an unfinished update lacks. A file without a whole revision is rebuilt
-    from its objects.
+    rebuilding the file from its objects, mix the two; it places objects in
+    object streams only through a cross-reference stream, which an
+    unfinished update lacks. A file without a whole revision is rebuilt from
+    its objects.
 
     The warnings are those QPDF gave while it rebuilt the file, walked its
     pages and wrote it: it reads streams only when it writes them.
     """
     ends = _revision_ends(data)
-    last = ends[-1][0] if ends else None
+    last = ends[-1] if ends else None
     if last is not None and _REVISION_PART.search(data, last):
         raise _unfinished()
     if last is not None and _reads_as_written(data[:last], password):
         data = data[:last]
-    elif any(closed for _, closed in ends[:-1]):
+    elif len(ends) > 1:
         raise _unfinished()
     else:
-        # No startxref leads QPDF to a whole revision, and it rebuilds the
+        # No startxref leads QPDF to a whole revision: it has to rebuild the
         # file from its objects, the last of each number counting. A comment
-        # keeps it from dropping an object that only white space follows to
-        # the end ("EOF after endobj"); comments mean nothing, and QPDF does
-        # not write them.
-        data += b"%"
+        # longer than its search for startxref keeps it from reading one
+        # first, which fails outside its recovery where the offset is too
+        # large for it (measured), and from dropping an object that only white
+        # space follows to the end ("EOF after endobj"). Comments mean nothing,
+        # and QPDF does not write them.
+        data += b"%" + b" " * (2 * _STARTXREF_SEARCH)
     sources: list[_Input] = []
     try:
         with _translated():
@@ -385,43 +399,46 @@ def rewrite_recovered(data: bytes, password: str | None) -> RecoveredBytes:
 def _unfinished() -> EngineFailure:
     return EngineFailure(
         FailureKind.FORMAT,
-        "it ends inside an incremental update, which QPDF would drop without a word "
-        "or, rebuilding the file from its objects, mix with the revision before",
+        "its last revision is unfinished, or its startxref leads nowhere: QPDF would read "
+        "the revision before without a word or, rebuilding the file from its objects, mix "
+        "the two",
     )
 
 
-def _revision_ends(data: bytes) -> list[tuple[int, bool]]:
-    """Where the offsets after the startxrefs of whole revisions end, in order,
-    and whether %%EOF closes each revision.
+def _revision_ends(data: bytes) -> list[int]:
+    """Where the offsets after the startxrefs of whole revisions end, in order.
 
-    A startxref ends a revision where QPDF reads through it, and its offset
-    names a cross-reference table or an object after the startxref of the
-    last revision that %%EOF closes: a later revision's section lies nowhere
-    else, and an offset cut short, or cut short and followed by other bytes,
-    can name an earlier one. A revision is taken as closed only where %%EOF
-    follows, so that the text of a startxref inside a stream cannot pass for
-    the end of one. The first-page trailer of a linearized file ends no
-    revision (_first_page_trailer).
+    A startxref ends a revision where QPDF reads through it, it lies outside
+    the data of a stream, and its offset, counted from the header, names a
+    cross-reference table or an object after the startxref of the revision
+    before: a later revision's section lies nowhere else, and an offset cut
+    short, or cut short and followed by other bytes, can name an earlier one.
+    The first-page trailer of a linearized file ends no revision
+    (_first_page_trailer).
     """
-    header = max(data.find(b"%PDF-"), 0)
+    found = _HEADER.search(data, 0, 1024 + len(b"%PDF-9.9"))
+    header = found.start() if found else 0
     first_page = _first_page_trailer(data, header)
-    ends: list[tuple[int, bool]] = []
+    boundaries = list(_STREAM_BOUNDARY.finditer(data))
+    starts = [boundary.start() for boundary in boundaries]
+    ends: list[int] = []
     previous = None
     for found in _STARTXREF.finditer(data):
         if found.start() == first_page:
             continue
+        before = bisect.bisect_left(starts, found.start()) - 1
+        if before >= 0 and boundaries[before].group().startswith(b">>"):
+            continue
         match = _OFFSET.match(data, found.end())
-        if match is None:
+        if match is None or len(match.group(1).lstrip(b"0")) > _OFFSET_DIGITS:
             continue
         section = header + int(match.group(1))
-        if not _SECTION.match(data, section, section + _REACH):
+        if section >= len(data) or not _SECTION.match(data, section, section + _REACH):
             continue
         if previous is not None and section <= previous:
             continue
-        closed = _CLOSED.match(data, match.end(), match.end() + _REACH) is not None
-        ends.append((match.end(), closed))
-        if closed:
-            previous = found.start()
+        ends.append(match.end())
+        previous = found.start()
     return ends
 
 
