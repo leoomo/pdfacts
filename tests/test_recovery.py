@@ -633,6 +633,16 @@ def unfinished_updates() -> dict[str, bytes]:
     table = b"%d" % int(data[start:].split()[1])
     after_object = data.index(b"endobj", len(source)) + len(b"endobj\n")
     cut_offset = cases.cut_inside_the_last_offset().data
+    # The revision before ends with a startxref in a form QPDF reads through:
+    # a plus sign on its offset, and a comment before it, written in as many
+    # bytes as the line it replaces.
+    earlier = cases.append_update(
+        source.replace(b"startxref\n", b"startxref\n+"), {cases.FIRST_PAGE: b"<< >>"}, 1
+    )
+    earlier_line = source[source.rindex(b"startxref") :]
+    commented = data.replace(
+        earlier_line, earlier_line.replace(b"startxref\n", b"startxref%\n")[:-1], 1
+    )
     return {
         "cut after its object": data[:after_object],
         "cut inside its object": cases.cut_inside_the_update().data,
@@ -649,6 +659,10 @@ def unfinished_updates() -> dict[str, bytes]:
         "no offset, and %%EOF": data[:start] + b"startxref\n%%EOF\n",
         "cut inside the offset, which names the earlier table": cut_offset,
         "the same, a line end appended": cut_offset + b"\n",
+        "the revision before ends with a plus sign on its offset": earlier[
+            : earlier.index(b"endobj", len(source) + 1) + len(b"endobj\n")
+        ],
+        "the revision before ends with a comment before its offset": commented[:after_object],
     }
 
 
@@ -710,6 +724,18 @@ def test_a_file_whose_end_alone_is_damaged_is_read_as_it_is_written(damage):
     assert result.page_count == len(case.page_objects)
 
 
+def test_a_last_startxref_with_a_comment_and_a_plus_sign_is_read_through():
+    # Forms QPDF reads through: the file is read as it is written.
+    updated = cases.incremental_update()
+    start = updated.data.rindex(b"startxref")
+    table = int(updated.data[start:].split()[1])
+    result = pdfacts.recover(updated.data[:start] + b"startxref %%c\n+%d\n%%%%EOF\n" % table)
+    assert result.warnings == ()
+    with pdfacts.open(result.data) as document:
+        box = document.pages[0].geometry.visible_box
+    assert (box.x0, box.y0, box.x1, box.y1) == updated.media_box
+
+
 @pytest.mark.parametrize("damage", list(END_DAMAGE))
 def test_an_updated_file_whose_end_alone_is_damaged_is_read_as_its_last_revision(damage):
     updated = cases.incremental_update()
@@ -762,6 +788,36 @@ def test_a_linearized_file_cut_before_its_main_table_is_rebuilt(name):
     # inside an update.
     case = LINEARIZED[name]()
     assert pdfacts.recover(case.data[: case.main_table]).page_count == 1
+
+
+def test_a_linearized_file_whose_first_page_end_is_wrong_still_ends_its_revisions():
+    # Only the first startxref can end the first-page section: an /E beyond
+    # the end of the file does not hide where the revision ends, and an
+    # update cut short is refused.
+    case = cases.linearized(first_page_offset=True)
+    data = case.data.replace(b"/E %010d" % case.main_table, b"/E 9999999999", 1)
+    updated = cases.append_update(data, {3: b"<< >>"}, 1)
+    cut = updated[: updated.index(b"endobj", len(data)) + len(b"endobj\n")]
+    with pytest.raises(RecoveryFailedError, match="incremental update"):
+        pdfacts.recover(cut)
+
+
+# Files laid out to make a scan that reads parts of them again and again slow.
+CRAFTED = {
+    "startxref and a comment, many times on one line": b"%PDF-1.7\n" + b"startxref%" * 50_000,
+    "many offsets naming a long run of white space": b"%PDF-1.7\n"
+    + b" " * 1_000_000
+    + b"startxref 9\n" * 20_000,
+}
+
+
+@pytest.mark.parametrize("name", list(CRAFTED))
+def test_a_crafted_file_is_read_once(name):
+    # Reading every startxref to its end again would take many seconds.
+    started = time.perf_counter()
+    with pytest.raises(RecoveryFailedError):
+        pdfacts.recover(CRAFTED[name])
+    assert time.perf_counter() - started < 5
 
 
 XMP = (

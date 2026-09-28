@@ -20,17 +20,23 @@ from pdfacts.backends.protocols import Box, EngineFailure, FailureKind, PageObje
 # How far from the end QPDF looks for startxref (measured: it finds one that
 # starts 1054 bytes before the end, not one that starts 1055 bytes before).
 _STARTXREF_SEARCH = 1054
-# startxref and an offset, as QPDF reads through them (measured: it passes
-# over a startxref without an offset, one glued to its offset and one whose
-# offset other characters follow). Stricter than QPDF, which also takes a
-# comment or a sign before the offset.
-_STARTXREF = re.compile(rb"startxref[\x00\t\n\x0c\r ]+([0-9]+)(?![^\x00\t\n\x0c\r ()<>\[\]{}/%])")
+# startxref and the white space and comments before its offset, matched once
+# and never inside the run of another, so that the file is read once however
+# its startxrefs are laid out.
+_STARTXREF = re.compile(rb"startxref(?>(?:[\x00\t\n\x0c\r ]|%[^\r\n]*)+)")
+# The offset after startxref, in the forms QPDF reads through (measured): white
+# space or comments before it, as above, a plus sign on it, a delimiter or the
+# end of the file after it. It passes over a startxref without an offset, one
+# glued to its offset and one whose offset other characters follow.
+_OFFSET = re.compile(rb"\+?([0-9]+)(?![^\x00\t\n\x0c\r ()<>\[\]{}/%])")
 # What the offset after startxref names: a cross-reference table, or an object,
 # which may be a cross-reference stream. QPDF skips white space before it
-# (measured).
+# (measured); only the first bytes are looked at, so that a crafted file whose
+# offsets all name a long run of white space is not read over and over.
 _SECTION = re.compile(
     rb"[\x00\t\n\x0c\r ]*(?:xref|[0-9]+[\x00\t\n\x0c\r ]+[0-9]+[\x00\t\n\x0c\r ]+obj)"
 )
+_SECTION_REACH = 64
 # "N G obj", where an object begins.
 _OBJECT_HEADER = re.compile(
     rb"(?<![0-9])[0-9]+[\x00\t\n\x0c\r ]+[0-9]+[\x00\t\n\x0c\r ]+obj(?![A-Za-z])"
@@ -381,9 +387,9 @@ def _last_revision(data: bytes) -> int | None:
     and that section lies after the startxref of the revision before: a
     later revision's section lies nowhere else, and an offset cut short, or
     cut short and followed by other bytes, can name an earlier one. In a
-    linearized file, a startxref before the end of the first page ends the
-    first-page section, not a revision; its offset is often 0, which names
-    no section, but need not be.
+    linearized file, the first startxref, where it lies before the end of
+    the first page, ends the first-page section, not a revision; its offset
+    is often 0, which names no section, but need not be.
     """
     head = data[:1024]
     first_page_end = 0
@@ -391,14 +397,15 @@ def _last_revision(data: bytes) -> int | None:
         match = _FIRST_PAGE_END.search(head, 0, max(head.find(b"endobj"), 0))
         first_page_end = int(match.group(1)) if match else 0
     previous = end = None
-    for found in re.finditer(rb"startxref", data):
-        if found.start() < first_page_end:
+    for index, found in enumerate(_STARTXREF.finditer(data)):
+        if index == 0 and found.start() < first_page_end:
             continue
-        match = _STARTXREF.match(data, found.start())
+        match = _OFFSET.match(data, found.end())
         if match is None:
             continue
         offset = int(match.group(1))
-        if _SECTION.match(data, offset) and (previous is None or offset > previous):
+        section = _SECTION.match(data, offset, offset + _SECTION_REACH)
+        if section and (previous is None or offset > previous):
             previous, end = found.start(), match.end()
     return end
 
