@@ -1,5 +1,6 @@
 """pdfacts: structured, verifiable facts from PDF files."""
 
+from pdfacts.core.bitmap import Bitmap, Colour
 from pdfacts.core.capabilities import Capability, capabilities, require
 from pdfacts.core.document import Document, Page, open
 from pdfacts.core.engines import EngineInfo, engine_info
@@ -28,8 +29,10 @@ from pdfacts.core.values import Unknown, UnknownReason
 __version__ = "0.0.1"
 
 __all__ = [
+    "Bitmap",
     "Capability",
     "ClosedError",
+    "Colour",
     "ConfigurationError",
     "DamagedFileError",
     "Document",

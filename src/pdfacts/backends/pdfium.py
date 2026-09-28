@@ -9,12 +9,13 @@ import ctypes
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
+from functools import partial
 from typing import TypeVar
 
 import pypdfium2
 import pypdfium2.raw as pdfium_c
 
-from pdfacts.backends.protocols import Box, EngineFailure, FailureKind
+from pdfacts.backends.protocols import Box, EngineFailure, FailureKind, RawBitmap
 
 T = TypeVar("T")
 
@@ -76,6 +77,11 @@ def install_font_policy(policy: str) -> None:
     _font_policy_installed = True
 
 
+# The most pixels a side of a rendered page may have: PDFium takes it as a C int.
+_MOST_PIXELS = 2**31 - 1
+# A bitmap whose memory PDFium allocates and pypdfium2 frees, rows packed.
+_PACKED_BITMAP = partial(pypdfium2.PdfBitmap.new_foreign, force_packed=True)
+
 # The error codes of FPDF_GetLastError that say something about the input.
 _FAILURE_KINDS = {
     pdfium_c.FPDF_ERR_FORMAT: FailureKind.FORMAT,
@@ -121,7 +127,7 @@ def _check_index(index: int, count: int) -> None:
 
 
 class PdfiumDocument:
-    """A document opened by PDFium: a GeometryReader.
+    """A document opened by PDFium: a GeometryReader and a Renderer.
 
     It holds the native handle; no method returns a pypdfium2 object. A page is
     opened for one call and closed before the call returns.
@@ -206,6 +212,25 @@ class PdfiumDocument:
         """0, 90, 180 or 270; PDFium brings other values into that form."""
         return self._read_page(index, lambda page: int(page.get_rotation()))
 
+    def render(
+        self, index: int, *, scale: float, crop: tuple[float, float, float, float], rgb: bool
+    ) -> RawBitmap:
+        """The page at `scale` pixels per unit, without what `crop` cuts off.
+
+        `scale` is finite and above 0, and `crop` is not negative; the core
+        makes sure. The page's own rotation is applied, and forms and
+        annotations are drawn as PDFium draws them by default. Width and height
+        are what pypdfium2 makes of the page size, the scale and the crop. The
+        pixels are copied out of PDFium's bitmap before it is freed.
+
+        ValueError when the page at this scale is more pixels than PDFium
+        addresses, or when less than one pixel is left after the crop.
+        """
+        rendered = self._read_page(index, lambda page: _rendered(page, scale, crop, rgb))
+        if isinstance(rendered, str):
+            raise ValueError(rendered)
+        return rendered
+
     def close(self) -> None:
         """Close the document. A further call does nothing but finish this one.
 
@@ -247,6 +272,53 @@ def _check_as_written(raw: pdfium_c.FPDF_DOCUMENT) -> None:
             FailureKind.FORMAT,
             "PDFium could read the document only by rebuilding its cross-reference table",
         )
+
+
+def _rendered(
+    page: pypdfium2.PdfPage, scale: float, crop: tuple[float, float, float, float], rgb: bool
+) -> RawBitmap | str:
+    """The page drawn and copied, or why nothing was drawn.
+
+    The page's size in pixels goes to PDFium as a C int. pypdfium2 raises
+    ValueError when less than one pixel is left after the crop, before it
+    makes a bitmap; for the options used here it has no other.
+
+    The bitmap is one PDFium allocates, which pypdfium2 frees on close.
+    pypdfium2's default bitmap, over a buffer of its own, is never freed in
+    PDFium (5.13.0 passes needs_free=False). Its rows are packed: PDFium would
+    pad them to four bytes that it never draws. RGB is PDFium's BGR with the
+    byte order reversed.
+    """
+    width, height = page.get_width() * scale, page.get_height() * scale
+    if not (width <= _MOST_PIXELS and height <= _MOST_PIXELS):
+        return f"at scale {scale} the page is {width} x {height} pixels, more than PDFium addresses"
+    # Every bitmap made is closed here, under the engine lock, also when an
+    # interrupt arrives inside pypdfium2 before it returns the bitmap. Not
+    # covered: an interrupt while pypdfium2 makes the bitmap, which leaks the
+    # handle or leaves it to pypdfium2's finalizer, outside the lock.
+    made: list[pypdfium2.PdfBitmap] = []
+
+    def make(*args: object, **kwargs: object) -> pypdfium2.PdfBitmap:
+        made.append(_PACKED_BITMAP(*args, **kwargs))
+        return made[-1]
+
+    try:
+        try:
+            bitmap = page.render(
+                scale=scale, crop=crop, grayscale=not rgb, rev_byteorder=rgb, bitmap_maker=make
+            )
+        except ValueError:
+            return f"at scale {scale} less than one pixel is left after the crop {crop}"
+        return RawBitmap(
+            width=bitmap.width,
+            height=bitmap.height,
+            row_length=bitmap.stride,
+            channels=bitmap.n_channels,
+            data=bytes(bitmap.buffer),
+        )
+    finally:
+        for made_bitmap in made:
+            made_bitmap.close()
 
 
 def _bounding_box(page: pypdfium2.PdfPage) -> Box:

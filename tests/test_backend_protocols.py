@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 import pdfacts.backends.protocols as protocols
-from pdfacts.backends.protocols import EngineFailure, FailureKind, PageObject
+from pdfacts.backends.protocols import EngineFailure, FailureKind, PageObject, RawBitmap
 
 
 def test_the_protocols_import_no_engine_and_nothing_from_the_core():
@@ -64,3 +64,11 @@ def test_the_page_object_has_the_fields_of_issue_10_and_is_frozen():
     page = PageObject(4, 0, (0.0, 0.0, 400.0, 300.0), None, None, None, False)
     with pytest.raises(dataclasses.FrozenInstanceError):
         page.rotate = 90  # type: ignore[misc]
+
+
+def test_the_raw_bitmap_has_the_fields_of_issue_12_and_is_frozen():
+    names = [field.name for field in dataclasses.fields(RawBitmap)]
+    assert names == ["width", "height", "row_length", "channels", "data"]
+    bitmap = RawBitmap(1, 1, 1, 1, b"\x00")
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        bitmap.width = 2  # type: ignore[misc]
