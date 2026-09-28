@@ -68,8 +68,8 @@ may break callers.
   otherwise, when QPDF cannot rebuild the file, and when an encrypted file
   has lost the trailer that names its encryption dictionary but kept the
   dictionary, `RecoveryFailedError`. `max_pages` and `max_objects` are checked on the
-  result. An intact file is rewritten with no warnings. The capability
-  `RECOVERY` is available. An incremental update cut short is rebuilt from
+  result. An intact file is rewritten, with no warnings unless QPDF reports a
+  defect in it. The capability `RECOVERY` is available. An incremental update cut short is rebuilt from
   the file's objects rather than read as the earlier revision: it is kept
   where its objects are whole; an object cut after its `obj` keyword is lost,
   its earlier version included, and where the pages need it the recovery

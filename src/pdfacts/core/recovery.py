@@ -43,7 +43,8 @@ def recover(data: bytes, *, password: str | None = None, limits: Limits | None =
     The input is classified as open() classifies it: EmptyInputError,
     LimitExceededError for max_bytes, NotPdfError; it need not end with
     %%EOF. PasswordRequiredError when a password is needed or wrong. An intact
-    file is rewritten as well, with no warnings.
+    file is rewritten as well, with no warnings unless QPDF reports a defect
+    in it as written.
 
     RecoveryFailedError when QPDF cannot rebuild the file, and when the result
     fails a check: it has to open as open() opens a file, with both engines
@@ -54,11 +55,14 @@ def recover(data: bytes, *, password: str | None = None, limits: Limits | None =
     A file that does not end with %%EOF is rebuilt from its objects, unless
     its last startxref is whole, with an offset that something follows, and
     no object comes after it: QPDF would read an update cut short as the
-    earlier revision without a word. An update cut after its objects is kept; an
-    object of it cut after its `obj` keyword is lost, its earlier version
-    included, and where the pages need it QPDF fails; an update cut before
-    the `obj` of its first object leaves nothing of it. QPDF cannot rebuild
-    an encrypted file whose objects are in object streams.
+    earlier revision without a word. An update cut after its objects is
+    kept; an object of it cut after its `obj` keyword is lost, its earlier
+    version included, and where the pages need it QPDF fails; an update cut
+    before the `obj` of its first object leaves nothing of it. QPDF cannot
+    rebuild an encrypted file whose objects are in object streams. To have
+    QPDF rebuild the file, a comment is added to its end, and two warnings
+    of the rebuild count it: that QPDF cannot find startxref, and that
+    startxref was more than 1024 bytes before the end of the file.
 
     Pages, and objects a page uses, can be lost without a failure: QPDF has
     repaired the page tree before anything can be read, so neither engine
