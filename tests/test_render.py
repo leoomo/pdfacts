@@ -19,6 +19,7 @@ import threading
 import pytest
 
 import pdfacts
+from engine_lock import after_waiting
 from pdfacts import (
     Bitmap,
     ClosedError,
@@ -159,8 +160,14 @@ def test_a_region_partly_outside_is_cut_to_the_page():
 
 @pytest.mark.parametrize(
     "region",
-    [Rect(500, 500, 600, 600), Rect(400, 0, 500, 300), Rect(100, 100, 100, 200)],
-    ids=["outside", "touching an edge", "flat"],
+    [
+        Rect(500, 500, 600, 600),
+        Rect(400, 0, 500, 300),
+        Rect(0, 300, 400, 400),
+        Rect(100, 100, 100, 200),
+        Rect(100, 100, 200, 100),
+    ],
+    ids=["outside", "touching the right edge", "touching the top", "no width", "no height"],
 )
 def test_a_region_without_area_on_the_page_is_refused_before_the_engine(monkeypatch, region):
     calls = recording_renders(monkeypatch)
@@ -361,3 +368,26 @@ def test_rendering_is_a_capability_and_bitmap_and_colour_are_exported():
     pdfacts.require("rendering")
     assert {"Bitmap", "Colour"} <= set(pdfacts.__all__)
     assert [colour.value for colour in Colour] == ["grey", "rgb"]
+
+
+def test_a_render_asked_for_while_the_document_closes_is_refused_as_closed(monkeypatch):
+    document = pdfacts.open(cases.one_rectangle().data)
+    page = document.pages[0]
+    outcome = after_waiting(monkeypatch, page.render, document.close)
+    assert isinstance(outcome, ClosedError)
+
+
+def test_a_scale_that_gives_no_finite_size_in_pixels_is_a_value_error(monkeypatch):
+    calls = recording_renders(monkeypatch)
+    page = first_page(cases.one_rectangle().data, Limits(max_render_pixels=10))
+    with pytest.raises(ValueError, match="finite size"):
+        page.render(1e307)
+    assert calls == []
+
+
+def test_a_closed_page_is_refused_before_its_arguments_are_looked_at():
+    document = pdfacts.open(cases.one_rectangle().data)
+    page = document.pages[0]
+    document.close()
+    with pytest.raises(ClosedError):
+        page.render(0, region=(1, 2, 3, 4), colour="cmyk")  # type: ignore[arg-type]

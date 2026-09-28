@@ -12,6 +12,7 @@ import pypdfium2
 import pytest
 
 import pdfacts
+from engine_lock import after_waiting
 from pdfacts import (
     ClosedError,
     DamagedFileError,
@@ -920,50 +921,9 @@ def test_a_crop_box_outside_the_media_box_the_file_writes_is_damaged_where_pdfiu
     assert "media box (0.0, 0.0, 400.0, 300.0)" in raised.value.detail
 
 
-class WatchedLock:
-    """The engine lock; it tells when a thread other than the test's waits for it."""
-
-    def __init__(self) -> None:
-        self._lock = runtime.engine_lock
-        self._test = threading.get_ident()
-        self.waited = threading.Event()
-
-    def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
-        if blocking and threading.get_ident() != self._test:
-            self.waited.set()
-        return self._lock.acquire(blocking, timeout)
-
-    def release(self) -> None:
-        self._lock.release()
-
-    def __enter__(self) -> WatchedLock:
-        self.acquire()
-        return self
-
-    def __exit__(self, *exc_info: object) -> None:
-        self.release()
-
-
 def read_first_page_after_waiting(monkeypatch, document_, meanwhile) -> object:
     """Page 0 asked for in another thread, which waits for the lock while `meanwhile` runs."""
-    lock = WatchedLock()
-    monkeypatch.setattr(runtime, "engine_lock", lock)
-    outcome: list[object] = []
-
-    def read() -> None:
-        try:
-            outcome.append(document_.pages[0])
-        except Exception as error:
-            outcome.append(error)
-
-    thread = threading.Thread(target=read)
-    with lock:
-        thread.start()
-        assert lock.waited.wait(timeout=10)
-        meanwhile()
-    thread.join(timeout=10)
-    assert not thread.is_alive()
-    return outcome[0]
+    return after_waiting(monkeypatch, lambda: document_.pages[0], meanwhile)
 
 
 def test_a_page_asked_for_while_the_document_closes_is_refused_as_closed(monkeypatch):
