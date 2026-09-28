@@ -293,7 +293,7 @@ def test_a_page_written_directly_into_the_kids_leaves_every_page_without_values(
     )
     details = refused_pages(data)
     assert len(details) == 2
-    assert all("changed the page tree" in detail for detail in details)
+    assert all("page tree lists" in detail for detail in details)
     assert any("is direct" in warning for warning in opened(data).warnings())
 
 
@@ -351,7 +351,7 @@ def test_a_loop_in_the_tree_the_catalog_names_ends():
     assert documents[0].page_count() == 1
     with pytest.raises(EngineFailure) as raised:
         documents[0].page_object(0)
-    assert "changed the page tree" in raised.value.detail
+    assert "page tree lists" in raised.value.detail
 
 
 def test_a_root_with_a_parent_leaves_every_page_without_values():
@@ -371,7 +371,53 @@ def test_a_root_with_a_parent_leaves_every_page_without_values():
     assert document_.page_count() == 1
     with pytest.raises(EngineFailure) as raised:
         document_.page_object(0)
-    assert "changed the page tree" in raised.value.detail
+    assert "page tree lists" in raised.value.detail
+
+
+def test_qpdf_finding_more_pages_than_the_file_lists_leaves_every_page_without_values():
+    # The catalog names a page as the root of the page tree; QPDF finds the
+    # real root through /Parent and both pages, the file's tree has one.
+    data = build(
+        {
+            1: b"<< /Type /Catalog /Pages 4 0 R >>",
+            2: b"<< /Type /Pages /Kids [4 0 R 5 0 R] /Count 2 >>",
+            4: page(2),
+            5: page(2),
+            9: stream(b""),
+        },
+        1,
+    )
+    assert opened(data).page_count() == 2
+    assert len(refused_pages(data)) == 2
+
+
+def test_an_index_outside_the_pages_is_an_index_error_also_when_there_are_no_values():
+    data = build(
+        {
+            1: CATALOG,
+            2: b"<< /Type /Pages /Kids [4 0 R 4 0 R] /Count 2 >>",
+            4: page(2),
+            9: stream(b""),
+        },
+        1,
+    )
+    with pytest.raises(IndexError):
+        opened(data).page_object(2)
+
+
+def test_values_are_inherited_from_further_up_than_the_parent():
+    data = build(
+        {
+            1: CATALOG,
+            2: b"<< /Type /Pages /Kids [7 0 R] /Count 1 /MediaBox [0 0 400 300] /Rotate 180 >>",
+            7: b"<< /Type /Pages /Parent 2 0 R /Kids [4 0 R] /Count 1 >>",
+            4: b"<< /Type /Page /Parent 7 0 R /Contents 9 0 R >>",
+            9: stream(b""),
+        },
+        1,
+    )
+    page_ = opened(data).page_object(0)
+    assert (page_.media_box, page_.rotate) == ((0.0, 0.0, 400.0, 300.0), 180)
 
 
 def test_the_generation_comes_from_the_file():
@@ -387,6 +433,25 @@ def test_asking_for_the_warnings_twice_gives_them_twice():
     first = document_.warnings()
     assert len(first) == 1
     assert document_.warnings() == first
+
+
+def test_the_warnings_keep_the_order_qpdf_gave_them_in():
+    # QPDF warns about each page without resources in the order of the page
+    # tree, which here is not the order of the text of the warnings.
+    data = build(
+        {
+            1: CATALOG,
+            2: b"<< /Type /Pages /Kids [7 0 R 4 0 R] /Count 2 >>",
+            4: page(2),
+            7: page(2),
+            9: stream(b""),
+        },
+        1,
+    )
+    warnings = opened(data).warnings()
+    assert [re.search(r"object (\d+) 0", warning).group(1) for warning in warnings] == ["7", "4"]
+    assert all("Resources is missing" in warning for warning in warnings)
+    assert list(warnings) != sorted(warnings)
 
 
 @pytest.mark.parametrize("rotation", cases.ROTATIONS + cases.ROTATIONS_AS_WRITTEN)
@@ -570,6 +635,26 @@ def test_a_failed_open_closes_the_view_already_opened(monkeypatch):
     assert failure(cases.plain_page().data).kind is FailureKind.FORMAT
     assert len(engine_closes) == 1
     assert engine_closes[0] is opens[0]
+
+
+def test_a_failed_open_reports_its_own_failure_when_closing_fails_too(monkeypatch):
+    opens = []
+    original_open, original_close = pikepdf.open, pikepdf.Pdf.close
+
+    def second_fails(*args, **kwargs):
+        if opens:
+            raise pikepdf.PdfError("the second view failed")
+        opens.append(original_open(*args, **kwargs))
+        return opens[-1]
+
+    def failing_close(self, *args, **kwargs):
+        original_close(self, *args, **kwargs)
+        raise RuntimeError("closing failed as well")
+
+    monkeypatch.setattr(pikepdf, "open", second_fails)
+    monkeypatch.setattr(pikepdf.Pdf, "close", failing_close)
+    raised = failure(cases.plain_page().data)
+    assert (raised.kind, raised.detail) == (FailureKind.FORMAT, "the second view failed")
 
 
 def test_both_views_are_opened_with_recovery_off(monkeypatch):

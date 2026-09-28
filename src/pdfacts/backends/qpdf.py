@@ -108,6 +108,8 @@ class QpdfDocument:
         self._pages = pages
         self._pages_as_written = pages_as_written
         self._warnings: list[str] = []
+        # The same warnings as a set: a damaged file can give tens of thousands.
+        self._known_warnings: set[str] = set()
         self._closed = False
 
     @classmethod
@@ -161,17 +163,17 @@ class QpdfDocument:
     def page_object(self, index: int) -> PageObject:
         """The page's object and what the file writes on it and its ancestors.
 
-        A FORMAT failure when QPDF changed the page tree while walking it: a
-        wrong object number is worse than none (docs/conventions.md, "Object
-        identity").
+        A FORMAT failure when the pages QPDF found are not the objects the
+        file's page tree lists: a wrong object number is worse than none
+        (docs/conventions.md, "Object identity").
         """
         count = self.page_count()
         _check_index(index, count)
         if not self._pages_as_written:
             raise EngineFailure(
                 FailureKind.FORMAT,
-                "QPDF changed the page tree while walking it, so the object it has at a "
-                "page index may not be the one the file lists there",
+                "the pages QPDF found are not the objects the file's page tree lists, so "
+                "the object QPDF has at a page index may not be the file's",
             )
         objgen = self._pages[index]
         with _translated():
@@ -197,10 +199,14 @@ class QpdfDocument:
         """
         self._check_open()
         with _translated():
-            self._warnings.extend(str(message) for message in self._walked.get_warnings())
-            for message in self._unwalked.get_warnings():
-                if str(message) not in self._warnings:
-                    self._warnings.append(str(message))
+            walked = [str(message) for message in self._walked.get_warnings()]
+            unwalked = [str(message) for message in self._unwalked.get_warnings()]
+        self._warnings.extend(walked)
+        self._known_warnings.update(walked)
+        for message in unwalked:
+            if message not in self._known_warnings:
+                self._warnings.append(message)
+                self._known_warnings.add(message)
         return tuple(self._warnings)
 
     def close(self) -> None:
@@ -262,9 +268,10 @@ def _inherited(page: pikepdf.Dictionary, key: str) -> object:
 
     The chain of /Parent is followed as far as it goes, and never twice
     through the same object. The first value found counts, also when it is
-    not usable, as in PDFium. An explicit null counts as absent, as ISO 32000
-    says; PDFium stops at it instead, so #11's cross-check sees such a page as
-    a disagreement.
+    not usable, as in PDFium. pikepdf does not show a key whose value is
+    null, so an explicit null counts as absent, as ISO 32000 says; PDFium
+    stops at it instead, so #11's cross-check sees such a page as a
+    disagreement.
     """
     node: object = page
     seen: set[tuple[int, int]] = set()
