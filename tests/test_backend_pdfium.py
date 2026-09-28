@@ -233,6 +233,21 @@ def test_an_interrupt_inside_pypdfium2_after_the_handle_was_freed(monkeypatch):
     assert len(handles.freed) == 1
 
 
+def test_an_exception_while_closing_is_an_other_failure(monkeypatch):
+    document = opened(cases.plain_page().data)
+    original = pypdfium2.PdfDocument.close
+
+    def failing(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        raise RuntimeError("closing failed")
+
+    monkeypatch.setattr(pypdfium2.PdfDocument, "close", failing)
+    with pytest.raises(EngineFailure) as raised:
+        document.close()
+    assert (raised.value.kind, raised.value.detail) == (FailureKind.OTHER, "closing failed")
+    every_method_refuses(document)
+
+
 def test_a_memory_error_while_closing_a_refused_file_is_not_swallowed(monkeypatch):
     error = MemoryError()
 

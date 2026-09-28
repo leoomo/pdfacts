@@ -212,8 +212,10 @@ class PdfiumDocument:
         Every other method refuses from the start of the first call, whatever
         happens during it: an interrupt can come after PDFium freed the handle
         and before pypdfium2 forgot it. A further call finishes a close that
-        was interrupted before the engine closed; pypdfium2 closes the handle
-        at most once.
+        was interrupted before pypdfium2 began; pypdfium2 frees the handle at
+        most once. Interrupted after pypdfium2 began and before it reached
+        PDFium, the handle leaks, which is the lesser harm than freeing it
+        twice.
         """
         self._closed = True
         with _translated():
