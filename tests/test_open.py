@@ -135,6 +135,32 @@ def test_a_file_with_a_page_pdfium_counts_but_cannot_find_is_damaged(name):
     assert "no page dictionary" in raised.value.detail
 
 
+def test_the_page_limit_is_checked_before_every_page_dictionary_is_read(monkeypatch):
+    def must_not_run(self):
+        raise AssertionError("every page dictionary was read")
+
+    monkeypatch.setattr(pdfium.PdfiumDocument, "check_pages", must_not_run)
+    with pytest.raises(LimitExceededError):
+        pdfacts.open(cases.three_pages().data, limits=Limits(max_pages=2))
+
+
+def test_a_file_over_the_page_limit_and_with_a_page_missing_is_over_the_limit():
+    data = cases.missing_kid_in_the_middle().data
+    with pytest.raises(LimitExceededError) as raised:
+        pdfacts.open(data, limits=Limits(max_pages=2))
+    assert raised.value.found == 3
+
+
+def test_another_failure_of_the_page_check_is_an_engine_error(monkeypatch):
+    def failing(self):
+        raise EngineFailure(FailureKind.OTHER, "check failed")
+
+    monkeypatch.setattr(pdfium.PdfiumDocument, "check_pages", failing)
+    with pytest.raises(EngineError) as raised:
+        pdfacts.open(cases.plain_page().data)
+    assert raised.value.detail == "check failed"
+
+
 @pytest.mark.parametrize("password", ["user\x00junk", "\x00"])
 def test_a_password_with_nul_is_refused(password):
     # PDFium would read the password only up to the NUL.
@@ -384,6 +410,47 @@ def test_close_interrupted_while_waiting_for_the_lock_leaves_the_document_open(m
     monkeypatch.undo()
     document.close()
     assert document.closed is True
+
+
+def test_close_interrupted_while_the_engine_closes_leaves_the_document_open(monkeypatch):
+    document = pdfacts.open(cases.plain_page().data)
+    calls = []
+    original = pdfium.PdfiumDocument.close
+
+    def interrupted_once(self):
+        calls.append(self)
+        if len(calls) == 1:
+            raise KeyboardInterrupt
+        return original(self)
+
+    monkeypatch.setattr(pdfium.PdfiumDocument, "close", interrupted_once)
+    with pytest.raises(KeyboardInterrupt):
+        document.close()
+    assert document.closed is False
+    document.close()
+    assert document.closed is True
+    assert len(calls) == 2
+
+
+def test_a_close_handed_over_just_as_the_lock_came_free_is_run_at_once(monkeypatch):
+    class Lock:
+        """Taken by someone else at the first attempt, free at the second."""
+
+        def __init__(self):
+            self.attempts = 0
+
+        def acquire(self, blocking=True):
+            self.attempts += 1
+            return self.attempts > 1
+
+        def release(self):
+            pass
+
+    closes = []
+    monkeypatch.setattr(runtime, "engine_lock", Lock())
+    runtime.close_soon(lambda: closes.append("closed"))
+    assert closes == ["closed"]
+    assert runtime._deferred == []
 
 
 def test_a_failure_while_making_the_document_closes_the_engine_document(monkeypatch):
