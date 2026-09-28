@@ -865,6 +865,25 @@ def test_a_file_whose_stream_ends_directly_before_endstream_is_read_as_it_is_wri
     assert (visible.x0, visible.y0, visible.x1, visible.y1) == box
 
 
+def test_a_stream_keyword_inside_a_string_after_the_last_stream_hides_nothing():
+    # The text of a stream's beginning, with no endstream after it, begins no
+    # stream: the startxref after it ends the revision.
+    data = build(
+        {
+            1: b"<< /Type /Catalog /Pages 2 0 R >>",
+            2: b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            3: b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Resources << >> "
+            b"/Contents 4 0 R >>",
+            4: stream(cases.rectangle_content(cases.RECTANGLE, cases.BLACK)),
+            5: b"<< /Title (a>>\nstream\nb) >>",
+        },
+        1,
+    )
+    result = pdfacts.recover(data)
+    assert result.warnings == ()
+    assert result.page_count == 1
+
+
 def test_an_update_after_a_stream_ended_directly_before_endstream_is_refused_when_cut():
     source, updated, _ = directly_ended_update()
     cut = updated[: updated.index(b"endobj", len(source)) + len(b"endobj\n")]
@@ -923,6 +942,17 @@ def first_table(case: cases.Linearized) -> int:
     return case.data.index(b"xref\n5 1\n")
 
 
+def with_content_ended_directly(case: cases.Linearized, text: bytes) -> cases.Linearized:
+    """`case` with `text` and a letter in place of its page content, the letter
+    directly before endstream, in as many bytes as the stream it replaces."""
+    content = cases.rectangle_content(cases.RECTANGLE, cases.BLACK)
+    written = b"/Length %d >>\nstream\n%s\nendstream" % (len(content), content)
+    data = text.ljust(len(content)) + b"f"
+    replaced = b"/Length %d >>\nstream\n%sendstream" % (len(data), data)
+    assert len(replaced) == len(written)
+    return dataclasses.replace(case, data=case.data.replace(written, replaced, 1))
+
+
 LINEARIZED = {
     "first-page startxref 0": lambda: cases.linearized(first_page_offset=False),
     "first-page startxref naming its table": lambda: cases.linearized(first_page_offset=True),
@@ -947,6 +977,10 @@ LINEARIZED = {
         and with_startxref_in_its_content(
             case, b"%%startxref %d\n%%%%EOF" % case.data.index(b"1 0 obj")
         )
+    ),
+    "a startxref in page content that ends directly before endstream": lambda: (
+        (case := cases.linearized(first_page_offset=True))
+        and with_content_ended_directly(case, b"%%startxref %010d" % first_table(case))
     ),
     "no first-page trailer": lambda: cases.linearized(first_page_trailer=False),
     # The first-page trailer, too far from the dictionary to be known as one,
