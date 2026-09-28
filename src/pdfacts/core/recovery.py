@@ -80,7 +80,8 @@ def recover(
     comment at its end, longer than QPDF's search for startxref, so that
     QPDF rebuilds it without reading a startxref first and keeps an object
     that only white space follows. Its warnings count the comment: that QPDF
-    cannot find startxref, and the offsets of the end of the file.
+    cannot find startxref, that startxref was more than 1024 bytes before
+    the end of the file, and the offsets of the end of the file.
 
     Pages, and objects a page uses, can be lost without a failure: QPDF has
     repaired the page tree before anything can be read, so neither engine

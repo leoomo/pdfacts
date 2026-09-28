@@ -67,15 +67,14 @@ may break callers.
   written with `/Size` in the trailer, encryption kept, the content of the
   metadata kept, an unencrypted result the same bytes for the same input; it
   has to open as `open()` opens a file, without a warning and with `/Size`.
-  `RecoveryFailedError` otherwise, when QPDF cannot rebuild the file, when the
-  last revision is unfinished or its `startxref` leads nowhere, which QPDF
-  would read as the earlier revision without a word or mix with it, and when
-  an encrypted file
-  has lost the trailer that names its encryption dictionary but kept the
-  dictionary. `max_pages` and `max_objects` are checked on the result,
-  `deadline_seconds` from the start of `recover()`. An intact file is
-  rewritten, with no warnings unless QPDF reports a defect in it. The
-  capability `RECOVERY` is available.
+  `RecoveryFailedError` otherwise: when QPDF cannot rebuild the file; when
+  the last revision is unfinished or its `startxref` leads nowhere, which
+  QPDF would read as the earlier revision without a word or mix with it; and
+  when an encrypted file has lost the trailer that names its encryption
+  dictionary but kept the dictionary. `max_pages` and `max_objects` are
+  checked on the result, `deadline_seconds` from the start of `recover()`. An
+  intact file is rewritten, with no warnings unless QPDF reports a defect in
+  it. The capability `RECOVERY` is available.
 - A password given for a file that needs none no longer lets pikepdf warn:
   `open()` failed to open such a file with QPDF under a filter that turns
   warnings into errors.

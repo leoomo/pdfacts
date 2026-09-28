@@ -5,7 +5,6 @@ The only module allowed to import pikepdf.
 
 from __future__ import annotations
 
-import bisect
 import io
 import math
 import re
@@ -21,20 +20,26 @@ from pdfacts.backends.protocols import Box, EngineFailure, FailureKind, PageObje
 # How far from the end QPDF looks for startxref (measured: it finds one that
 # starts 1054 bytes before the end, not one that starts 1055 bytes before).
 _STARTXREF_SEARCH = 1054
-# The header, as QPDF finds it: %PDF- and a version. Offsets in the file count
+# White space as QPDF reads it around startxref, its offset and the sections
+# and objects it looks for: PDF's six characters and the vertical tab
+# (measured, review, round 8).
+_SPACE = rb"[\x00\t\n\x0b\x0c\r ]"
+# The header: %PDF- and a version, as QPDF takes it. Offsets in the file count
 # from it, and it may follow other bytes (measured: QPDF and PDFium read such a
-# file as written).
+# file as written). It is looked for as far as classified() accepts it, one
+# byte further than QPDF (review, round 8): where QPDF misses it, QPDF cannot
+# read the last revision, and the file is refused or rebuilt.
 _HEADER = re.compile(rb"%PDF-[0-9]+\.[0-9]+")
 # startxref and the white space and comments before its offset, matched once
 # and never inside the run of another, so that the file is read once however
 # its startxrefs are laid out.
-_STARTXREF = re.compile(rb"startxref(?>(?:[\x00\t\n\x0c\r ]|%[^\r\n]*)+)")
+_STARTXREF = re.compile(rb"startxref(?>(?:" + _SPACE + rb"|%[^\r\n]*)+)")
 # The offset after startxref, in the forms QPDF reads through (measured): white
 # space or comments before it, as above, a plus sign on it, a delimiter or the
 # end of the file after it. It passes over a startxref without an offset, one
 # glued to its offset and one whose offset other characters follow. An offset
 # of more digits, leading zeros aside, names nothing in any file.
-_OFFSET = re.compile(rb"\+?([0-9]+)(?![^\x00\t\n\x0c\r ()<>\[\]{}/%])")
+_OFFSET = re.compile(rb"\+?([0-9]+)(?![^\x00\t\n\x0b\x0c\r ()<>\[\]{}/%])")
 _OFFSET_DIGITS = 20
 # What the offset after startxref can name: a cross-reference table, or an
 # object, which may be a cross-reference stream; QPDF, recovery off, tells
@@ -42,18 +47,15 @@ _OFFSET_DIGITS = 20
 # (measured: one blank, not ten), and only the first bytes are looked at, so
 # that a crafted file whose offsets all name a long run of white space is not
 # read over and over.
-_SECTION = re.compile(
-    rb"[\x00\t\n\x0c\r ]*(?:xref|[0-9]+[\x00\t\n\x0c\r ]+[0-9]+[\x00\t\n\x0c\r ]+obj)"
-)
+_SECTION = re.compile(_SPACE + rb"*(?:xref|[0-9]+" + _SPACE + rb"+[0-9]+" + _SPACE + rb"+obj)")
 _REACH = 64
-# Where the data of a stream begins, after its dictionary, and where it ends:
-# the text of a startxref inside it ends no revision.
-_STREAM_BOUNDARY = re.compile(
-    rb">>[\x00\t\n\x0c\r ]*stream(?=[\r\n])|(?<![A-Za-z])endstream(?![A-Za-z])"
-)
+# Where the data of a stream begins, after its dictionary, and where it ends;
+# endstream may follow the data directly (6 corpus files write it after a
+# letter). The text of a startxref between the two ends no revision.
+_STREAM_BOUNDARY = re.compile(rb">>" + _SPACE + rb"*stream(?=[\r\n])|endstream")
 # "N G obj", where an object begins.
 _OBJECT_HEADER = re.compile(
-    rb"(?<![0-9])[0-9]+[\x00\t\n\x0c\r ]+[0-9]+[\x00\t\n\x0c\r ]+obj(?![A-Za-z])"
+    rb"(?<![0-9])[0-9]+" + _SPACE + rb"+[0-9]+" + _SPACE + rb"+obj(?![A-Za-z])"
 )
 # What a revision is written of: objects, a cross-reference table, a trailer.
 _REVISION_PART = re.compile(_OBJECT_HEADER.pattern + rb"|(?<![A-Za-z])(?:xref|trailer)(?![A-Za-z])")
@@ -409,30 +411,40 @@ def _revision_ends(data: bytes) -> list[int]:
     """Where the offsets after the startxrefs of whole revisions end, in order.
 
     A startxref ends a revision where QPDF reads through it, it lies outside
-    the data of a stream, and its offset, counted from the header, names a
+    the data of a stream (between the dictionary's stream and an endstream
+    that follows), and its offset, counted from the header, names a
     cross-reference table or an object after the startxref of the revision
     before: a later revision's section lies nowhere else, and an offset cut
     short, or cut short and followed by other bytes, can name an earlier one.
     The first-page trailer of a linearized file ends no revision
     (_first_page_trailer).
     """
-    found = _HEADER.search(data, 0, 1024 + len(b"%PDF-9.9"))
-    header = found.start() if found else 0
+    heading = _HEADER.search(data, 0, 1024 + len(b"%PDF-9.9"))
+    header = heading.start() if heading else 0
     first_page = _first_page_trailer(data, header)
-    boundaries = list(_STREAM_BOUNDARY.finditer(data))
-    starts = [boundary.start() for boundary in boundaries]
+    # The stream boundaries around each startxref, read once in file order.
+    boundaries = _STREAM_BOUNDARY.finditer(data)
+    before = None
+    after = next(boundaries, None)
     ends: list[int] = []
     previous = None
     for found in _STARTXREF.finditer(data):
-        if found.start() == first_page:
-            continue
-        before = bisect.bisect_left(starts, found.start()) - 1
-        if before >= 0 and boundaries[before].group().startswith(b">>"):
+        while after is not None and after.start() < found.start():
+            before, after = after, next(boundaries, None)
+        if found.start() == first_page or (
+            before is not None
+            and before.group().startswith(b">>")
+            and after is not None
+            and after.group() == b"endstream"
+        ):
             continue
         match = _OFFSET.match(data, found.end())
-        if match is None or len(match.group(1).lstrip(b"0")) > _OFFSET_DIGITS:
+        if match is None:
             continue
-        section = header + int(match.group(1))
+        digits = match.group(1).lstrip(b"0") or b"0"
+        if len(digits) > _OFFSET_DIGITS:
+            continue
+        section = header + int(digits)
         if section >= len(data) or not _SECTION.match(data, section, section + _REACH):
             continue
         if previous is not None and section <= previous:
