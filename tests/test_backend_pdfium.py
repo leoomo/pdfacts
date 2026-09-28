@@ -7,13 +7,16 @@ are the numbers the cases were built from.
 from __future__ import annotations
 
 import ctypes
+import sys
 import typing
 
 import pypdfium2
+import pypdfium2.raw
 import pytest
 
 from pdfacts.backends.pdfium import PdfiumDocument
 from pdfacts.backends.protocols import EngineFailure, FailureKind, GeometryReader
+from pdfium_handles import watch
 from synthetic import cases
 
 # The box PDFium uses for a page without any media box: US letter.
@@ -44,10 +47,229 @@ def plain(value: object) -> bool:
     return False
 
 
+def counting_closes(monkeypatch) -> list[int]:
+    """The handles this test loads that PDFium is asked to close, from now on."""
+    return watch(monkeypatch).freed
+
+
 def test_the_page_count_of_three_pages():
     case = cases.three_pages()
     document = opened(case.data)
     assert document.page_count() == len(case.page_objects) == 3
+
+
+@pytest.mark.parametrize("name", list(cases.NO_PAGES))
+def test_a_file_without_pages_is_a_format_failure_and_its_handle_is_closed(monkeypatch, name):
+    closed = counting_closes(monkeypatch)
+    raised = failure(cases.NO_PAGES[name]().data)
+    assert raised.kind is FailureKind.FORMAT
+    assert "no page" in raised.detail
+    assert len(closed) == 1
+
+
+@pytest.mark.parametrize("name", list(cases.REBUILT))
+def test_a_file_read_only_by_rebuilding_its_table_is_a_format_failure(monkeypatch, name):
+    closed = counting_closes(monkeypatch)
+    raised = failure(cases.REBUILT[name]().data)
+    assert raised.kind is FailureKind.FORMAT
+    assert "rebuilding" in raised.detail
+    assert len(closed) == 1
+
+
+def test_a_valid_incremental_update_opens_and_its_update_counts():
+    case = cases.incremental_update()
+    assert opened(case.data).visible_box(0) == tuple(float(v) for v in case.media_box)
+
+
+@pytest.mark.parametrize(
+    ("code", "kind"),
+    [
+        (pypdfium2.raw.FPDF_ERR_FORMAT, FailureKind.FORMAT),
+        (pypdfium2.raw.FPDF_ERR_PASSWORD, FailureKind.PASSWORD),
+        (pypdfium2.raw.FPDF_ERR_UNKNOWN, FailureKind.OTHER),
+        (pypdfium2.raw.FPDF_ERR_FILE, FailureKind.OTHER),
+        (pypdfium2.raw.FPDF_ERR_SECURITY, FailureKind.OTHER),
+        (pypdfium2.raw.FPDF_ERR_PAGE, FailureKind.OTHER),
+        (99, FailureKind.OTHER),
+    ],
+)
+def test_the_error_code_of_a_failed_load_gives_the_kind(monkeypatch, code, kind):
+    monkeypatch.setattr(pypdfium2.raw, "FPDF_LoadMemDocument64", lambda *args: None)
+    monkeypatch.setattr(pypdfium2.raw, "FPDF_GetLastError", lambda: code)
+    raised = failure(cases.plain_page().data)
+    assert raised.kind is kind
+    assert f"(code {code})" in raised.detail
+
+
+def test_the_backend_keeps_the_bytes_pdfium_reads_from():
+    # PDFium reads from the buffer for as long as the document is open; the
+    # caller may hold no reference of its own.
+    data = bytes(bytearray(cases.three_pages().data))
+    before = sys.getrefcount(data)
+    document = opened(data)
+    assert sys.getrefcount(data) > before
+    document.close()
+
+
+def test_a_failure_while_wrapping_the_handle_never_closes_it_twice(monkeypatch):
+    # pypdfium2 may have attached its own finalizer before it failed; closing
+    # here as well could close one handle twice. A leak is the lesser harm.
+    closed = counting_closes(monkeypatch)
+
+    def raising(*args, **kwargs):
+        raise MemoryError
+
+    monkeypatch.setattr(pypdfium2, "PdfDocument", raising)
+    with pytest.raises(MemoryError):
+        opened(cases.plain_page().data)
+    assert closed == []
+
+
+@pytest.mark.parametrize("name", list(cases.MISSING_PAGES))
+def test_a_page_pdfium_counts_but_cannot_find_fails_the_page_check(name):
+    document = opened(cases.MISSING_PAGES[name]().data)
+    with pytest.raises(EngineFailure) as raised:
+        document.check_pages()
+    assert raised.value.kind is FailureKind.FORMAT
+    assert "no page dictionary" in raised.value.detail
+    document.close()
+
+
+def test_every_page_of_an_intact_file_passes_the_page_check():
+    for case in (cases.three_pages(), cases.media_box_on_pages(), cases.no_media_box()):
+        opened(case.data).check_pages()
+
+
+def test_the_page_check_of_a_closed_document_fails():
+    document = opened(cases.three_pages().data)
+    document.close()
+    with pytest.raises(EngineFailure) as raised:
+        document.check_pages()
+    assert raised.value.detail == "closed"
+
+
+def test_a_failing_close_does_not_hide_why_the_file_was_refused(monkeypatch):
+    def failing(self, *args, **kwargs):
+        raise RuntimeError("closing failed as well")
+
+    monkeypatch.setattr(pypdfium2.PdfDocument, "close", failing)
+    raised = failure(cases.empty_page_tree().data)
+    assert (raised.kind, raised.detail) == (
+        FailureKind.FORMAT,
+        "PDFium finds no page in the document",
+    )
+
+
+def every_method_refuses(document: PdfiumDocument) -> None:
+    calls = [
+        document.page_count,
+        document.check_pages,
+        lambda: document.visible_box(0),
+        lambda: document.rotation(0),
+    ]
+    for call in calls:
+        with pytest.raises(EngineFailure) as raised:
+            call()
+        assert (raised.value.kind, raised.value.detail) == (FailureKind.OTHER, "closed")
+
+
+def test_a_close_interrupted_before_the_engine_closed_is_finished_by_the_next(monkeypatch):
+    freed = counting_closes(monkeypatch)
+    calls = []
+    original = pypdfium2.PdfDocument.close
+
+    def interrupted_once(self, *args, **kwargs):
+        calls.append(self)
+        if len(calls) == 1:
+            raise KeyboardInterrupt
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(pypdfium2.PdfDocument, "close", interrupted_once)
+    document = opened(cases.plain_page().data)
+    with pytest.raises(KeyboardInterrupt):
+        document.close()
+    every_method_refuses(document)
+    assert freed == []
+    document.close()
+    assert len(freed) == 1
+
+
+def test_a_close_interrupted_after_the_engine_closed_refuses_every_use(monkeypatch):
+    # The interrupt comes after PDFium freed the handle and before pypdfium2
+    # forgot it: nothing may use the handle again, nor free it again.
+    freed = counting_closes(monkeypatch)
+    original = pypdfium2.PdfDocument.close
+
+    def interrupted_after(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(pypdfium2.PdfDocument, "close", interrupted_after)
+    document = opened(cases.three_pages().data)
+    with pytest.raises(KeyboardInterrupt):
+        document.close()
+    every_method_refuses(document)
+    monkeypatch.setattr(pypdfium2.PdfDocument, "close", original)
+    document.close()
+    assert len(freed) == 1
+
+
+def test_an_interrupt_inside_pypdfium2_after_the_handle_was_freed(monkeypatch):
+    # PDFium freed the handle; pypdfium2 has not forgotten it yet.
+    handles = watch(monkeypatch)
+    watched = pypdfium2.raw.FPDF_CloseDocument
+
+    def interrupted_after(handle):
+        watched(handle)
+        if handles.owns(handle):
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(pypdfium2.raw, "FPDF_CloseDocument", interrupted_after)
+    document = opened(cases.three_pages().data)
+    with pytest.raises(KeyboardInterrupt):
+        document.close()
+    every_method_refuses(document)
+    document.close()
+    assert len(handles.freed) == 1
+
+
+def test_an_exception_while_closing_is_an_other_failure(monkeypatch):
+    document = opened(cases.plain_page().data)
+    original = pypdfium2.PdfDocument.close
+
+    def failing(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        raise RuntimeError("closing failed")
+
+    monkeypatch.setattr(pypdfium2.PdfDocument, "close", failing)
+    with pytest.raises(EngineFailure) as raised:
+        document.close()
+    assert (raised.value.kind, raised.value.detail) == (FailureKind.OTHER, "closing failed")
+    every_method_refuses(document)
+
+
+def test_a_memory_error_while_closing_a_refused_file_is_not_swallowed(monkeypatch):
+    error = MemoryError()
+
+    def failing(self, *args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(pypdfium2.PdfDocument, "close", failing)
+    with pytest.raises(MemoryError) as raised:
+        opened(cases.empty_page_tree().data)
+    assert raised.value is error
+
+
+def test_an_exception_in_the_page_check_is_an_other_failure(monkeypatch):
+    document = opened(cases.three_pages().data)
+
+    def raising(*args):
+        raise ctypes.ArgumentError("wrong argument")
+
+    monkeypatch.setattr(pypdfium2.raw, "FPDF_GetPageSizeByIndexF", raising)
+    with pytest.raises(EngineFailure) as raised:
+        document.check_pages()
+    assert (raised.value.kind, raised.value.detail) == (FailureKind.OTHER, "wrong argument")
 
 
 @pytest.mark.parametrize(
@@ -138,23 +360,12 @@ def test_an_index_that_is_not_an_int_is_a_type_error(index):
 
 
 def test_after_close_every_method_fails_and_close_does_nothing(monkeypatch):
-    engine_closes = []
-    original = pypdfium2.PdfDocument.close
-
-    def counting(self, *args, **kwargs):
-        engine_closes.append(self)
-        return original(self, *args, **kwargs)
-
-    monkeypatch.setattr(pypdfium2.PdfDocument, "close", counting)
+    freed = counting_closes(monkeypatch)
     document = opened(cases.plain_page().data)
     document.close()
-    calls = [document.page_count, lambda: document.visible_box(0), lambda: document.rotation(0)]
-    for call in calls:
-        with pytest.raises(EngineFailure) as raised:
-            call()
-        assert (raised.value.kind, raised.value.detail) == (FailureKind.OTHER, "closed")
+    every_method_refuses(document)
     document.close()
-    assert len(engine_closes) == 1
+    assert len(freed) == 1
 
 
 def test_a_page_is_closed_before_the_method_returns(monkeypatch):

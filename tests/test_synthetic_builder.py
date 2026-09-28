@@ -346,3 +346,104 @@ def test_a_user_password_is_needed_for_one_encrypted_case_and_not_the_other():
     for case in (locked, open_to_all):
         with pikepdf.open(io.BytesIO(case.data), password=case.owner_password) as pdf:
             assert pdf.is_encrypted
+
+
+def test_an_update_keeps_the_file_before_it_and_names_its_table():
+    source = cases.plain_page().data
+    updated = builder.append_update(source, {6: b"<< /Updated true >>"}, 1)
+    assert updated.startswith(source)
+    tail = updated[len(source) :]
+    previous = int(re.search(rb"startxref\n(\d+)", source).group(1))
+    assert re.search(rb"/Prev (\d+)", tail).group(1) == b"%d" % previous
+    table = int(re.findall(rb"startxref\n(\d+)", updated)[-1])
+    assert updated[table:].startswith(b"xref\n6 1\n")
+    offset = int(updated[table + len(b"xref\n6 1\n") :][:10])
+    assert updated[offset:].startswith(b"6 0 obj\n<< /Updated true >>")
+    assert re.search(rb"/Size (\d+)", tail).group(1) == b"7"
+    assert updated.endswith(b"%%EOF\n")
+
+
+def test_the_update_of_the_page_is_what_the_engines_read():
+    case = cases.incremental_update()
+    pdf = pikepdf.open(io.BytesIO(case.data))
+    assert [float(value) for value in pdf.pages[0].obj.MediaBox] == list(case.media_box)
+    assert pdf.get_warnings() == []
+    document_ = pypdfium2.PdfDocument(case.data)
+    assert document_[0].get_mediabox() == tuple(float(value) for value in case.media_box)
+
+
+def test_the_startxref_case_points_three_bytes_behind_the_table():
+    case = cases.startxref_off_by_three()
+    table = case.data.rindex(b"\nxref\n") + 1
+    assert int(re.findall(rb"startxref\n(\d+)", case.data)[-1]) == table + 3
+    assert len(case.data) == len(case.source.data)
+
+
+def test_the_crlf_case_has_no_line_feed_alone():
+    case = cases.line_ends_crlf()
+    assert b"\n" not in case.data.replace(b"\r\n", b"")
+    assert case.data.replace(b"\r\n", b"\n") == case.source.data
+
+
+def test_what_follows_the_last_end_of_file_marker():
+    white = b"\x00\t\n\x0c\r "
+    for make, only_white_space in (
+        (cases.white_space_after_the_end, True),
+        (cases.junk_after_the_end, False),
+        (cases.cut_inside_the_update, False),
+        (cases.vertical_tab_after_the_end, False),
+    ):
+        case = make()
+        assert case.data.startswith(case.source.data)
+        tail = case.data[case.data.rindex(b"%%EOF") + len(b"%%EOF") :]
+        assert (tail.strip(white) == b"") is only_white_space, make.__name__
+    assert cases.vertical_tab_after_the_end().data.endswith(b"%%EOF\n\x0b")
+
+
+def test_the_case_without_an_end_marker_keeps_every_offset():
+    case = cases.no_end_marker()
+    assert b"%%EOF" not in case.data
+    assert len(case.data) == len(case.source.data)
+    assert case.data.replace(b"%%END", b"%%EOF") == case.source.data
+
+
+def test_the_cases_with_a_page_that_is_not_there_are_what_their_names_say():
+    count = cases.count_without_kids().data
+    assert b"/Kids [] /Count 1" in count
+    missing = cases.missing_kid().data
+    assert b"/Kids [7 0 R] /Count 1" in missing
+    assert 7 not in table_entries(missing)
+    kids_null = cases.page_with_kids_null().data
+    assert b"/Kids [4 0 R 5 0 R 6 0 R] /Count 3" in kids_null
+    entries = table_entries(kids_null)
+    first = entries[4][0]
+    assert kids_null[first:].startswith(b"4 0 obj\n<< /Type /Page ")
+    assert b"/Kids null" in kids_null[first : kids_null.index(b"endobj", first)]
+    for number in (1, 2, 4, 5, 6, 9):
+        offset = entries[number][0]
+        assert kids_null[offset:].startswith(b"%d 0 obj" % number)
+    middle = cases.missing_kid_in_the_middle().data
+    assert b"/Kids [4 0 R 7 0 R 5 0 R] /Count 3" in middle
+    entries = table_entries(middle)
+    assert entries[7][2] == b"f"
+    assert entries[4][2] == entries[5][2] == b"n"
+
+
+def test_the_cut_update_ends_inside_the_object_of_its_update():
+    case = cases.cut_inside_the_update()
+    update = cases.incremental_update().data
+    assert update.startswith(case.data)
+    assert case.data[len(case.source.data) :].startswith(b"4 0 obj")
+    assert b"endobj" not in case.data[len(case.source.data) :]
+
+
+def test_the_cases_without_pages_are_what_their_names_say():
+    empty = cases.empty_page_tree().data
+    assert b"/Kids [] /Count 0" in empty
+    none = cases.no_page_tree().data
+    assert b"/Pages" not in none
+    missing = cases.missing_page_tree().data
+    assert b"/Pages 7 0 R" in missing
+    assert 7 not in table_entries(missing)
+    for data in (empty, none, missing):
+        assert b"/Type /Page " not in data
