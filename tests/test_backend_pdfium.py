@@ -201,6 +201,25 @@ def test_any_other_exception_is_an_other_failure(monkeypatch, exception):
     assert raised.detail == str(exception)
 
 
+@pytest.mark.parametrize(
+    "code",
+    [
+        pypdfium2.raw.FPDF_ERR_UNKNOWN,
+        pypdfium2.raw.FPDF_ERR_FILE,
+        pypdfium2.raw.FPDF_ERR_SECURITY,
+        pypdfium2.raw.FPDF_ERR_PAGE,
+        None,
+    ],
+)
+def test_error_codes_other_than_format_and_password_are_other_failures(monkeypatch, code):
+    def raising(*args, **kwargs):
+        raise pypdfium2.PdfiumError("refused", err_code=code)
+
+    monkeypatch.setattr(pypdfium2, "PdfDocument", raising)
+    raised = failure(cases.plain_page().data)
+    assert (raised.kind, raised.detail) == (FailureKind.OTHER, "refused")
+
+
 def test_an_exception_while_reading_a_page_is_an_other_failure(monkeypatch):
     document = opened(cases.plain_page().data)
 
