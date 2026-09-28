@@ -16,9 +16,9 @@ from pdfacts.core import runtime
 from pdfacts.core.document import classified, open
 from pdfacts.core.errors import (
     EngineError,
+    InputError,
     LimitExceededError,
     PasswordRequiredError,
-    PdfactsError,
     RecoveryFailedError,
 )
 from pdfacts.core.limits import Limits
@@ -50,15 +50,21 @@ def recover(data: bytes, *, password: str | None = None, limits: Limits | None =
     agreeing on its pages, without a warning from QPDF, and with /Size in its
     trailer. max_pages and max_objects are checked on the result.
 
-    Pages can be lost without a failure: QPDF has repaired the page tree
-    before anything can be read, so neither engine tells how many pages the
-    damaged file was meant to have. A caller who knows how many to expect
-    compares that number with page_count; the warnings may name lost pages.
-    QPDF may repair the page tree while it walks it, for example give a page
-    without a media box US letter; the repair is written into the result and
-    named among the warnings. The object numbers of the result differ from
-    those of the input. An encrypted file stays encrypted, and its result
-    differs from run to run.
+    Pages, and objects a page uses, can be lost without a failure: QPDF has
+    repaired the page tree before anything can be read, so neither engine
+    tells how many pages the damaged file was meant to have. A caller who
+    knows how many to expect compares that number with page_count; the
+    warnings may name what was lost. QPDF may repair the page tree while it
+    walks it, for example give a page without a media box US letter; the
+    repair is written into the result and named among the warnings. The
+    object numbers of the result differ from those of the input.
+
+    An encrypted file stays encrypted, and its result differs from run to
+    run; an unencrypted result is the same for the same input. When QPDF
+    finds no trailer, it does not know that the file is encrypted: if the
+    encryption dictionary is left, RecoveryFailedError; if the cut took that
+    too, nothing tells, and the result is unencrypted with its strings and
+    streams still encrypted (docs/conventions.md, "Damaged files").
     """
     limits = classified(data, password, limits)
     # The runtime starts in open(), before PDFium sees the result.
@@ -91,7 +97,8 @@ def _verified(rewritten: RecoveredBytes, password: str | None) -> int:
     """
     try:
         document = open(rewritten.data, password=password)
-    except PdfactsError as error:
+    except (InputError, PasswordRequiredError) as error:
+        # An EngineError passes: it says nothing about the result.
         raise RecoveryFailedError(detail=f"the recovered file does not open: {error}") from error
     with document:
         if document.warnings:

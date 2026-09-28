@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import dataclasses
 import io
+import re
 import threading
+import time
+import warnings
 
 import pikepdf
 import pytest
@@ -99,11 +102,42 @@ def test_the_result_opens_with_recovery_off_and_without_warnings(name):
         assert pdf.get_warnings() == []
 
 
+def complete_objects(data: bytes, cut_at: int) -> int:
+    """The objects of `data` whose "endobj" lies before `cut_at`."""
+    kept = data[:cut_at]
+    return sum(
+        1
+        for match in re.finditer(rb"\n\d+ 0 obj\b", kept)
+        if kept.find(b"endobj", match.end()) >= 0
+    )
+
+
 @pytest.mark.parametrize("name", list(RECOVERED))
-def test_the_result_has_the_size_of_its_objects_in_the_trailer(name):
-    with reopened(recovered(name).data) as pdf:
-        highest = max(obj.objgen[0] for obj in pdf.objects if obj.objgen[0] > 0)
-        assert pdf.trailer.get("/Size") == highest + 1
+def test_the_result_keeps_every_object_the_cut_left_whole(name):
+    # QPDF numbers the objects it writes from 1, and /Size is one more.
+    make, _ = RECOVERED[name]
+    case = make()
+    expected = complete_objects(case.source.data, case.cut_at) + 1
+    with reopened(pdfacts.recover(case.data).data) as pdf:
+        assert pdf.trailer.get("/Size") == expected
+
+
+@pytest.mark.parametrize("name", list(RECOVERED))
+def test_every_page_the_cut_left_whole_keeps_the_content_it_was_built_with(name):
+    make, _ = RECOVERED[name]
+    case = make()
+    built = cases.rectangle_content(case.source.rectangle, case.source.colour)
+    whole = [
+        index
+        for index, number in enumerate(case.source.page_objects)
+        # Each page's content stream is the object after it.
+        if case.source.data.find(b"endobj", case.source.data.index(b"\n%d 0 obj" % (number + 1)))
+        < case.cut_at
+    ]
+    assert whole, "no page was left whole"
+    with reopened(pdfacts.recover(case.data).data) as pdf:
+        for index in whole:
+            assert pdf.pages[index].Contents.read_bytes() == built
 
 
 @pytest.mark.parametrize("name", list(RECOVERED))
@@ -256,8 +290,11 @@ def test_arguments_of_the_wrong_kind_are_refused(arguments, error):
 
 
 def test_an_unencrypted_result_is_the_same_bytes_each_time():
+    # QPDF would make /ID from the current second: the two runs straddle one.
     data = cases.cut_after_first_page().data
-    assert pdfacts.recover(data).data == pdfacts.recover(data).data
+    first = pdfacts.recover(data).data
+    time.sleep(1.05 - time.time() % 1)
+    assert pdfacts.recover(data).data == first
 
 
 def test_the_file_need_not_end_with_eof():
@@ -365,3 +402,72 @@ def test_a_repair_qpdf_makes_while_walking_the_pages_is_among_the_warnings():
     assert any("MediaBox is undefined" in warning for warning in result.warnings)
     with reopened(result.data) as pdf:
         assert list(pdf.pages[0].obj.MediaBox) == [0, 0, 612, 792]
+
+
+def with_length(data: bytes, number: int, length: int) -> bytes:
+    """`data` with the /Length of object `number` changed to `length`."""
+    start = data.index(b"/Length ", data.index(b"\n%d 0 obj" % number))
+    end = data.index(b" ", start + len(b"/Length "))
+    return data[:start] + b"/Length %d" % length + data[end:]
+
+
+def test_the_warnings_qpdf_gives_while_writing_are_among_them():
+    # QPDF reads a stream only when it writes it, and finds the length wrong.
+    case = cases.three_pages()
+    last_content = case.page_objects[-1] + 1
+    result = pdfacts.recover(with_length(case.data, last_content, 99))
+    assert any("recovered stream length" in warning for warning in result.warnings)
+
+
+def test_an_engine_error_while_checking_the_result_passes_as_it_is(monkeypatch):
+    from pdfacts.backends import pdfium as pdfium_backend
+
+    def failing(cls, data, password):
+        raise EngineFailure(FailureKind.OTHER, "broken")
+
+    monkeypatch.setattr(pdfium_backend.PdfiumDocument, "open", classmethod(failing))
+    with pytest.raises(EngineError) as raised:
+        pdfacts.recover(cases.cut_before_xref_table().data)
+    assert (raised.value.engine, raised.value.detail) == ("pdfium", "broken")
+
+
+@pytest.mark.parametrize("make", list(cases.ENCRYPTED.values()), ids=list(cases.ENCRYPTED))
+def test_an_encrypted_file_whose_trailer_is_lost_is_not_recovered(make):
+    # Cut after the encryption dictionary, before the table and the trailer
+    # that names it.
+    case = make()
+    cut = case.data[: case.data.rindex(b"\nxref\n") + 1]
+    with pytest.raises(RecoveryFailedError, match="encrypt"):
+        pdfacts.recover(cut, password=case.user_password or None)
+
+
+def test_an_encrypted_file_cut_before_its_encryption_dictionary_is_the_known_gap():
+    # Nothing is left that says the file was encrypted: QPDF rebuilds it
+    # unencrypted, its streams still ciphertext (docs/conventions.md, "Damaged
+    # files"). The encryption dictionary is the last object of this case.
+    case = cases.user_password()
+    encryption = case.data.rindex(b"\n6 0 obj")
+    assert b"/Standard" in case.data[encryption:]
+    assert b"/Standard" not in case.data[:encryption]
+    result = pdfacts.recover(case.data[:encryption])
+    with reopened(result.data) as pdf:
+        assert not pdf.is_encrypted
+        content = pdf.pages[0].Contents.read_raw_bytes()
+    assert content != cases.rectangle_content(cases.RECTANGLE, cases.BLACK)
+
+
+def test_a_password_for_a_file_that_needs_none_raises_no_python_warning():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert pdfacts.recover(cases.plain_page().data, password="x").page_count == 1
+
+
+def test_open_with_a_password_the_file_does_not_need_raises_no_python_warning():
+    # pikepdf warns about it for a file QPDF wrote; open() used to fail QPDF
+    # then under a filter that makes warnings errors.
+    data = pdfacts.recover(cases.plain_page().data).data
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with pdfacts.open(data, password="x") as document:
+            assert document.warnings == ()
+            assert not isinstance(document.object_count, Unknown)

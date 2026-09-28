@@ -60,13 +60,19 @@ may break callers.
   capability `RENDERING` is available.
 - Recovery: `recover(data, *, password=None, limits=None)` returns a
   `Recovery` with the recovered `data`, its `page_count` and the `warnings`
-  QPDF gave while rebuilding the file. The input is classified as `open()`
-  classifies it, without the rule on the end of the file. QPDF rebuilds the
-  file; it is written with `/Size` in the trailer, encryption kept. The result
+  QPDF gave while rebuilding and writing the file. The input is classified as
+  `open()` classifies it, without the rule on the end of the file. QPDF
+  rebuilds the file; it is written with `/Size` in the trailer, encryption
+  kept, an unencrypted result the same bytes for the same input. The result
   has to open as `open()` opens a file, without a warning and with `/Size`;
-  otherwise, and when QPDF cannot rebuild the file, `RecoveryFailedError`.
-  `max_pages` and `max_objects` are checked on the result. An intact file is
-  rewritten with no warnings. The capability `RECOVERY` is available.
+  otherwise, when QPDF cannot rebuild the file, and when an encrypted file
+  has lost the trailer that names its encryption dictionary,
+  `RecoveryFailedError`. `max_pages` and `max_objects` are checked on the
+  result. An intact file is rewritten with no warnings. The capability
+  `RECOVERY` is available.
+- A password given for a file that needs none no longer lets pikepdf warn:
+  `open()` failed to open such a file with QPDF under a filter that turns
+  warnings into errors.
 
 ### Changed
 
@@ -110,8 +116,11 @@ may break callers.
   capability table and an error for unsupported.
 - Damaged files are recovered by an explicit step. `open` does not change what
   it reads.
-- A recovery can lose pages and still succeed; the library cannot tell, and
-  the caller compares the page count with the one they expect.
+- A recovery can lose pages, or objects a page uses, and still succeed; the
+  library cannot tell, and the caller compares the page count with the one
+  they expect. An encrypted file cut before the end of its encryption
+  dictionary and its trailer is a known gap: its result is unencrypted, with
+  its strings and streams still encrypted.
 - The two engines are checked against each other at run time. A value that
   depends on a failed check is unknown.
 - Limits: the library checks size, page count, object count, items per page
