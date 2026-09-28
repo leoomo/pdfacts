@@ -3,9 +3,10 @@
 Structured, verifiable facts from PDF files: text, paths, images, annotations
 and forms, each with explicit geometry.
 
-> **Status: private, pre-alpha (milestone M0).** The only public function today
-> is `pdfacts.engine_info()`. Nothing else described below exists yet; see
-> [ROADMAP.md](ROADMAP.md) for what is planned and how each step is accepted.
+> **Status: private, pre-alpha (milestone M1).** `pdfacts.open()` reads a
+> document and the geometry and object numbers of its pages; nothing else
+> described below exists yet. See [ROADMAP.md](ROADMAP.md) for what is planned
+> and how each step is accepted.
 
 ## What it is for
 
@@ -34,9 +35,18 @@ Engine versions are pinned exactly in `pyproject.toml`. Extracted facts depend
 on the engine build, so an upgrade is a reviewed change.
 
 ```python
+from pathlib import Path
+
 import pdfacts
 
-print(pdfacts.engine_info())
+data = Path("form.pdf").read_bytes()  # keep the bytes: the facts describe them
+with pdfacts.open(data) as document:
+    for page in document.pages:
+        geometry = page.geometry  # user space, with the transform to display space
+        print(page.index, geometry.visible_box, geometry.rotation, page.ref.object_number)
+    print(document.warnings)
+
+print(pdfacts.engine_info())  # the versions the facts depend on
 ```
 
 ## Development

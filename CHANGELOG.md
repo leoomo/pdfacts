@@ -31,7 +31,21 @@ may break callers.
   password that is not a `str` and limits that are not a `Limits` raise
   `TypeError`; a password with NUL or one that cannot be written as UTF-8
   raises `ValueError`. Nothing is repaired.
-- `Limits` with `max_bytes` and `max_pages`; none is set by default.
+- `Limits` with `max_bytes`, `max_pages`, `max_objects` and
+  `deadline_seconds`; none is set by default. `max_objects` raises
+  `LimitUncheckedError` when the object count is unknown; the deadline counts
+  from the start of `open()` and is checked before each page is read.
+- Pages: `Document.pages` (length, an index from 0, iteration; no slices, no
+  negative index), `Page` with `index`, `geometry` and `ref`, and `PageRef`.
+  Geometry comes from PDFium. Object numbers, `UserUnit` and
+  `Document.object_count` come from QPDF, and are `Unknown` with the reason
+  where QPDF cannot open or read the file or the engines disagree on the
+  page count or on a page's visible box or rotation; a `UserUnit` that is
+  not a number above 0 and a `/Size` that is not a whole number above 0 are
+  `Unknown(INVALID)`. `UserUnit` is 1.0 where the file does not write it.
+  `Document.warnings` gives the reasons first, then what QPDF reported; it
+  grows as pages are read. The capabilities `PAGE_GEOMETRY`, `USER_UNIT` and
+  `OBJECT_NUMBERS` are available.
 
 ### Changed
 
@@ -58,6 +72,14 @@ may break callers.
   space, when PDFium can read it only by rebuilding its cross-reference table,
   and when PDFium finds no page in it or no page dictionary for a page it
   counts.
+- A page counts as damaged when it is read if PDFium's visible box for it is
+  not finite or has no area, or the boxes the file writes leave no area (a
+  flat crop box, or a media box that is flat or that, intersected with the
+  crop box, has no area); the other pages are read as usual.
+- The run-time check of a page compares its visible box, within 0.001, and its
+  rotation. On QPDF's side the visible box is the media box, US letter where
+  QPDF has none it can use, intersected with the crop box; the rotation is
+  taken modulo 360, and a value that is not a multiple of 90 counts as 0.
 - The font policy is installed before the first document is opened, and
   `engine_info()` names it in `font_policy`, because it changes the facts.
 - The transform from user space to display space is the table under
