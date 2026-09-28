@@ -6,12 +6,14 @@ are the numbers the cases were built from.
 
 from __future__ import annotations
 
+import gc
 import json
 import subprocess
 import sys
 import threading
 from pathlib import Path
 
+import pypdfium2.raw
 import pytest
 
 import pdfacts
@@ -88,6 +90,46 @@ def test_a_header_after_1025_bytes_is_not_a_pdf():
 def test_a_truncated_file_is_a_damaged_file_never_an_empty_document(name):
     with pytest.raises(DamagedFileError):
         pdfacts.open(cases.TRUNCATED[name]().data)
+
+
+@pytest.mark.parametrize("name", list(cases.BAD_ENDS))
+def test_a_file_not_ending_in_the_end_marker_is_damaged_before_any_engine(monkeypatch, name):
+    def must_not_run(*args, **kwargs):
+        raise AssertionError("an engine was called")
+
+    monkeypatch.setattr(pdfium.PdfiumDocument, "open", must_not_run)
+    monkeypatch.setattr(runtime, "start", must_not_run)
+    with pytest.raises(DamagedFileError) as raised:
+        pdfacts.open(cases.BAD_ENDS[name]().data)
+    assert "%%EOF" in raised.value.detail
+
+
+def test_white_space_after_the_end_marker_is_fine():
+    assert pdfacts.open(cases.white_space_after_the_end().data).page_count == 1
+
+
+def test_a_valid_incremental_update_opens():
+    assert pdfacts.open(cases.incremental_update().data).page_count == 1
+
+
+@pytest.mark.parametrize("name", list(cases.REBUILT))
+def test_a_file_pdfium_reads_only_by_rebuilding_its_table_is_damaged(name):
+    with pytest.raises(DamagedFileError) as raised:
+        pdfacts.open(cases.REBUILT[name]().data)
+    assert "rebuilding" in raised.value.detail
+
+
+@pytest.mark.parametrize("name", list(cases.NO_PAGES))
+def test_a_file_without_pages_is_damaged(name):
+    with pytest.raises(DamagedFileError) as raised:
+        pdfacts.open(cases.NO_PAGES[name]().data)
+    assert "no page" in raised.value.detail
+
+
+def test_a_file_that_ends_right_with_nothing_readable_inside_is_damaged():
+    data = b"%PDF-1.7\n" + b"this is not a PDF object\n" * 40 + b"%%EOF\n"
+    with pytest.raises(DamagedFileError):
+        pdfacts.open(data)
 
 
 def test_a_user_password_that_is_not_given():
@@ -222,6 +264,113 @@ def test_the_context_manager_closes_when_the_block_raised():
         with pdfacts.open(cases.plain_page().data) as document:
             raise RuntimeError("in the block")
     assert document.closed is True
+
+
+def test_a_closed_document_cannot_be_entered():
+    document = pdfacts.open(cases.plain_page().data)
+    document.close()
+    with pytest.raises(ClosedError):
+        with document:
+            pass
+
+
+def test_a_document_nobody_closed_is_closed_under_the_engine_lock(monkeypatch):
+    held = []
+    original = pypdfium2.raw.FPDF_CloseDocument
+
+    def watching(handle):
+        held.append(lock_is_held())
+        return original(handle)
+
+    monkeypatch.setattr(pypdfium2.raw, "FPDF_CloseDocument", watching)
+    document = pdfacts.open(cases.plain_page().data)
+    del document
+    gc.collect()
+    assert held == [True]
+
+
+def recording_closes(monkeypatch, *, raising: BaseException | None = None) -> list[object]:
+    """Every close of a PDFium backend document; with `raising`, each close raises it."""
+    closed: list[object] = []
+    original = pdfium.PdfiumDocument.close
+
+    def recording(self):
+        closed.append(self)
+        if raising is not None:
+            original(self)
+            raise raising
+        return original(self)
+
+    monkeypatch.setattr(pdfium.PdfiumDocument, "close", recording)
+    return closed
+
+
+def test_an_interrupt_after_the_engine_opened_closes_the_document(monkeypatch):
+    closed = recording_closes(monkeypatch)
+
+    def interrupted(self):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(pdfium.PdfiumDocument, "page_count", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        pdfacts.open(cases.plain_page().data)
+    assert len(closed) == 1
+
+
+def test_a_failing_close_does_not_hide_the_exceeded_limit(monkeypatch):
+    recording_closes(monkeypatch, raising=EngineFailure(FailureKind.OTHER, "close failed"))
+    with pytest.raises(LimitExceededError):
+        pdfacts.open(cases.three_pages().data, limits=Limits(max_pages=2))
+
+
+def test_memory_error_while_closing_after_a_failure_is_not_swallowed(monkeypatch):
+    error = MemoryError()
+    recording_closes(monkeypatch, raising=error)
+    with pytest.raises(MemoryError) as raised:
+        pdfacts.open(cases.three_pages().data, limits=Limits(max_pages=2))
+    assert raised.value is error
+
+
+def test_memory_error_while_counting_pages_arrives_unchanged_and_closes(monkeypatch):
+    closed = recording_closes(monkeypatch)
+    error = MemoryError()
+
+    def raising(self):
+        raise error
+
+    monkeypatch.setattr(pdfium.PdfiumDocument, "page_count", raising)
+    with pytest.raises(MemoryError) as raised:
+        pdfacts.open(cases.plain_page().data)
+    assert raised.value is error
+    assert len(closed) == 1
+
+
+def test_an_engine_failure_while_counting_pages_is_an_engine_error(monkeypatch):
+    def failing(self):
+        raise EngineFailure(FailureKind.OTHER, "count failed")
+
+    monkeypatch.setattr(pdfium.PdfiumDocument, "page_count", failing)
+    with pytest.raises(EngineError) as raised:
+        pdfacts.open(cases.plain_page().data)
+    assert (raised.value.engine, raised.value.detail) == ("pdfium", "count failed")
+
+
+def test_an_engine_failure_while_closing_is_an_engine_error_and_the_document_is_closed(
+    monkeypatch,
+):
+    document = pdfacts.open(cases.plain_page().data)
+    recording_closes(monkeypatch, raising=EngineFailure(FailureKind.OTHER, "close failed"))
+    with pytest.raises(EngineError) as raised:
+        document.close()
+    assert raised.value.detail == "close failed"
+    assert document.closed is True
+    document.close()
+
+
+def test_an_empty_password_counts_as_given():
+    with pytest.raises(PasswordRequiredError) as raised:
+        pdfacts.open(cases.user_password().data, password="")
+    assert raised.value.password_was_given is True
 
 
 def test_memory_error_arrives_unchanged(monkeypatch):

@@ -10,6 +10,7 @@ and no cross-reference streams, so that every byte can be read by eye.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
@@ -114,3 +115,27 @@ def truncate(data: bytes, *, before: bytes | None = None, keep: int | None = Non
     if not 0 <= keep <= len(data):
         raise ValueError(f"cannot keep {keep} of {len(data)} bytes")
     return data[:keep]
+
+
+def append_update(data: bytes, objects: Mapping[int, bytes], root: int) -> bytes:
+    """`data` with an incremental update that writes `objects`.
+
+    The update has its own cross-reference section, one subsection per
+    object, and a trailer whose /Prev names the section before it.
+    """
+    last = data.rindex(b"startxref\n") + len(b"startxref\n")
+    previous = int(data[last : data.index(b"\n", last)])
+    sizes = [int(size) for size in re.findall(rb"/Size (\d+)", data)]
+    size = max([*sizes, max(objects) + 1])
+    out = bytearray(data)
+    offsets: dict[int, int] = {}
+    for number in sorted(objects):
+        offsets[number] = len(out)
+        out += b"%d 0 obj\n%s\nendobj\n" % (number, objects[number])
+    table = len(out)
+    out += b"xref\n"
+    for number in sorted(objects):
+        out += b"%d 1\n%010d 00000 n \n" % (number, offsets[number])
+    out += b"trailer\n<< /Size %d /Root %d 0 R /Prev %d >>\n" % (size, root, previous)
+    out += b"startxref\n%d\n%%%%EOF\n" % table
+    return bytes(out)

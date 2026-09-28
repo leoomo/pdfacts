@@ -208,6 +208,18 @@ Reason: recovery rewrites the file. Object numbers may change and the bytes and
 their hash do change. Facts read from recovered bytes describe the recovered
 file, so the caller has to hold those bytes.
 
+These count as files the engine cannot load:
+
+| Case | Reason |
+| --- | --- |
+| anything but white space follows the last `%%EOF` | a file cut short can end in an earlier revision's cross-reference table, which the engines then read without a word; so can a file with bytes appended |
+| PDFium can read the file only by rebuilding its cross-reference table | that is a repair |
+| PDFium finds no page | an empty page tree, a missing one and one that names no object look the same to PDFium; an empty document is never returned in place of a failure |
+
+Measured: every one of the 104 intact corpus files ends with `%%EOF` and white
+space and has a cross-reference table PDFium accepts as written. A linearized
+corpus form cut at 60 % opened in PDFium, which rebuilt its table.
+
 ## Limits
 
 The library checks what it can check between two engine calls:

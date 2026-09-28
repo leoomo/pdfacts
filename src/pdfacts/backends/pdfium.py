@@ -81,6 +81,16 @@ _FAILURE_KINDS = {
     pdfium_c.FPDF_ERR_FORMAT: FailureKind.FORMAT,
     pdfium_c.FPDF_ERR_PASSWORD: FailureKind.PASSWORD,
 }
+# What public/fpdfview.h says each code means.
+_ERROR_NAMES = {
+    pdfium_c.FPDF_ERR_SUCCESS: "no error",
+    pdfium_c.FPDF_ERR_UNKNOWN: "unknown error",
+    pdfium_c.FPDF_ERR_FILE: "file not found or could not be opened",
+    pdfium_c.FPDF_ERR_FORMAT: "file not in PDF format or corrupted",
+    pdfium_c.FPDF_ERR_PASSWORD: "password required or incorrect password",
+    pdfium_c.FPDF_ERR_SECURITY: "unsupported security scheme",
+    pdfium_c.FPDF_ERR_PAGE: "page not found or content error",
+}
 
 
 @contextmanager
@@ -117,15 +127,48 @@ class PdfiumDocument:
     opened for one call and closed before the call returns.
     """
 
-    def __init__(self, document: pypdfium2.PdfDocument) -> None:
+    def __init__(self, document: pypdfium2.PdfDocument, data: bytes) -> None:
         # Use open(); this takes a document that is already open.
         self._document = document
+        # PDFium reads from these bytes for as long as the document is open.
+        self._data = data
         self._closed = False
 
     @classmethod
     def open(cls, data: bytes, password: str | None) -> PdfiumDocument:
+        """Open `data` as the file writes it.
+
+        A FORMAT failure also when PDFium finds no page, or could read the file
+        only by rebuilding its cross-reference table: that is a repair, and
+        opening repairs nothing (docs/conventions.md, "Damaged files").
+
+        The document is loaded through the raw call, not through pypdfium2's
+        PdfDocument, which leaves the handle of a document without pages open.
+        """
+        secret = None if password is None else (password + "\x00").encode("utf-8")
         with _translated():
-            return cls(pypdfium2.PdfDocument(data, password=password))
+            raw = pdfium_c.FPDF_LoadMemDocument64(data, len(data), secret)
+            if not raw:
+                code = pdfium_c.FPDF_GetLastError()
+                raise EngineFailure(
+                    _FAILURE_KINDS.get(code, FailureKind.OTHER),
+                    f"PDFium could not load the document: {_ERROR_NAMES.get(code, 'error')} "
+                    f"(code {code})",
+                )
+            try:
+                if pdfium_c.FPDF_GetPageCount(raw) < 1:
+                    raise EngineFailure(FailureKind.FORMAT, "PDFium finds no page in the document")
+                if not pdfium_c.FPDF_DocumentHasValidCrossReferenceTable(raw):
+                    raise EngineFailure(
+                        FailureKind.FORMAT,
+                        "PDFium could read the document only by rebuilding its "
+                        "cross-reference table",
+                    )
+                document = pypdfium2.PdfDocument(raw)
+            except BaseException:
+                pdfium_c.FPDF_CloseDocument(raw)
+                raise
+        return cls(document, data)
 
     def page_count(self) -> int:
         self._check_open()

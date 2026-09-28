@@ -7,9 +7,11 @@ are the numbers the cases were built from.
 from __future__ import annotations
 
 import ctypes
+import sys
 import typing
 
 import pypdfium2
+import pypdfium2.raw
 import pytest
 
 from pdfacts.backends.pdfium import PdfiumDocument
@@ -44,10 +46,88 @@ def plain(value: object) -> bool:
     return False
 
 
+def counting_closes(monkeypatch) -> list[object]:
+    """Every handle PDFium is asked to close, from now on in this test."""
+    closed: list[object] = []
+    original = pypdfium2.raw.FPDF_CloseDocument
+
+    def counting(handle):
+        closed.append(handle)
+        return original(handle)
+
+    monkeypatch.setattr(pypdfium2.raw, "FPDF_CloseDocument", counting)
+    return closed
+
+
 def test_the_page_count_of_three_pages():
     case = cases.three_pages()
     document = opened(case.data)
     assert document.page_count() == len(case.page_objects) == 3
+
+
+@pytest.mark.parametrize("name", list(cases.NO_PAGES))
+def test_a_file_without_pages_is_a_format_failure_and_its_handle_is_closed(monkeypatch, name):
+    closed = counting_closes(monkeypatch)
+    raised = failure(cases.NO_PAGES[name]().data)
+    assert raised.kind is FailureKind.FORMAT
+    assert "no page" in raised.detail
+    assert len(closed) == 1
+
+
+@pytest.mark.parametrize("name", list(cases.REBUILT))
+def test_a_file_read_only_by_rebuilding_its_table_is_a_format_failure(monkeypatch, name):
+    closed = counting_closes(monkeypatch)
+    raised = failure(cases.REBUILT[name]().data)
+    assert raised.kind is FailureKind.FORMAT
+    assert "rebuilding" in raised.detail
+    assert len(closed) == 1
+
+
+def test_a_valid_incremental_update_opens_and_its_update_counts():
+    case = cases.incremental_update()
+    assert opened(case.data).visible_box(0) == tuple(float(v) for v in case.media_box)
+
+
+@pytest.mark.parametrize(
+    ("code", "kind"),
+    [
+        (pypdfium2.raw.FPDF_ERR_FORMAT, FailureKind.FORMAT),
+        (pypdfium2.raw.FPDF_ERR_PASSWORD, FailureKind.PASSWORD),
+        (pypdfium2.raw.FPDF_ERR_UNKNOWN, FailureKind.OTHER),
+        (pypdfium2.raw.FPDF_ERR_FILE, FailureKind.OTHER),
+        (pypdfium2.raw.FPDF_ERR_SECURITY, FailureKind.OTHER),
+        (pypdfium2.raw.FPDF_ERR_PAGE, FailureKind.OTHER),
+        (99, FailureKind.OTHER),
+    ],
+)
+def test_the_error_code_of_a_failed_load_gives_the_kind(monkeypatch, code, kind):
+    monkeypatch.setattr(pypdfium2.raw, "FPDF_LoadMemDocument64", lambda *args: None)
+    monkeypatch.setattr(pypdfium2.raw, "FPDF_GetLastError", lambda: code)
+    raised = failure(cases.plain_page().data)
+    assert raised.kind is kind
+    assert f"(code {code})" in raised.detail
+
+
+def test_the_backend_keeps_the_bytes_pdfium_reads_from():
+    # PDFium reads from the buffer for as long as the document is open; the
+    # caller may hold no reference of its own.
+    data = bytes(bytearray(cases.three_pages().data))
+    before = sys.getrefcount(data)
+    document = opened(data)
+    assert sys.getrefcount(data) > before
+    document.close()
+
+
+def test_a_failure_after_loading_closes_the_handle(monkeypatch):
+    closed = counting_closes(monkeypatch)
+
+    def raising(*args, **kwargs):
+        raise MemoryError
+
+    monkeypatch.setattr(pypdfium2, "PdfDocument", raising)
+    with pytest.raises(MemoryError):
+        opened(cases.plain_page().data)
+    assert len(closed) == 1
 
 
 @pytest.mark.parametrize(

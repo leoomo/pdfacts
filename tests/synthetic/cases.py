@@ -11,7 +11,18 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import partial
 
-from synthetic.builder import PageSpec, document, page_object, size_of_document, truncate
+from synthetic.builder import (
+    FIRST_PAGE,
+    FONT_OBJECT,
+    PAGE_TREE,
+    PageSpec,
+    append_update,
+    build,
+    document,
+    page_object,
+    size_of_document,
+    truncate,
+)
 from synthetic.encryption import encrypt
 
 Box = tuple[float, float, float, float]
@@ -329,4 +340,117 @@ def owner_password_only() -> Encrypted:
 ENCRYPTED: dict[str, Callable[[], Encrypted]] = {
     "user password": user_password,
     "owner password only": owner_password_only,
+}
+
+
+@dataclass(frozen=True)
+class Changed:
+    """A file made from `source` by changing or adding bytes."""
+
+    data: bytes
+    source: Pages
+
+
+def _startxref(data: bytes) -> tuple[int, int]:
+    """Where the number after the last startxref begins, and the number."""
+    start = data.rindex(b"startxref\n") + len(b"startxref\n")
+    return start, int(data[start : data.index(b"\n", start)])
+
+
+def startxref_off_by_three() -> Changed:
+    """The last startxref points three bytes behind the cross-reference table."""
+    source = plain_page()
+    start, table = _startxref(source.data)
+    end = source.data.index(b"\n", start)
+    return Changed(source.data[:start] + b"%d" % (table + 3) + source.data[end:], source)
+
+
+def line_ends_crlf() -> Changed:
+    """Every LF written as CR LF, as a text transfer does: every offset is wrong."""
+    source = plain_page()
+    return Changed(source.data.replace(b"\n", b"\r\n"), source)
+
+
+# PDFium opens these only by rebuilding the cross-reference table.
+REBUILT: dict[str, Callable[[], Changed]] = {
+    "startxref three bytes off": startxref_off_by_three,
+    "line ends CR LF": line_ends_crlf,
+}
+
+
+def junk_after_the_end() -> Changed:
+    """Bytes that are not white space after the last %%EOF."""
+    source = plain_page()
+    return Changed(source.data + b"<html>appended on the way</html>\n", source)
+
+
+def white_space_after_the_end() -> Changed:
+    """Only white space after the last %%EOF, NUL included (ISO 32000, 7.2.2)."""
+    source = plain_page()
+    return Changed(source.data + b"\r\n \t\x0c\x00\n", source)
+
+
+@dataclass(frozen=True)
+class Updated:
+    """`source` with an incremental update that gives its page another media box."""
+
+    data: bytes
+    source: Pages
+    media_box: Box
+
+
+def incremental_update() -> Updated:
+    source = plain_page()
+    media_box: Box = (0, 0, 300, 200)
+    page = b"<< /Type /Page /Parent %d 0 R /MediaBox %s " % (PAGE_TREE, box_text(media_box)) + (
+        b"/Resources << /Font << /F1 %d 0 R >> >> /Contents %d 0 R >>"
+        % (FONT_OBJECT, FIRST_PAGE + 1)
+    )
+    return Updated(append_update(source.data, {FIRST_PAGE: page}, 1), source, media_box)
+
+
+def cut_inside_the_update() -> Changed:
+    """incremental_update() cut inside the object of its update.
+
+    The last %%EOF left is the one of the source, which is complete.
+    """
+    updated = incremental_update()
+    keep = len(updated.source.data) + 20
+    return Changed(truncate(updated.data, keep=keep), updated.source)
+
+
+# Anything but white space after the last %%EOF.
+BAD_ENDS: dict[str, Callable[[], Changed]] = {
+    "junk after the end": junk_after_the_end,
+    "cut inside an incremental update": cut_inside_the_update,
+}
+
+
+@dataclass(frozen=True)
+class NoPages:
+    data: bytes
+
+
+def empty_page_tree() -> NoPages:
+    return NoPages(
+        build(
+            {1: b"<< /Type /Catalog /Pages 2 0 R >>", 2: b"<< /Type /Pages /Kids [] /Count 0 >>"}, 1
+        )
+    )
+
+
+def no_page_tree() -> NoPages:
+    return NoPages(build({1: b"<< /Type /Catalog >>"}, 1))
+
+
+def missing_page_tree() -> NoPages:
+    """The catalog names object 7 as its page tree; there is no object 7."""
+    return NoPages(build({1: b"<< /Type /Catalog /Pages 7 0 R >>"}, 1))
+
+
+# PDFium finds no page in these, and cannot tell them apart.
+NO_PAGES: dict[str, Callable[[], NoPages]] = {
+    "empty page tree": empty_page_tree,
+    "no page tree": no_page_tree,
+    "page tree missing": missing_page_tree,
 }
