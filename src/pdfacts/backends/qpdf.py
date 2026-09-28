@@ -135,8 +135,9 @@ class QpdfDocument:
                 as_written = _page_objects_as_written(unwalked)
         except BaseException:
             for view in views:
-                # The first exception is the one to report.
-                with suppress(Exception):
+                # The first exception is the one to report. MemoryError is
+                # never swallowed.
+                with suppress(EngineFailure), _translated():
                     view.close()
             for source in sources:
                 source.close()

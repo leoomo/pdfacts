@@ -1,13 +1,14 @@
 """open() and Document: the first thing a caller uses.
 
 open() classifies the input before an engine sees it, starts the runtime and
-opens the file with PDFium. It never repairs anything: a file the engine
-cannot load is damaged (docs/conventions.md, "Damaged files"). Every call into
-an engine happens while the engine lock is held.
+opens the file with PDFium. It repairs nothing: a file the engine cannot load
+as it is written is damaged (docs/conventions.md, "Damaged files"). Every call
+into an engine happens while the engine lock is held.
 """
 
 from __future__ import annotations
 
+import weakref
 from collections.abc import Callable
 from contextlib import suppress
 from types import TracebackType
@@ -28,6 +29,9 @@ from pdfacts.core.errors import (
 from pdfacts.core.limits import Limits
 
 HEADER = b"%PDF-"
+END = b"%%EOF"
+# White space as ISO 32000 defines it, 7.2.2: NUL, tab, LF, FF, CR, space.
+WHITE_SPACE = b"\x00\t\n\x0c\r "
 
 
 class Document:
@@ -41,7 +45,10 @@ class Document:
         # Use open(); this takes a backend document that is already open.
         self._pdfium = pdfium
         self._page_count = page_count
-        self._closed = False
+        # A document dropped without close() is closed under the engine lock.
+        # Otherwise pypdfium2 would close it whenever the garbage collector
+        # runs, in whichever thread, while another thread may be in PDFium.
+        self._finalizer = weakref.finalize(self, _close_quietly, pdfium)
 
     @property
     def page_count(self) -> int:
@@ -51,13 +58,12 @@ class Document:
 
     @property
     def closed(self) -> bool:
-        return self._closed
+        return not self._finalizer.alive
 
     def close(self) -> None:
         """Release the document. A second call does nothing."""
-        if self._closed:
+        if self._finalizer.detach() is None:
             return
-        self._closed = True
         with runtime.engine_lock:
             _pdfium_call(self._pdfium.close)
 
@@ -74,11 +80,17 @@ class Document:
         self.close()
 
     def _check_open(self) -> None:
-        if self._closed:
+        if self.closed:
             raise ClosedError()
 
 
-def open(data: bytes, *, password: str | None = None, limits: Limits | None = None) -> Document:  # noqa: A001
+def _close_quietly(pdfium: PdfiumDocument) -> None:
+    """Close a document nobody closed; nobody is left to hear of a failure."""
+    with runtime.engine_lock, suppress(EngineFailure):
+        pdfium.close()
+
+
+def open(data: bytes, *, password: str | None = None, limits: Limits | None = None) -> Document:
     """Open a PDF file from its bytes.
 
     The caller keeps the bytes: the facts describe exactly them, and their
@@ -106,6 +118,14 @@ def open(data: bytes, *, password: str | None = None, limits: Limits | None = No
         raise LimitExceededError(limit="max_bytes", allowed=limits.max_bytes, found=len(data))
     if HEADER not in data[:HEADER_SEARCH_BYTES]:
         raise NotPdfError()
+    # A file cut short can end in an earlier revision's cross-reference table,
+    # which PDFium then reads without a word; so can one with bytes appended.
+    end = data.rfind(END)
+    if end < 0 or data[end + len(END) :].strip(WHITE_SPACE):
+        raise DamagedFileError(
+            detail="it does not end with %%EOF and white space; it may be cut short "
+            "or have bytes appended"
+        )
 
     runtime.start()
     with runtime.engine_lock:
@@ -120,8 +140,9 @@ def open(data: bytes, *, password: str | None = None, limits: Limits | None = No
                     limit="max_pages", allowed=limits.max_pages, found=page_count
                 )
         except BaseException:
-            # The first exception is the one to report.
-            with suppress(Exception):
+            # The first exception is the one to report. MemoryError is never
+            # swallowed.
+            with suppress(EngineFailure):
                 pdfium.close()
             raise
     return Document(pdfium, page_count)

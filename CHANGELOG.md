@@ -21,9 +21,14 @@ may break callers.
   supported. The capability `FONT_POLICY_EMBEDDED_ONLY` is available.
 - `open(data, *, password=None, limits=None)` opens a PDF from its bytes and
   returns a `Document` with `page_count`, `close()`, `closed` and a context
-  manager. The input is classified before an engine sees it: `EmptyInputError`,
-  `NotPdfError`, `DamagedFileError`, `PasswordRequiredError`. Nothing is
-  repaired.
+  manager. Before an engine sees the input: `EmptyInputError` for no bytes,
+  `LimitExceededError` for more than `max_bytes`, `NotPdfError` without a
+  header, `DamagedFileError` when anything but white space follows the last
+  `%%EOF`. From PDFium: `PasswordRequiredError`, `DamagedFileError` (also when
+  it finds no page or has to rebuild the cross-reference table),
+  `EngineError`, and `LimitExceededError` for more than `max_pages`. Data that
+  is not `bytes`, a password that is not a `str` and limits that are not a
+  `Limits` raise `TypeError`. Nothing is repaired.
 - `Limits` with `max_bytes` and `max_pages`; none is set by default.
 
 ### Changed
@@ -47,6 +52,9 @@ may break callers.
 
 ### Conventions
 
+- A file counts as damaged also when anything but white space follows its
+  last `%%EOF`, when PDFium can read it only by rebuilding its cross-reference
+  table, and when PDFium finds no page in it.
 - The font policy is installed before the first document is opened, and
   `engine_info()` names it in `font_policy`, because it changes the facts.
 - The transform from user space to display space is the table under
