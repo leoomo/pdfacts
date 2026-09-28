@@ -270,14 +270,7 @@ def test_an_empty_input_is_empty_whatever_the_limits():
 
 
 def test_more_pages_than_allowed_are_refused_and_the_document_is_closed(monkeypatch):
-    closed = []
-    original = pdfium.PdfiumDocument.close
-
-    def recording(self):
-        closed.append(self)
-        return original(self)
-
-    monkeypatch.setattr(pdfium.PdfiumDocument, "close", recording)
+    closed = recording_closes(monkeypatch)
     case = cases.three_pages()
     with pytest.raises(LimitExceededError) as raised:
         pdfacts.open(case.data, limits=Limits(max_pages=2))
@@ -290,14 +283,7 @@ def test_as_many_pages_as_allowed_open():
 
 
 def test_close_twice(monkeypatch):
-    closed = []
-    original = pdfium.PdfiumDocument.close
-
-    def recording(self):
-        closed.append(self)
-        return original(self)
-
-    monkeypatch.setattr(pdfium.PdfiumDocument, "close", recording)
+    closed = recording_closes(monkeypatch)
     document = pdfacts.open(cases.plain_page().data)
     document.close()
     document.close()
@@ -416,6 +402,7 @@ def test_close_interrupted_while_waiting_for_the_lock_leaves_the_document_open(m
 
 
 def test_close_interrupted_while_the_engine_closes_is_closed_and_finished_later(monkeypatch):
+    gc.collect()  # no document of an earlier test is closed while this one runs
     document = pdfacts.open(cases.plain_page().data)
     calls = []
     original = pdfium.PdfiumDocument.close
@@ -473,7 +460,12 @@ def test_a_failure_while_making_the_document_closes_the_engine_document(monkeypa
 
 
 def recording_closes(monkeypatch, *, raising: BaseException | None = None) -> list[object]:
-    """Every close of a PDFium backend document; with `raising`, each close raises it."""
+    """Every close of a PDFium backend document; with `raising`, each close raises it.
+
+    The garbage of earlier tests is collected first: its documents would be
+    closed by their finalizers during this test and counted.
+    """
+    gc.collect()
     closed: list[object] = []
     original = pdfium.PdfiumDocument.close
 
