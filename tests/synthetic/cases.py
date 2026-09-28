@@ -21,6 +21,7 @@ from synthetic.builder import (
     document,
     page_object,
     size_of_document,
+    stream,
     truncate,
 )
 from synthetic.encryption import encrypt
@@ -419,10 +420,24 @@ def cut_inside_the_update() -> Changed:
     return Changed(truncate(updated.data, keep=keep), updated.source)
 
 
-# Anything but white space after the last %%EOF.
+def no_end_marker() -> Changed:
+    """The %%EOF of plain_page() written as %%END; every offset stays right."""
+    source = plain_page()
+    return Changed(source.data.replace(b"%%EOF", b"%%END"), source)
+
+
+def vertical_tab_after_the_end() -> Changed:
+    """A vertical tab after the last %%EOF: white space in Python, not in PDF."""
+    source = plain_page()
+    return Changed(source.data + b"\x0b", source)
+
+
+# Anything but white space after the last %%EOF, or no %%EOF at all.
 BAD_ENDS: dict[str, Callable[[], Changed]] = {
     "junk after the end": junk_after_the_end,
     "cut inside an incremental update": cut_inside_the_update,
+    "no end marker": no_end_marker,
+    "vertical tab after the end": vertical_tab_after_the_end,
 }
 
 
@@ -453,4 +468,62 @@ NO_PAGES: dict[str, Callable[[], NoPages]] = {
     "empty page tree": empty_page_tree,
     "no page tree": no_page_tree,
     "page tree missing": missing_page_tree,
+}
+
+
+def count_without_kids() -> NoPages:
+    """/Count promises one page; /Kids lists none."""
+    return NoPages(
+        build(
+            {1: b"<< /Type /Catalog /Pages 2 0 R >>", 2: b"<< /Type /Pages /Kids [] /Count 1 >>"}, 1
+        )
+    )
+
+
+def missing_kid() -> NoPages:
+    """/Kids names object 7 as the one page; there is no object 7."""
+    return NoPages(
+        build(
+            {
+                1: b"<< /Type /Catalog /Pages 2 0 R >>",
+                2: b"<< /Type /Pages /Kids [7 0 R] /Count 1 >>",
+            },
+            1,
+        )
+    )
+
+
+def page_with_kids_null() -> NoPages:
+    """Three pages, the first with /Kids null.
+
+    QPDF ignores the null value; PDFium takes the page for a node of the tree
+    without kids, so it counts three pages and finds two.
+    """
+
+    def page(box: Box, extra: bytes = b"") -> bytes:
+        return b"<< /Type /Page /Parent 2 0 R /MediaBox %s %s/Contents 9 0 R >>" % (
+            box_text(box),
+            extra,
+        )
+
+    return NoPages(
+        build(
+            {
+                1: b"<< /Type /Catalog /Pages 2 0 R >>",
+                2: b"<< /Type /Pages /Kids [4 0 R 5 0 R 6 0 R] /Count 3 >>",
+                4: page((0, 0, 400, 300), b"/Kids null "),
+                5: page((0, 0, 300, 500)),
+                6: page((0, 0, 595, 842)),
+                9: stream(b""),
+            },
+            1,
+        )
+    )
+
+
+# PDFium counts these pages but finds no page dictionary for one of them.
+MISSING_PAGES: dict[str, Callable[[], NoPages]] = {
+    "count without kids": count_without_kids,
+    "missing kid": missing_kid,
+    "page with /Kids null": page_with_kids_null,
 }

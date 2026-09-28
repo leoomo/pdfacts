@@ -391,11 +391,37 @@ def test_what_follows_the_last_end_of_file_marker():
         (cases.white_space_after_the_end, True),
         (cases.junk_after_the_end, False),
         (cases.cut_inside_the_update, False),
+        (cases.vertical_tab_after_the_end, False),
     ):
         case = make()
         assert case.data.startswith(case.source.data)
         tail = case.data[case.data.rindex(b"%%EOF") + len(b"%%EOF") :]
         assert (tail.strip(white) == b"") is only_white_space, make.__name__
+    assert cases.vertical_tab_after_the_end().data.endswith(b"%%EOF\n\x0b")
+
+
+def test_the_case_without_an_end_marker_keeps_every_offset():
+    case = cases.no_end_marker()
+    assert b"%%EOF" not in case.data
+    assert len(case.data) == len(case.source.data)
+    assert case.data.replace(b"%%END", b"%%EOF") == case.source.data
+
+
+def test_the_cases_with_a_page_that_is_not_there_are_what_their_names_say():
+    count = cases.count_without_kids().data
+    assert b"/Kids [] /Count 1" in count
+    missing = cases.missing_kid().data
+    assert b"/Kids [7 0 R] /Count 1" in missing
+    assert 7 not in table_entries(missing)
+    kids_null = cases.page_with_kids_null().data
+    assert b"/Kids [4 0 R 5 0 R 6 0 R] /Count 3" in kids_null
+    entries = table_entries(kids_null)
+    first = entries[4][0]
+    assert kids_null[first:].startswith(b"4 0 obj\n<< /Type /Page ")
+    assert b"/Kids null" in kids_null[first : kids_null.index(b"endobj", first)]
+    for number in (1, 2, 4, 5, 6, 9):
+        offset = entries[number][0]
+        assert kids_null[offset:].startswith(b"%d 0 obj" % number)
 
 
 def test_the_cut_update_ends_inside_the_object_of_its_update():

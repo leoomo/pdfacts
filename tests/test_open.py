@@ -6,6 +6,7 @@ are the numbers the cases were built from.
 
 from __future__ import annotations
 
+import contextlib
 import gc
 import json
 import subprocess
@@ -30,6 +31,7 @@ from pdfacts import (
 )
 from pdfacts.backends import pdfium
 from pdfacts.backends.protocols import EngineFailure, FailureKind
+from pdfacts.core import document as document_module
 from pdfacts.core import runtime
 from synthetic import cases
 
@@ -124,6 +126,25 @@ def test_a_file_without_pages_is_damaged(name):
     with pytest.raises(DamagedFileError) as raised:
         pdfacts.open(cases.NO_PAGES[name]().data)
     assert "no page" in raised.value.detail
+
+
+@pytest.mark.parametrize("name", list(cases.MISSING_PAGES))
+def test_a_file_with_a_page_pdfium_counts_but_cannot_find_is_damaged(name):
+    with pytest.raises(DamagedFileError) as raised:
+        pdfacts.open(cases.MISSING_PAGES[name]().data)
+    assert "no page dictionary" in raised.value.detail
+
+
+@pytest.mark.parametrize("password", ["user\x00junk", "\x00"])
+def test_a_password_with_nul_is_refused(password):
+    # PDFium would read the password only up to the NUL.
+    with pytest.raises(ValueError, match="NUL"):
+        pdfacts.open(cases.user_password().data, password=password)
+
+
+def test_a_password_that_is_not_valid_text_is_refused():
+    with pytest.raises(ValueError, match="UTF-8"):
+        pdfacts.open(cases.user_password().data, password="user\ud800")
 
 
 def test_a_file_that_ends_right_with_nothing_readable_inside_is_damaged():
@@ -275,6 +296,9 @@ def test_a_closed_document_cannot_be_entered():
 
 
 def test_a_document_nobody_closed_is_closed_under_the_engine_lock(monkeypatch):
+    # Documents other tests left to the garbage collector go first; pypdfium2
+    # closes those of the backend tests without the lock.
+    gc.collect()
     held = []
     original = pypdfium2.raw.FPDF_CloseDocument
 
@@ -287,6 +311,93 @@ def test_a_document_nobody_closed_is_closed_under_the_engine_lock(monkeypatch):
     del document
     gc.collect()
     assert held == [True]
+
+
+def test_the_finalizer_does_not_wait_for_the_lock_and_the_next_holder_closes(monkeypatch):
+    gc.collect()
+    held = []
+    original = pypdfium2.raw.FPDF_CloseDocument
+
+    def watching(handle):
+        held.append(lock_is_held())
+        return original(handle)
+
+    monkeypatch.setattr(pypdfium2.raw, "FPDF_CloseDocument", watching)
+    document = pdfacts.open(cases.plain_page().data)
+    taken, release = threading.Event(), threading.Event()
+
+    def holder():
+        with runtime.engine_lock:
+            taken.set()
+            release.wait(timeout=30)
+
+    thread = threading.Thread(target=holder, daemon=True)
+    thread.start()
+    assert taken.wait(timeout=10)
+    del document
+    gc.collect()
+    # The finalizer returned without closing: the lock was taken.
+    assert held == []
+    release.set()
+    thread.join(timeout=10)
+    # The next operation that takes the lock closes what was handed over.
+    pdfacts.open(cases.plain_page().data).close()
+    assert held == [True, True]
+
+
+def test_the_interpreter_exits_while_another_thread_holds_the_lock():
+    code = f"""
+import sys, threading, time
+sys.path.insert(0, {str(Path(__file__).resolve().parent)!r})
+from synthetic import cases
+import pdfacts
+from pdfacts.core import runtime
+document = pdfacts.open(cases.plain_page().data)
+taken = threading.Event()
+def hold():
+    with runtime.engine_lock:
+        taken.set()
+        time.sleep(3600)
+threading.Thread(target=hold, daemon=True).start()
+taken.wait()
+print("exiting")
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=60
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "exiting"
+
+
+def test_close_interrupted_while_waiting_for_the_lock_leaves_the_document_open(monkeypatch):
+    document = pdfacts.open(cases.plain_page().data)
+
+    @contextlib.contextmanager
+    def interrupted():
+        raise KeyboardInterrupt
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(runtime, "engine", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        document.close()
+    assert document.closed is False
+    monkeypatch.undo()
+    document.close()
+    assert document.closed is True
+
+
+def test_a_failure_while_making_the_document_closes_the_engine_document(monkeypatch):
+    closed = recording_closes(monkeypatch)
+    error = MemoryError()
+
+    def failing(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(document_module, "Document", failing)
+    with pytest.raises(MemoryError) as raised:
+        pdfacts.open(cases.plain_page().data)
+    assert raised.value is error
+    assert len(closed) == 1
 
 
 def recording_closes(monkeypatch, *, raising: BaseException | None = None) -> list[object]:
