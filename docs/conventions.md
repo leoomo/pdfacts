@@ -254,6 +254,7 @@ The library checks what it can check between two engine calls:
 | number of pages, number of objects | after opening, before any page is read |
 | number of items per page | while facts are collected |
 | deadline | between pages |
+| pixels of one rendering | before the engine is called |
 
 Time and memory cannot be enforced from inside a running engine call. They are
 the caller's responsibility; a separate process per document is the
@@ -273,8 +274,10 @@ count columns and rows from the top left corner. A bitmap of the region
 `(rx0, ry0, rx1, ry1)` in display space at scale s carries `display_to_pixel`,
 `Matrix(s, 0, 0, -s, -rx0·s, ry1·s)`: column = (x - rx0)·s, row = (ry1 - y)·s.
 The engine decides how it rounds the size of the bitmap and the edges of the
-region, so the matrix places a point within one pixel of where the engine
-draws it.
+region: its own transform to the pixels differs from `display_to_pixel` by
+less than one pixel, and it may snap the edges of what it fills to whole
+pixels, further off. Where the page, the region and the scale give whole
+pixels, the two transforms are the same.
 
 ## Digest
 

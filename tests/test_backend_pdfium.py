@@ -538,19 +538,46 @@ def test_an_exception_while_rendering_is_an_other_failure(monkeypatch):
     assert raised.value.kind is FailureKind.OTHER
 
 
-def test_the_engines_bitmap_is_freed_before_render_returns(monkeypatch):
-    freed = []
-    original = pypdfium2.PdfBitmap.close
+def test_every_bitmap_pdfium_makes_is_destroyed_before_render_returns(monkeypatch):
+    made, destroyed = [], []
+    create, destroy = pypdfium2.raw.FPDFBitmap_CreateEx, pypdfium2.raw.FPDFBitmap_Destroy
 
-    def counting(self, *args, **kwargs):
-        freed.append(self)
-        return original(self, *args, **kwargs)
+    def counting_create(*args):
+        made.append(args)
+        return create(*args)
 
-    monkeypatch.setattr(pypdfium2.PdfBitmap, "close", counting)
-    render(opened(cases.one_rectangle().data), 0)
-    assert len(freed) == 1
+    def counting_destroy(*args):
+        destroyed.append(args)
+        return destroy(*args)
+
+    monkeypatch.setattr(pypdfium2.raw, "FPDFBitmap_CreateEx", counting_create)
+    monkeypatch.setattr(pypdfium2.raw, "FPDFBitmap_Destroy", counting_destroy)
+    document = opened(cases.one_rectangle().data)
+    for rgb in (False, True, False):
+        render(document, 0, crop=(40, 30, 279, 230), rgb=rgb)
+        assert len(destroyed) == len(made)
+    assert len(made) == 3
+
+
+def test_the_page_at_a_scale_beyond_what_pdfium_addresses_is_a_value_error():
+    # 400 x 300 units at scale 10**7: 4 * 10**9 pixels wide, more than a C int
+    # holds. The crop leaves 100 x 100, so that nothing large is allocated.
+    crop = (0, 0, 399.99999, 299.99999)
+    with pytest.raises(ValueError, match="more than PDFium addresses"):
+        render(opened(cases.one_rectangle().data), 0, scale=10**7, crop=crop)
 
 
 def test_it_implements_the_renderer():
     assert typing.get_protocol_members(Renderer) == {"render"}
     assert callable(PdfiumDocument.render)
+
+
+@pytest.mark.parametrize("rgb", [False, True])
+def test_rows_are_packed_and_the_bytes_are_the_same_each_time(rgb):
+    # 81 pixels: a row PDFium would pad to four bytes is not a multiple of four.
+    document = opened(cases.one_rectangle().data)
+    bitmaps = [render(document, 0, crop=(40, 30, 279, 230), rgb=rgb) for _ in range(3)]
+    assert {(bitmap.width, bitmap.row_length) for bitmap in bitmaps} == {
+        (81, 81 * (3 if rgb else 1))
+    }
+    assert len({bitmap.data for bitmap in bitmaps}) == 1

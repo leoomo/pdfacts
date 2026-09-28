@@ -24,12 +24,14 @@ from pdfacts import (
     Bitmap,
     ClosedError,
     Colour,
+    EngineError,
     LimitExceededError,
     Limits,
     Matrix,
     Rect,
 )
 from pdfacts.backends import pdfium as pdfium_backend
+from pdfacts.backends.protocols import EngineFailure, FailureKind
 from pdfacts.core import runtime
 from synthetic import cases
 
@@ -152,9 +154,17 @@ def test_a_region_on_a_rotated_page_is_dark_where_to_display_puts_the_rectangle(
     )
 
 
-def test_a_region_partly_outside_is_cut_to_the_page():
-    bitmap = first_page(cases.one_rectangle().data).render(region=Rect(350, 250, 500, 400))
-    assert bitmap.region == Rect(350, 250, 400, 300)
+@pytest.mark.parametrize(
+    ("region", "inside"),
+    [
+        (Rect(350, 250, 500, 400), Rect(350, 250, 400, 300)),
+        (Rect(-50, -50, 50, 50), Rect(0, 0, 50, 50)),
+    ],
+    ids=["at the top right", "at the bottom left"],
+)
+def test_a_region_partly_outside_is_cut_to_the_page(region, inside):
+    bitmap = first_page(cases.one_rectangle().data).render(region=region)
+    assert bitmap.region == inside
     assert (bitmap.width, bitmap.height) == (50, 50)
 
 
@@ -162,12 +172,24 @@ def test_a_region_partly_outside_is_cut_to_the_page():
     "region",
     [
         Rect(500, 500, 600, 600),
+        Rect(-200, -200, -100, -100),
         Rect(400, 0, 500, 300),
         Rect(0, 300, 400, 400),
+        Rect(-100, 0, 0, 300),
+        Rect(0, -100, 400, 0),
         Rect(100, 100, 100, 200),
         Rect(100, 100, 200, 100),
     ],
-    ids=["outside", "touching the right edge", "touching the top", "no width", "no height"],
+    ids=[
+        "outside at the top right",
+        "outside at the bottom left",
+        "touching the right edge",
+        "touching the top",
+        "touching the left edge",
+        "touching the bottom",
+        "no width",
+        "no height",
+    ],
 )
 def test_a_region_without_area_on_the_page_is_refused_before_the_engine(monkeypatch, region):
     calls = recording_renders(monkeypatch)
@@ -188,6 +210,8 @@ def test_a_region_without_area_on_the_page_is_refused_before_the_engine(monkeypa
         (lambda: cases.rotated(90), Rect(40, 30, 120, 70), 1, Colour.GREY),
         (lambda: cases.rotated(270), None, 2, Colour.GREY),
         (cases.crop_box_inside, None, 1, Colour.GREY),
+        (cases.one_rectangle, Rect(40, 30, 500, 400), 2, Colour.GREY),
+        (cases.one_rectangle, Rect(-50, -50, 120, 70), 1, Colour.GREY),
     ],
     ids=[
         "whole page",
@@ -198,6 +222,8 @@ def test_a_region_without_area_on_the_page_is_refused_before_the_engine(monkeypa
         "region, rotation 90",
         "rotation 270, scale 2",
         "crop box",
+        "region partly outside at the top right, scale 2",
+        "region partly outside at the bottom left",
     ],
 )
 def test_display_to_pixel_maps_the_rectangle_onto_the_dark_area(make, region, scale, colour):
@@ -377,17 +403,64 @@ def test_a_render_asked_for_while_the_document_closes_is_refused_as_closed(monke
     assert isinstance(outcome, ClosedError)
 
 
-def test_a_scale_that_gives_no_finite_size_in_pixels_is_a_value_error(monkeypatch):
-    calls = recording_renders(monkeypatch)
-    page = first_page(cases.one_rectangle().data, Limits(max_render_pixels=10))
-    with pytest.raises(ValueError, match="finite size"):
-        page.render(1e307)
-    assert calls == []
-
-
 def test_a_closed_page_is_refused_before_its_arguments_are_looked_at():
     document = pdfacts.open(cases.one_rectangle().data)
     page = document.pages[0]
     document.close()
     with pytest.raises(ClosedError):
         page.render(0, region=(1, 2, 3, 4), colour="cmyk")  # type: ignore[arg-type]
+
+
+def test_a_failure_of_the_engine_is_an_engine_error(monkeypatch):
+    def failing(self, index, **kwargs):
+        raise EngineFailure(FailureKind.OTHER, "render failed")
+
+    page = first_page(cases.one_rectangle().data)
+    monkeypatch.setattr(pdfium_backend.PdfiumDocument, "render", failing)
+    with pytest.raises(EngineError) as raised:
+        page.render()
+    assert (raised.value.engine, raised.value.detail) == ("pdfium", "render failed")
+
+
+@pytest.mark.parametrize(("allowed", "refused"), [(81 * 41 - 1, True), (81 * 41, False)])
+def test_the_pixel_limit_counts_each_side_rounded_up(allowed, refused):
+    # 80.5 x 40.2 units at scale 1: 81 x 41 pixels by decision 8.
+    page = first_page(cases.one_rectangle().data, Limits(max_render_pixels=allowed))
+    region = Rect(40, 30, 120.5, 70.2)
+    if refused:
+        with pytest.raises(LimitExceededError) as raised:
+            page.render(region=region)
+        assert raised.value.found == 81 * 41
+    else:
+        assert page.render(region=region).region == region
+
+
+@pytest.mark.parametrize(
+    ("scale", "region"),
+    [(1e307, None), (1e306, Rect(50, 40, 51, 41))],
+    ids=["page", "small region"],
+)
+def test_a_scale_at_which_the_page_has_no_finite_size_is_refused_before_the_engine(
+    monkeypatch, scale, region
+):
+    # The engine scales the whole page, not only the region.
+    calls = recording_renders(monkeypatch)
+    page = first_page(cases.one_rectangle().data)
+    with pytest.raises(ValueError, match="finite size"):
+        page.render(scale, region=region)
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("make", "scale"),
+    [(cases.one_rectangle, 10**7), (lambda: cases.rotated(90), 6 * 10**6)],
+    ids=["too wide", "too high"],
+)
+def test_a_scale_at_which_the_page_is_more_pixels_than_the_engine_addresses_is_a_value_error(
+    make, scale
+):
+    # A side of more than 2**31 - 1 pixels, more than a C int holds: 400
+    # units at 10**7, or 400 units high at 6 * 10**6 on the turned page, whose
+    # width, 300 units, stays within. The region stays small.
+    with pytest.raises(ValueError, match="more than PDFium addresses"):
+        first_page(make().data).render(scale, region=Rect(50, 40, 50.0001, 40.0001))

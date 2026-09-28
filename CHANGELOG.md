@@ -31,8 +31,8 @@ may break callers.
   password that is not a `str` and limits that are not a `Limits` raise
   `TypeError`; a password with NUL or one that cannot be written as UTF-8
   raises `ValueError`. Nothing is repaired.
-- `Limits` with `max_bytes`, `max_pages`, `max_objects` and
-  `deadline_seconds`; none is set by default. `max_objects` raises
+- `Limits` with `max_bytes`, `max_pages`, `max_objects`, `deadline_seconds`
+  and `max_render_pixels`; none is set by default. `max_objects` raises
   `LimitUncheckedError` when the object count is unknown; the deadline counts
   from the start of `open()` and is checked before each page is read.
 - Pages: `Document.pages` (length, an index from 0, iteration; no slices, no
@@ -52,9 +52,12 @@ may break callers.
   space and `display_to_pixel`. `region` is in user space and is cut to the
   page; a region without area on the page, or of which less than a pixel is
   left, raises `ValueError`, and so does a scale that is not finite and above
-  0. `Colour` is `GREY` or `RGB`, red, green, blue. `Limits.max_render_pixels`
-  is checked before the engine is called. The bitmap holds a copy of the
-  bytes, not the engine's memory. The capability `RENDERING` is available.
+  0, or at which the page is more pixels than the engine addresses. A scale
+  that is not a number and a region that is not a `Rect` raise `TypeError`.
+  `Colour` is `GREY` or `RGB`, red, green, blue, given as a member or by its
+  value. `Limits.max_render_pixels` is checked before the engine is called.
+  The bitmap holds a copy of the bytes, and the engine's bitmap is freed. The
+  capability `RENDERING` is available.
 
 ### Changed
 
@@ -108,8 +111,9 @@ may break callers.
 - A region to render is given in user space and cut to the displayed page.
   Pixel coordinates count from the top left corner; `display_to_pixel` is
   `Matrix(s, 0, 0, -s, -rx0·s, ry1·s)` for the region `(rx0, ry0, rx1, ry1)` in
-  display space at scale s, and places a point within one pixel of where the
-  engine draws it.
+  display space at scale s. The engine's own transform differs from it by less
+  than one pixel, and the edges it fills may snap to whole pixels. The pixels
+  of one rendering are a limit, checked before the engine is called.
 - There are two coordinate spaces, user and display. There is no third space
   with y pointing downwards.
 - The digest is a tool under `bench/`, not part of the public interface.
