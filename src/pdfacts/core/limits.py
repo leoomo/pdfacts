@@ -24,6 +24,10 @@ class Limits:
     max_objects: int | None = None
     # Seconds from the start of open(); checked before each page is read.
     deadline_seconds: int | float | None = None
+    # Pixels of one rendering, counted from the region and the scale; checked
+    # before the engine is called. Memory grows with the square of the scale,
+    # and a running engine call cannot be stopped.
+    max_render_pixels: int | None = None
 
     def __post_init__(self) -> None:
         for field in fields(self):

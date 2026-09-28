@@ -14,7 +14,7 @@ from typing import TypeVar
 import pypdfium2
 import pypdfium2.raw as pdfium_c
 
-from pdfacts.backends.protocols import Box, EngineFailure, FailureKind
+from pdfacts.backends.protocols import Box, EngineFailure, FailureKind, RawBitmap
 
 T = TypeVar("T")
 
@@ -121,7 +121,7 @@ def _check_index(index: int, count: int) -> None:
 
 
 class PdfiumDocument:
-    """A document opened by PDFium: a GeometryReader.
+    """A document opened by PDFium: a GeometryReader and a Renderer.
 
     It holds the native handle; no method returns a pypdfium2 object. A page is
     opened for one call and closed before the call returns.
@@ -206,6 +206,26 @@ class PdfiumDocument:
         """0, 90, 180 or 270; PDFium brings other values into that form."""
         return self._read_page(index, lambda page: int(page.get_rotation()))
 
+    def render(
+        self, index: int, *, scale: float, crop: tuple[float, float, float, float], rgb: bool
+    ) -> RawBitmap:
+        """The page at `scale` pixels per unit, without what `crop` cuts off.
+
+        `scale` is finite and above 0, and `crop` is not negative; the core
+        makes sure. The page's own rotation is applied, and forms and
+        annotations are drawn as PDFium draws them by default. Width and height
+        are what pypdfium2 makes of the page size, the scale and the crop. The
+        pixels are copied before its bitmap is freed.
+
+        ValueError when less than one pixel is left after the crop.
+        """
+        rendered = self._read_page(index, lambda page: _rendered(page, scale, crop, rgb))
+        if rendered is None:
+            raise ValueError(
+                f"at scale {scale}, less than one pixel is left of the page after the crop {crop}"
+            )
+        return rendered
+
     def close(self) -> None:
         """Close the document. A further call does nothing but finish this one.
 
@@ -247,6 +267,31 @@ def _check_as_written(raw: pdfium_c.FPDF_DOCUMENT) -> None:
             FailureKind.FORMAT,
             "PDFium could read the document only by rebuilding its cross-reference table",
         )
+
+
+def _rendered(
+    page: pypdfium2.PdfPage, scale: float, crop: tuple[float, float, float, float], rgb: bool
+) -> RawBitmap | None:
+    """The page drawn and copied; None when pypdfium2 leaves no pixel.
+
+    pypdfium2 raises ValueError when less than one pixel is left after the
+    crop, before it makes a bitmap; for the options used here it has no
+    other. RGB is PDFium's BGR with the byte order reversed.
+    """
+    try:
+        bitmap = page.render(scale=scale, crop=crop, grayscale=not rgb, rev_byteorder=rgb)
+    except ValueError:
+        return None
+    try:
+        return RawBitmap(
+            width=bitmap.width,
+            height=bitmap.height,
+            row_length=bitmap.stride,
+            channels=bitmap.n_channels,
+            data=bytes(bitmap.buffer),
+        )
+    finally:
+        bitmap.close()
 
 
 def _bounding_box(page: pypdfium2.PdfPage) -> Box:

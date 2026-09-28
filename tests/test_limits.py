@@ -9,13 +9,19 @@ import pytest
 import pdfacts
 from pdfacts import Limits
 
-COUNTS = ["max_bytes", "max_pages", "max_objects"]
+COUNTS = ["max_bytes", "max_pages", "max_objects", "max_render_pixels"]
 
 
 def test_every_limit_is_off_by_default():
     limits = Limits()
-    assert [getattr(limits, field.name) for field in dataclasses.fields(limits)] == [None] * 4
-    assert [field.name for field in dataclasses.fields(limits)] == [*COUNTS, "deadline_seconds"]
+    assert [getattr(limits, field.name) for field in dataclasses.fields(limits)] == [None] * 5
+    assert [field.name for field in dataclasses.fields(limits)] == [
+        "max_bytes",
+        "max_pages",
+        "max_objects",
+        "deadline_seconds",
+        "max_render_pixels",
+    ]
 
 
 def test_limits_are_given_by_name():
@@ -30,8 +36,13 @@ def test_limits_cannot_be_changed():
 
 
 def test_a_positive_whole_number_is_a_limit():
-    limits = Limits(max_bytes=1, max_pages=3, max_objects=10**12)
-    assert (limits.max_bytes, limits.max_pages, limits.max_objects) == (1, 3, 10**12)
+    limits = Limits(max_bytes=1, max_pages=3, max_objects=10**12, max_render_pixels=7)
+    assert (limits.max_bytes, limits.max_pages, limits.max_objects, limits.max_render_pixels) == (
+        1,
+        3,
+        10**12,
+        7,
+    )
 
 
 @pytest.mark.parametrize("value", [1, 0.25, 10**400])

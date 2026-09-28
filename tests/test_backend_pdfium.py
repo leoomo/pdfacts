@@ -9,13 +9,20 @@ from __future__ import annotations
 import ctypes
 import sys
 import typing
+from functools import partial
 
 import pypdfium2
 import pypdfium2.raw
 import pytest
 
 from pdfacts.backends.pdfium import PdfiumDocument
-from pdfacts.backends.protocols import EngineFailure, FailureKind, GeometryReader
+from pdfacts.backends.protocols import (
+    EngineFailure,
+    FailureKind,
+    GeometryReader,
+    RawBitmap,
+    Renderer,
+)
 from pdfium_handles import watch
 from synthetic import cases
 
@@ -50,6 +57,17 @@ def plain(value: object) -> bool:
 def counting_closes(monkeypatch) -> list[int]:
     """The handles this test loads that PDFium is asked to close, from now on."""
     return watch(monkeypatch).freed
+
+
+def render(
+    document: PdfiumDocument,
+    index: int,
+    *,
+    scale: float = 1,
+    crop: tuple[float, float, float, float] = (0, 0, 0, 0),
+    rgb: bool = False,
+) -> RawBitmap:
+    return document.render(index, scale=scale, crop=crop, rgb=rgb)
 
 
 def test_the_page_count_of_three_pages():
@@ -166,6 +184,7 @@ def every_method_refuses(document: PdfiumDocument) -> None:
         document.check_pages,
         lambda: document.visible_box(0),
         lambda: document.rotation(0),
+        lambda: render(document, 0),
     ]
     for call in calls:
         with pytest.raises(EngineFailure) as raised:
@@ -346,7 +365,7 @@ def test_a_file_with_only_an_owner_password_opens():
 @pytest.mark.parametrize("index", [-1, 3])
 def test_an_index_outside_the_pages_is_an_index_error(index):
     document = opened(cases.three_pages().data)
-    for method in (document.visible_box, document.rotation):
+    for method in (document.visible_box, document.rotation, partial(render, document)):
         with pytest.raises(IndexError):
             method(index)
 
@@ -354,7 +373,7 @@ def test_an_index_outside_the_pages_is_an_index_error(index):
 @pytest.mark.parametrize("index", [True, 1.0, "1"])
 def test_an_index_that_is_not_an_int_is_a_type_error(index):
     document = opened(cases.three_pages().data)
-    for method in (document.visible_box, document.rotation):
+    for method in (document.visible_box, document.rotation, partial(render, document)):
         with pytest.raises(TypeError):
             method(index)
 
@@ -385,7 +404,8 @@ def test_a_page_is_closed_before_the_method_returns(monkeypatch):
     document = opened(cases.three_pages().data)
     document.visible_box(1)
     document.rotation(2)
-    assert len(opened_pages) == 2
+    render(document, 0)
+    assert len(opened_pages) == 3
     assert all(any(page is closed for closed in closed_pages) for page in opened_pages)
 
 
@@ -455,3 +475,82 @@ def test_it_implements_the_geometry_reader():
     members = typing.get_protocol_members(GeometryReader)
     assert members == {"page_count", "visible_box", "rotation", "close"}
     assert all(callable(getattr(PdfiumDocument, name)) for name in members)
+
+
+# --- rendering -----------------------------------------------------------------------
+
+
+def dark_extent(bitmap: RawBitmap) -> tuple[int, int, int, int]:
+    """First and last column, first and last row with every channel below 128."""
+    columns, rows = [], []
+    for row in range(bitmap.height):
+        for column in range(bitmap.width):
+            offset = row * bitmap.row_length + column * bitmap.channels
+            if all(value < 128 for value in bitmap.data[offset : offset + bitmap.channels]):
+                columns.append(column)
+                rows.append(row)
+    return min(columns), max(columns), min(rows), max(rows)
+
+
+def test_render_gives_plain_bytes_of_the_size_the_engine_made():
+    bitmap = render(opened(cases.one_rectangle().data), 0)
+    assert type(bitmap) is RawBitmap
+    assert type(bitmap.data) is bytes
+    assert (bitmap.width, bitmap.height, bitmap.row_length, bitmap.channels) == (400, 300, 400, 1)
+    assert len(bitmap.data) == bitmap.row_length * bitmap.height
+    assert dark_extent(bitmap) == (50, 109, 240, 259)
+
+
+@pytest.mark.parametrize(
+    ("scale", "size", "dark"),
+    [(1, (80, 40), (10, 69, 10, 29)), (3, (240, 120), (30, 209, 30, 89))],
+)
+def test_the_crop_cuts_off_each_side_of_the_displayed_page(scale, size, dark):
+    # (left, bottom, right, top) in display units before scaling (issue #12).
+    bitmap = render(opened(cases.one_rectangle().data), 0, scale=scale, crop=(40, 30, 280, 230))
+    assert (bitmap.width, bitmap.height) == size
+    assert dark_extent(bitmap) == dark
+
+
+def test_rgb_is_three_bytes_in_the_order_red_green_blue():
+    bitmap = render(opened(cases.red_rectangle().data), 0, rgb=True)
+    assert (bitmap.channels, bitmap.row_length) == (3, 1200)
+    # The middle of the rectangle: x 80, y 50; row 0 is the top.
+    offset = (300 - 50) * bitmap.row_length + 80 * 3
+    red, green, blue = bitmap.data[offset : offset + 3]
+    assert (red > 200, green < 50, blue < 50) == (True, True, True)
+
+
+def test_a_crop_that_leaves_less_than_a_pixel_is_a_value_error():
+    with pytest.raises(ValueError, match="less than one pixel"):
+        render(opened(cases.one_rectangle().data), 0, crop=(50, 0, 349.6, 0))
+
+
+def test_an_exception_while_rendering_is_an_other_failure(monkeypatch):
+    document = opened(cases.one_rectangle().data)
+
+    def raising(*args, **kwargs):
+        raise ctypes.ArgumentError("wrong argument")
+
+    monkeypatch.setattr(pypdfium2.PdfPage, "render", raising)
+    with pytest.raises(EngineFailure) as raised:
+        render(document, 0)
+    assert raised.value.kind is FailureKind.OTHER
+
+
+def test_the_engines_bitmap_is_freed_before_render_returns(monkeypatch):
+    freed = []
+    original = pypdfium2.PdfBitmap.close
+
+    def counting(self, *args, **kwargs):
+        freed.append(self)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(pypdfium2.PdfBitmap, "close", counting)
+    render(opened(cases.one_rectangle().data), 0)
+    assert len(freed) == 1
+
+
+def test_it_implements_the_renderer():
+    assert typing.get_protocol_members(Renderer) == {"render"}
+    assert callable(PdfiumDocument.render)
