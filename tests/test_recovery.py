@@ -411,11 +411,20 @@ def with_length(data: bytes, number: int, length: int) -> bytes:
     return data[:start] + b"/Length %d" % length + data[end:]
 
 
-def test_the_warnings_qpdf_gives_while_writing_are_among_them():
-    # QPDF reads a stream only when it writes it, and finds the length wrong.
-    case = cases.three_pages()
-    last_content = case.page_objects[-1] + 1
-    result = pdfacts.recover(with_length(case.data, last_content, 99))
+@pytest.mark.parametrize("encrypted", [False, True], ids=["plain", "encrypted"])
+def test_a_wrong_stream_length_is_among_the_warnings(encrypted):
+    # QPDF reads a stream when it meets it, at the latest when it writes it,
+    # and finds the length wrong. Nothing else reads an encrypted file's
+    # streams before the save.
+    if encrypted:
+        case = cases.user_password()
+        # The content stream's /Length; two digits for two, so that no offset moves.
+        assert case.data.count(b"/Length 48 ") == 1
+        data, password = case.data.replace(b"/Length 48 ", b"/Length 99 "), case.user_password
+    else:
+        plain = cases.three_pages()
+        data, password = with_length(plain.data, plain.page_objects[-1] + 1, 99), None
+    result = pdfacts.recover(data, password=password)
     assert any("recovered stream length" in warning for warning in result.warnings)
 
 
