@@ -93,7 +93,8 @@ class Page:
         `region` is in user space, like every fact; None is the whole visible
         page. The region is cut to the page; one without area on the page
         raises ValueError, and nothing is rendered for it. So does one of which
-        less than a pixel is left at this scale.
+        less than a pixel is left at this scale, and a scale at which the page
+        is more pixels than the engine addresses.
 
         LimitExceededError when the pixels, counted from the region and the
         scale, exceed max_render_pixels; the engine is not called then. Memory
@@ -104,10 +105,10 @@ class Page:
         colour = Colour(colour)
         width, height = self._geometry.width, self._geometry.height
         shown = self._shown(region)
-        columns, rows = shown.width * scale, shown.height * scale
-        if not (math.isfinite(columns) and math.isfinite(rows)):
-            raise ValueError(f"at scale {scale} the region {shown} has no finite size in pixels")
-        pixels = math.ceil(columns) * math.ceil(rows)
+        # The engine scales the whole page before it cuts the region out.
+        if not (math.isfinite(width * scale) and math.isfinite(height * scale)):
+            raise ValueError(f"at scale {scale} the page has no finite size in pixels")
+        pixels = math.ceil(shown.width * scale) * math.ceil(shown.height * scale)
         allowed = self._document._max_render_pixels
         if allowed is not None and pixels > allowed:
             raise LimitExceededError(limit="max_render_pixels", allowed=allowed, found=pixels)
