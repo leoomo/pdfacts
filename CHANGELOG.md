@@ -19,6 +19,12 @@ may break callers.
 - The runtime: `configure(font_policy=...)` and `FontPolicy`. The policy
   "embedded-only" ignores fonts installed on the host; "host" exists and is not
   supported. The capability `FONT_POLICY_EMBEDDED_ONLY` is available.
+- `open(data, *, password=None, limits=None)` opens a PDF from its bytes and
+  returns a `Document` with `page_count`, `close()`, `closed` and a context
+  manager. The input is classified before an engine sees it: `EmptyInputError`,
+  `NotPdfError`, `DamagedFileError`, `PasswordRequiredError`. Nothing is
+  repaired.
+- `Limits` with `max_bytes` and `max_pages`; none is set by default.
 
 ### Changed
 
