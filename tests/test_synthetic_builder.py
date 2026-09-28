@@ -487,6 +487,21 @@ def test_the_linearized_case_without_a_first_page_trailer_has_one_table():
         assert pdf.get_warnings() == []
 
 
+def test_the_update_in_a_cross_reference_stream_points_at_its_objects():
+    case = cases.update_in_a_cross_reference_stream()
+    data = case.data
+    table = int(re.findall(rb"startxref\n(\d+)", data)[-1])
+    assert data[table:].startswith(b"7 0 obj\n<< /Type /XRef ")
+    earlier = int(re.findall(rb"startxref\n(\d+)", case.source.data)[-1])
+    assert b"/Prev %d " % earlier in data[table:]
+    start = data.index(b"stream\n", table) + len(b"stream\n")
+    entries = data[start : start + 12]
+    offsets = [int.from_bytes(entries[at + 1 : at + 5], "big") for at in (0, 6)]
+    assert data[offsets[0] :].startswith(b"4 0 obj\n<< /Type /Page ")
+    assert offsets[1] == table
+    assert entries[0] == entries[6] == 1
+
+
 def test_the_cases_without_pages_are_what_their_names_say():
     empty = cases.empty_page_tree().data
     assert b"/Kids [] /Count 0" in empty
