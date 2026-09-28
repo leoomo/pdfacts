@@ -11,9 +11,13 @@ from dataclasses import dataclass
 import pypdfium2
 import pypdfium2.raw as pdfium_c
 
-# The font info installed by install_font_policy(). PDFium keeps a pointer to
-# it, so it has to stay referenced for the life of the process.
-_FONT_INFO: pdfium_c.FPDF_SYSFONTINFO | None = None
+# Every font info handed to PDFium by install_font_policy(). PDFium keeps a
+# pointer to the last one, so none may ever be freed: the list is never
+# cleared. It has more than one entry only when an exception interrupted an
+# installation and it was repeated.
+_FONT_INFOS: list[pdfium_c.FPDF_SYSFONTINFO] = []
+# True once FPDF_SetSystemFontInfo has returned.
+_font_policy_installed = False
 
 
 @dataclass(frozen=True)
@@ -49,19 +53,16 @@ def install_font_policy(policy: str) -> None:
     callbacks safe. An engine upgrade has to check it again. Any version other
     than 1 or 2 is ignored without an error.
     """
-    global _FONT_INFO
+    global _font_policy_installed
     if policy != "embedded-only":
         raise ValueError(f"unknown font policy {policy!r}")
-    if _FONT_INFO is not None:
+    if _font_policy_installed:
         return
     info = pdfium_c.FPDF_SYSFONTINFO()
     info.version = 1
-    # Referenced before PDFium gets the pointer, so that an interrupt between
-    # the two statements cannot leave PDFium holding freed memory.
-    _FONT_INFO = info
-    try:
-        pdfium_c.FPDF_SetSystemFontInfo(ctypes.byref(info))
-    except Exception:
-        # ctypes refused the call, so PDFium never saw the pointer.
-        _FONT_INFO = None
-        raise
+    # Kept before PDFium gets the pointer and never dropped. An exception, for
+    # example from a signal handler, can arrive just before the call or just
+    # after it, and after it PDFium holds the pointer.
+    _FONT_INFOS.append(info)
+    pdfium_c.FPDF_SetSystemFontInfo(ctypes.byref(info))
+    _font_policy_installed = True

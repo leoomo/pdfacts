@@ -41,6 +41,8 @@ may break callers.
 
 ### Conventions
 
+- The font policy is installed before the first document is opened, and
+  `engine_info()` names it in `font_policy`, because it changes the facts.
 - The transform from user space to display space is the table under
   "Coordinate spaces"; display space is measured in user space units, and
   `UserUnit` does not scale it.
