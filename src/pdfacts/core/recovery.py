@@ -52,9 +52,9 @@ def recover(data: bytes, *, password: str | None = None, limits: Limits | None =
     when an engine fails otherwise.
 
     A file that does not end with %%EOF is rebuilt from its objects, unless
-    a startxref near its end, with an offset that something follows, has no
-    object after it: QPDF would read an update cut short as the earlier
-    revision without a word. An update cut after its objects is kept; an
+    its last startxref is whole, with an offset that something follows, and
+    no object comes after it: QPDF would read an update cut short as the
+    earlier revision without a word. An update cut after its objects is kept; an
     object of it cut after its `obj` keyword is lost, its earlier version
     included, and where the pages need it QPDF fails; an update cut before
     the `obj` of its first object leaves nothing of it. QPDF cannot rebuild

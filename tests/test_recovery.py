@@ -634,6 +634,20 @@ def test_an_update_cut_after_its_startxref_is_kept(kept):
     assert (box.x0, box.y0, box.x1, box.y1) == updated.media_box
 
 
+@pytest.mark.parametrize("written", [b"startxref%d\n", b"startxref\n%dabc\n"])
+def test_an_update_whose_last_startxref_qpdf_passes_over_is_kept(written):
+    # A startxref glued to its offset, or one whose offset other characters
+    # follow: QPDF would read the earlier revision without a word.
+    updated = cases.incremental_update()
+    start = updated.data.rindex(b"startxref")
+    table = int(updated.data[start:].split()[1])
+    result = pdfacts.recover(updated.data[:start] + written % table)
+    assert result.warnings
+    with pdfacts.open(result.data) as document:
+        box = document.pages[0].geometry.visible_box
+    assert (box.x0, box.y0, box.x1, box.y1) == updated.media_box
+
+
 def test_an_update_cut_inside_the_offset_of_its_table_is_kept():
     # The digits left name the earlier table, which QPDF would read through
     # without a word, and does while it rebuilds the file from its objects:
@@ -691,20 +705,23 @@ def test_a_file_whose_end_alone_is_damaged_is_read_as_it_is_written():
 def test_an_encrypted_file_with_object_streams_whose_end_alone_is_damaged_is_recovered():
     # QPDF cannot rebuild such a file from its objects; read through its
     # startxref it needs no rebuilding.
-    data = encrypt(cases.three_pages().data, user="", owner="owner", object_streams=True)
+    case = cases.three_pages()
+    data = encrypt(case.data, user="", owner="owner", object_streams=True)
+    assert b"/ObjStm" in data
     result = pdfacts.recover(without_its_end(data))
-    assert result.page_count == 3
+    assert result.page_count == len(case.page_objects)
     with reopened(result.data) as recovered_pdf:
         assert recovered_pdf.is_encrypted
 
 
 def test_an_update_cut_inside_an_object_the_pages_do_not_need_loses_it():
-    # The later, broken copy counts, and the earlier one is lost with it: the
-    # page keeps no content (docs/conventions.md, "Damaged files").
+    # Cut after its obj keyword, the later, broken copy counts, and the
+    # earlier one is lost with it: the page keeps no content
+    # (docs/conventions.md, "Damaged files").
     source = cases.plain_page()
     content = cases.page_object(0) + 1
     updated = cases.append_update(source.data, {content: stream(b"0 0 1 rg 0 0 10 10 re f")}, 1)
-    cut = updated[: len(source.data) + 40]
+    cut = updated[: updated.index(b"stream\n", len(source.data)) + len(b"stream\n0 0 1")]
     result = pdfacts.recover(cut)
     assert result.page_count == 1
     assert result.warnings

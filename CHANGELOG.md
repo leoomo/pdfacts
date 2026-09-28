@@ -73,8 +73,9 @@ may break callers.
   the file's objects rather than read as the earlier revision: it is kept
   where its objects are whole; an object cut after its `obj` keyword is lost,
   its earlier version included, and where the pages need it the recovery
-  fails. A file damaged only after the offset of its last `startxref` is read
-  as it is written.
+  fails. A file damaged only after the line with the offset of its last
+  `startxref` is read as it is written; an offset at the very end may be cut
+  short, and the file is rebuilt.
 - A password given for a file that needs none no longer lets pikepdf warn:
   `open()` failed to open such a file with QPDF under a filter that turns
   warnings into errors.
