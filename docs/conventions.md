@@ -216,6 +216,15 @@ These count as files the engine cannot load:
 | PDFium can read the file only by rebuilding its cross-reference table | that is a repair |
 | PDFium finds no page, or no page dictionary for one of the pages it counts | an empty page tree, a missing one and one that names no object look the same to PDFium; the count comes from `/Count` and can promise pages that are not there |
 
+A page counts as damaged when it is read, and reading it raises
+`DamagedFileError` while the other pages are read as usual, when PDFium's
+visible box for it is not finite (the file writes a number beyond what PDFium
+holds) or has no area, or when the file's media box intersected with its crop
+box has no area. PDFium puts in US letter for a flat media box and answers
+`(0, 0, 0, 0)` for a crop box outside the media box; neither is a box the file
+writes. The file's boxes are read through QPDF, so the last case is seen only
+where QPDF can read the page.
+
 Measured: every one of the 104 intact corpus files ends with `%%EOF` and white
 space, has a cross-reference table PDFium accepts as written, and has a page
 dictionary for every page. A linearized corpus form cut at 60 % opened in

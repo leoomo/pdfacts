@@ -359,13 +359,16 @@ def test_the_finalizer_does_not_wait_for_the_lock_and_the_next_holder_closes(mon
 
     thread = threading.Thread(target=holder, daemon=True)
     thread.start()
-    assert taken.wait(timeout=10)
-    del document
-    gc.collect()
-    # The finalizer returned without closing: the lock was taken.
-    assert held == []
-    release.set()
-    thread.join(timeout=10)
+    try:
+        assert taken.wait(timeout=10)
+        del document
+        gc.collect()
+        # The finalizer returned without closing: the lock was taken.
+        assert held == []
+    finally:
+        # A failure above must not keep the lock from the tests that follow.
+        release.set()
+        thread.join(timeout=10)
     # The next operation that takes the lock closes what was handed over.
     pdfacts.open(cases.plain_page().data).close()
     assert held == [True, True]
