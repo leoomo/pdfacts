@@ -794,13 +794,95 @@ def test_a_file_whose_header_follows_other_bytes_is_read_as_it_is_written(make, 
     assert result.page_count == pages
 
 
-@pytest.mark.parametrize("digits", [20, 4301])
-def test_an_offset_too_long_to_name_anything_is_no_revision(digits):
-    # Neither too large for an index nor too long for an int: no error but
-    # the library's own; the file, without a whole revision, is rebuilt.
+@pytest.mark.parametrize("zeros", [0, 1000])
+def test_an_offset_with_leading_zeros_is_read(zeros):
+    # QPDF reads it as the number it writes, where its startxref stays within
+    # QPDF's search; the zeros do not count.
+    updated = cases.incremental_update()
+    start = updated.data.rindex(b"startxref\n") + len(b"startxref\n")
+    padded = updated.data[:start] + b"0" * zeros + updated.data[start:]
+    result = pdfacts.recover(padded)
+    assert result.warnings == ()
+    with pdfacts.open(result.data) as document:
+        box = document.pages[0].geometry.visible_box
+    assert (box.x0, box.y0, box.x1, box.y1) == updated.media_box
+
+
+@pytest.mark.parametrize(
+    "written",
+    [b"startxref\n%d\x0b%%%%EOF\n", b"startxref\x0b%d\n%%%%EOF\n"],
+    ids=["after", "before"],
+)
+def test_a_vertical_tab_around_the_last_offset_is_white_space(written):
+    # As QPDF reads it (measured); PDF itself does not count it.
+    updated = cases.incremental_update()
+    start = updated.data.rindex(b"startxref")
+    table = int(updated.data[start:].split()[1])
+    result = pdfacts.recover(updated.data[:start] + written % table)
+    assert result.warnings == ()
+    with pdfacts.open(result.data) as document:
+        box = document.pages[0].geometry.visible_box
+    assert (box.x0, box.y0, box.x1, box.y1) == updated.media_box
+
+
+def ended_directly(data: bytes) -> bytes:
+    """A stream whose endstream follows its data without an end of line."""
+    return b"<< /Length %d >>\nstream\n%sendstream" % (len(data), data)
+
+
+def directly_ended_update() -> tuple[bytes, bytes, cases.Box]:
+    """A one-page file whose content stream ends in a letter directly before
+    endstream, the file with an update of its page and content, and the
+    update's media box."""
+    content = cases.rectangle_content(cases.RECTANGLE, cases.BLACK)
+    assert content.endswith(b"f")
+    source = build(
+        {
+            1: b"<< /Type /Catalog /Pages 2 0 R >>",
+            2: b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            3: b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Resources << >> "
+            b"/Contents 4 0 R >>",
+            4: ended_directly(content),
+        },
+        1,
+    )
+    box = (0, 0, 300, 200)
+    page = (
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << >> /Contents 5 0 R >>"
+    )
+    updated = cases.append_update(source, {3: page, 5: ended_directly(content)}, 1)
+    return source, updated, box
+
+
+def test_a_file_whose_stream_ends_directly_before_endstream_is_read_as_it_is_written():
+    # Six corpus files write endstream after the data without an end of line.
+    source, updated, box = directly_ended_update()
+    assert pdfacts.recover(source).warnings == ()
+    result = pdfacts.recover(updated)
+    assert result.warnings == ()
+    with pdfacts.open(result.data) as document:
+        visible = document.pages[0].geometry.visible_box
+    assert (visible.x0, visible.y0, visible.x1, visible.y1) == box
+
+
+def test_an_update_after_a_stream_ended_directly_before_endstream_is_refused_when_cut():
+    source, updated, _ = directly_ended_update()
+    cut = updated[: updated.index(b"endobj", len(source)) + len(b"endobj\n")]
+    with pytest.raises(RecoveryFailedError, match="last revision is unfinished"):
+        pdfacts.recover(cut)
+
+
+@pytest.mark.parametrize(
+    "offset",
+    [b"9" * 20, b"9" * 4301, b"0" * 5000 + b"392"],
+    ids=["20 digits", "4301 digits", "5000 leading zeros"],
+)
+def test_an_offset_too_long_for_qpdf_to_read_raises_no_other_error(offset):
+    # Neither too large for an index nor too long for an int. A file whose
+    # startxref QPDF cannot read, or cannot find behind its offset, is rebuilt.
     source = cases.plain_page().data
     start = source.rindex(b"startxref\n") + len(b"startxref\n")
-    data = source[:start] + b"9" * digits + source[source.index(b"\n", start) :]
+    data = source[:start] + offset + source[source.index(b"\n", start) :]
     assert pdfacts.recover(data).page_count == 1
 
 
