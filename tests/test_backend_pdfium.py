@@ -118,7 +118,9 @@ def test_the_backend_keeps_the_bytes_pdfium_reads_from():
     document.close()
 
 
-def test_a_failure_after_loading_closes_the_handle(monkeypatch):
+def test_a_failure_while_wrapping_the_handle_never_closes_it_twice(monkeypatch):
+    # pypdfium2 may have attached its own finalizer before it failed; closing
+    # here as well could close one handle twice. A leak is the lesser harm.
     closed = counting_closes(monkeypatch)
 
     def raising(*args, **kwargs):
@@ -127,6 +129,15 @@ def test_a_failure_after_loading_closes_the_handle(monkeypatch):
     monkeypatch.setattr(pypdfium2, "PdfDocument", raising)
     with pytest.raises(MemoryError):
         opened(cases.plain_page().data)
+    assert closed == []
+
+
+@pytest.mark.parametrize("name", list(cases.MISSING_PAGES))
+def test_a_page_pdfium_counts_but_cannot_find_is_a_format_failure(monkeypatch, name):
+    closed = counting_closes(monkeypatch)
+    raised = failure(cases.MISSING_PAGES[name]().data)
+    assert raised.kind is FailureKind.FORMAT
+    assert "no page dictionary" in raised.detail
     assert len(closed) == 1
 
 

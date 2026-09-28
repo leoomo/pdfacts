@@ -138,12 +138,15 @@ class PdfiumDocument:
     def open(cls, data: bytes, password: str | None) -> PdfiumDocument:
         """Open `data` as the file writes it.
 
-        A FORMAT failure also when PDFium finds no page, or could read the file
-        only by rebuilding its cross-reference table: that is a repair, and
-        opening repairs nothing (docs/conventions.md, "Damaged files").
+        A FORMAT failure also when PDFium could read the file only by
+        rebuilding its cross-reference table, which is a repair, and when it
+        finds no page, or no page dictionary for one of the pages it counts
+        (docs/conventions.md, "Damaged files").
 
         The document is loaded through the raw call, not through pypdfium2's
         PdfDocument, which leaves the handle of a document without pages open.
+        The handle is wrapped at once, so that pypdfium2 alone closes it: if
+        wrapping fails, the handle leaks rather than being closed twice.
         """
         secret = None if password is None else (password + "\x00").encode("utf-8")
         with _translated():
@@ -155,18 +158,11 @@ class PdfiumDocument:
                     f"PDFium could not load the document: {_ERROR_NAMES.get(code, 'error')} "
                     f"(code {code})",
                 )
+            document = pypdfium2.PdfDocument(raw)
             try:
-                if pdfium_c.FPDF_GetPageCount(raw) < 1:
-                    raise EngineFailure(FailureKind.FORMAT, "PDFium finds no page in the document")
-                if not pdfium_c.FPDF_DocumentHasValidCrossReferenceTable(raw):
-                    raise EngineFailure(
-                        FailureKind.FORMAT,
-                        "PDFium could read the document only by rebuilding its "
-                        "cross-reference table",
-                    )
-                document = pypdfium2.PdfDocument(raw)
+                _check_as_written(raw)
             except BaseException:
-                pdfium_c.FPDF_CloseDocument(raw)
+                document.close()
                 raise
         return cls(document, data)
 
@@ -210,6 +206,28 @@ class PdfiumDocument:
                 return read(page)
             finally:
                 page.close()
+
+
+def _check_as_written(raw: pdfium_c.FPDF_DOCUMENT) -> None:
+    """A FORMAT failure unless PDFium reads the document without repairing it."""
+    count = pdfium_c.FPDF_GetPageCount(raw)
+    if count < 1:
+        raise EngineFailure(FailureKind.FORMAT, "PDFium finds no page in the document")
+    if not pdfium_c.FPDF_DocumentHasValidCrossReferenceTable(raw):
+        raise EngineFailure(
+            FailureKind.FORMAT,
+            "PDFium could read the document only by rebuilding its cross-reference table",
+        )
+    # The page count comes from /Count and can promise pages that are not
+    # there. The size is read from the page dictionary without loading the
+    # page.
+    size = pdfium_c.FS_SIZEF()
+    for index in range(count):
+        if not pdfium_c.FPDF_GetPageSizeByIndexF(raw, index, size):
+            raise EngineFailure(
+                FailureKind.FORMAT,
+                f"PDFium finds no page dictionary for page {index} of the {count} it counts",
+            )
 
 
 def _bounding_box(page: pypdfium2.PdfPage) -> Box:

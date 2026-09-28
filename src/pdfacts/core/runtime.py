@@ -10,6 +10,8 @@ between documents is the caller's job.
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from enum import StrEnum
 
 from pdfacts.backends import pdfium
@@ -25,8 +27,38 @@ class FontPolicy(StrEnum):
 
 
 # Every call into an engine, PDFium or QPDF, happens while this is held. The
-# backends do not take it; the core does, once per operation.
+# backends do not take it; the core does, once per operation, through engine().
 engine_lock = threading.RLock()
+
+# Closes that a finalizer could not run because another thread held the lock.
+_deferred: list[Callable[[], None]] = []
+
+
+@contextmanager
+def engine() -> Iterator[None]:
+    """Hold the engine lock; first run the closes finalizers handed over."""
+    with engine_lock:
+        while _deferred:
+            _deferred.pop()()
+        yield
+
+
+def close_soon(close: Callable[[], None]) -> None:
+    """Run `close` under the engine lock now if it is free, or hand it over.
+
+    For finalizers, which must not wait for a lock: the garbage collector may
+    run them in any thread, and at exit a daemon thread may hold the lock for
+    ever. The next holder of engine() runs what was handed over. `close` must
+    not raise.
+    """
+    if engine_lock.acquire(blocking=False):
+        try:
+            close()
+        finally:
+            engine_lock.release()
+    else:
+        _deferred.append(close)
+
 
 _requested = FontPolicy.EMBEDDED_ONLY
 _active: FontPolicy | None = None

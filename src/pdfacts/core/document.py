@@ -45,10 +45,12 @@ class Document:
         # Use open(); this takes a backend document that is already open.
         self._pdfium = pdfium
         self._page_count = page_count
-        # A document dropped without close() is closed under the engine lock.
+        # A document dropped without close() is closed under the engine lock,
+        # or handed to the next holder of the lock (runtime.close_soon).
         # Otherwise pypdfium2 would close it whenever the garbage collector
         # runs, in whichever thread, while another thread may be in PDFium.
-        self._finalizer = weakref.finalize(self, _close_quietly, pdfium)
+        # At interpreter exit pypdfium2's own handler may come first.
+        self._finalizer = weakref.finalize(self, runtime.close_soon, _quiet_close(pdfium))
 
     @property
     def page_count(self) -> int:
@@ -62,9 +64,13 @@ class Document:
 
     def close(self) -> None:
         """Release the document. A second call does nothing."""
-        if self._finalizer.detach() is None:
+        if not self._finalizer.alive:
             return
-        with runtime.engine_lock:
+        # The lock first: interrupted while waiting for it, the document is
+        # still open and its finalizer still there.
+        with runtime.engine():
+            if self._finalizer.detach() is None:
+                return
             _pdfium_call(self._pdfium.close)
 
     def __enter__(self) -> Document:
@@ -84,10 +90,14 @@ class Document:
             raise ClosedError()
 
 
-def _close_quietly(pdfium: PdfiumDocument) -> None:
-    """Close a document nobody closed; nobody is left to hear of a failure."""
-    with runtime.engine_lock, suppress(EngineFailure):
-        pdfium.close()
+def _quiet_close(pdfium: PdfiumDocument) -> Callable[[], None]:
+    """The close of a document nobody closed; nobody is left to hear of a failure."""
+
+    def close() -> None:
+        with suppress(EngineFailure):
+            pdfium.close()
+
+    return close
 
 
 def open(data: bytes, *, password: str | None = None, limits: Limits | None = None) -> Document:
@@ -103,8 +113,8 @@ def open(data: bytes, *, password: str | None = None, limits: Limits | None = No
     """
     if not isinstance(data, bytes):
         raise TypeError(f"data must be bytes, not {type(data).__name__}")
-    if password is not None and not isinstance(password, str):
-        raise TypeError(f"password must be a str or None, not {type(password).__name__}")
+    if password is not None:
+        _check_password(password)
     if limits is None:
         limits = Limits()
     elif not isinstance(limits, Limits):
@@ -128,7 +138,7 @@ def open(data: bytes, *, password: str | None = None, limits: Limits | None = No
         )
 
     runtime.start()
-    with runtime.engine_lock:
+    with runtime.engine():
         try:
             pdfium = PdfiumDocument.open(data, password)
         except EngineFailure as failure:
@@ -139,13 +149,27 @@ def open(data: bytes, *, password: str | None = None, limits: Limits | None = No
                 raise LimitExceededError(
                     limit="max_pages", allowed=limits.max_pages, found=page_count
                 )
+            return Document(pdfium, page_count)
         except BaseException:
             # The first exception is the one to report. MemoryError is never
             # swallowed.
             with suppress(EngineFailure):
                 pdfium.close()
             raise
-    return Document(pdfium, page_count)
+
+
+def _check_password(password: object) -> None:
+    if not isinstance(password, str):
+        raise TypeError(f"password must be a str or None, not {type(password).__name__}")
+    # PDFium takes the password as text ending at NUL: everything after a NUL
+    # would be ignored, and "user\x00junk" would open a file whose password
+    # is "user".
+    if "\x00" in password:
+        raise ValueError("a password cannot contain NUL")
+    try:
+        password.encode("utf-8")
+    except UnicodeEncodeError:
+        raise ValueError("the password cannot be written as UTF-8") from None
 
 
 def _open_error(failure: EngineFailure, password: str | None) -> Exception:
