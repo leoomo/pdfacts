@@ -31,7 +31,18 @@ may break callers.
   password that is not a `str` and limits that are not a `Limits` raise
   `TypeError`; a password with NUL or one that cannot be written as UTF-8
   raises `ValueError`. Nothing is repaired.
-- `Limits` with `max_bytes` and `max_pages`; none is set by default.
+- `Limits` with `max_bytes`, `max_pages`, `max_objects` and
+  `deadline_seconds`; none is set by default. `max_objects` raises
+  `LimitUncheckedError` when the object count is unknown; the deadline counts
+  from the start of `open()` and is checked before each page is read.
+- Pages: `Document.pages` (length, an index from 0, iteration; no slices, no
+  negative index), `Page` with `index`, `geometry` and `ref`, and `PageRef`.
+  Geometry comes from PDFium. Object numbers, `UserUnit` and
+  `Document.object_count` come from QPDF, and are `Unknown` with the reason
+  where QPDF cannot open or read the file or the engines disagree on the
+  page count or on a page's visible box or rotation. `Document.warnings`
+  says why, and holds what QPDF reported. The capabilities `PAGE_GEOMETRY`,
+  `USER_UNIT` and `OBJECT_NUMBERS` are available.
 
 ### Changed
 
@@ -58,6 +69,9 @@ may break callers.
   space, when PDFium can read it only by rebuilding its cross-reference table,
   and when PDFium finds no page in it or no page dictionary for a page it
   counts.
+- A page counts as damaged when it is read if PDFium's visible box for it is
+  not finite or has no area, or the file's media box intersected with its
+  crop box has no area; the other pages are read as usual.
 - The font policy is installed before the first document is opened, and
   `engine_info()` names it in `font_policy`, because it changes the facts.
 - The transform from user space to display space is the table under

@@ -7,6 +7,7 @@ cannot be limited from here; a separate process per document can.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, fields
 
 
@@ -18,13 +19,22 @@ class Limits:
     max_bytes: int | None = None
     # The page count; checked as soon as PDFium has opened the file.
     max_pages: int | None = None
+    # The object count from the trailer; checked as soon as QPDF has opened
+    # the file. When the count is unknown, open() raises LimitUncheckedError.
+    max_objects: int | None = None
+    # Seconds from the start of open(); checked before each page is read.
+    deadline_seconds: int | float | None = None
 
     def __post_init__(self) -> None:
         for field in fields(self):
             value = getattr(self, field.name)
             if value is None:
                 continue
-            if not isinstance(value, int) or isinstance(value, bool):
-                raise TypeError(f"{field.name} must be an int or None, not {type(value).__name__}")
+            numbers = (int, float) if field.name == "deadline_seconds" else (int,)
+            if not isinstance(value, numbers) or isinstance(value, bool):
+                kinds = "an int or a float" if float in numbers else "an int"
+                raise TypeError(f"{field.name} must be {kinds} or None, not {type(value).__name__}")
+            if isinstance(value, float) and not math.isfinite(value):
+                raise ValueError(f"{field.name} must be finite, not {value}")
             if value <= 0:
                 raise ValueError(f"{field.name} must be greater than 0, not {value}")
