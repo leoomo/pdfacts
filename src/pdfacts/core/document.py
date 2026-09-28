@@ -45,6 +45,7 @@ class Document:
         # Use open(); this takes a backend document that is already open.
         self._pdfium = pdfium
         self._page_count = page_count
+        self._closed = False
         # A document dropped without close() is closed under the engine lock,
         # or handed to the next holder of the lock (runtime.close_soon).
         # Otherwise pypdfium2 would close it whenever the garbage collector
@@ -60,16 +61,17 @@ class Document:
 
     @property
     def closed(self) -> bool:
-        return not self._finalizer.alive
+        return self._closed
 
     def close(self) -> None:
-        """Release the document. A second call does nothing."""
+        """Release the document. A further call does nothing but finish this one."""
         if not self._finalizer.alive:
             return
-        # The finalizer stays until the engine has closed the document:
-        # interrupted before that, the document is still open and still has
-        # its finalizer.
         with runtime.engine():
+            # Closed for every use from here on, whatever happens below. The
+            # finalizer stays until the engine has closed the document, so
+            # that a close interrupted before that is still finished.
+            self._closed = True
             if not self._finalizer.alive:
                 return
             try:

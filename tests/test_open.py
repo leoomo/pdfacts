@@ -7,6 +7,7 @@ are the numbers the cases were built from.
 from __future__ import annotations
 
 import contextlib
+import ctypes
 import gc
 import json
 import subprocess
@@ -129,10 +130,22 @@ def test_a_file_without_pages_is_damaged(name):
 
 
 @pytest.mark.parametrize("name", list(cases.MISSING_PAGES))
-def test_a_file_with_a_page_pdfium_counts_but_cannot_find_is_damaged(name):
+def test_a_file_with_a_page_pdfium_counts_but_cannot_find_is_damaged(monkeypatch, name):
+    closed = recording_closes(monkeypatch)
     with pytest.raises(DamagedFileError) as raised:
         pdfacts.open(cases.MISSING_PAGES[name]().data)
     assert "no page dictionary" in raised.value.detail
+    assert len(closed) == 1
+
+
+def test_an_exception_in_the_page_check_is_an_engine_error(monkeypatch):
+    def raising(*args):
+        raise ctypes.ArgumentError("wrong argument")
+
+    monkeypatch.setattr(pypdfium2.raw, "FPDF_GetPageSizeByIndexF", raising)
+    with pytest.raises(EngineError) as raised:
+        pdfacts.open(cases.three_pages().data)
+    assert raised.value.detail == "wrong argument"
 
 
 def test_the_page_limit_is_checked_before_every_page_dictionary_is_read(monkeypatch):
@@ -412,7 +425,7 @@ def test_close_interrupted_while_waiting_for_the_lock_leaves_the_document_open(m
     assert document.closed is True
 
 
-def test_close_interrupted_while_the_engine_closes_leaves_the_document_open(monkeypatch):
+def test_close_interrupted_while_the_engine_closes_is_closed_and_finished_later(monkeypatch):
     document = pdfacts.open(cases.plain_page().data)
     calls = []
     original = pdfium.PdfiumDocument.close
@@ -426,9 +439,11 @@ def test_close_interrupted_while_the_engine_closes_leaves_the_document_open(monk
     monkeypatch.setattr(pdfium.PdfiumDocument, "close", interrupted_once)
     with pytest.raises(KeyboardInterrupt):
         document.close()
-    assert document.closed is False
-    document.close()
+    # No use from the start of close(), whatever happened during it.
     assert document.closed is True
+    with pytest.raises(ClosedError):
+        _ = document.page_count
+    document.close()
     assert len(calls) == 2
 
 
@@ -614,6 +629,7 @@ def test_every_engine_call_holds_the_engine_lock(monkeypatch):
     held = {}
     cls = pdfium.PdfiumDocument
     original_open, original_count, original_close = cls.open.__func__, cls.page_count, cls.close
+    original_check = cls.check_pages
 
     def watching_open(klass, data, password):
         held["open"] = lock_is_held()
@@ -623,17 +639,22 @@ def test_every_engine_call_holds_the_engine_lock(monkeypatch):
         held.setdefault("page_count", lock_is_held())
         return original_count(self)
 
+    def watching_check(self):
+        held["check_pages"] = lock_is_held()
+        return original_check(self)
+
     def watching_close(self):
         held["close"] = lock_is_held()
         return original_close(self)
 
     monkeypatch.setattr(cls, "open", classmethod(watching_open))
     monkeypatch.setattr(cls, "page_count", watching_count)
+    monkeypatch.setattr(cls, "check_pages", watching_check)
     monkeypatch.setattr(cls, "close", watching_close)
     document = pdfacts.open(cases.plain_page().data, limits=Limits(max_pages=5))
     assert document.page_count == 1
     document.close()
-    assert held == {"open": True, "page_count": True, "close": True}
+    assert held == {"open": True, "page_count": True, "check_pages": True, "close": True}
 
 
 def test_open_and_document_are_exported():
