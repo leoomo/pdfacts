@@ -440,6 +440,54 @@ def cut_inside_the_last_offset() -> Updated:
     return Updated(data[: start + len(b"%d" % earlier)], source, UPDATED_MEDIA_BOX)
 
 
+@dataclass(frozen=True)
+class Linearized:
+    """A one-page file laid out as a linearized one, and where its main table begins."""
+
+    data: bytes
+    main_table: int
+
+
+def linearized(*, first_page_offset: bool) -> Linearized:
+    """A one-page file with the layout of ISO 32000-1, Annex F.
+
+    A linearization dictionary, its /E the end of the first page; a
+    first-page section with its own table and a trailer whose /Prev names the
+    main table; the objects; the main table, whose startxref names the
+    first-page table. The first-page trailer's startxref is 0, or with
+    `first_page_offset` the offset of the first-page table. Hint streams are
+    left out: no engine reads them without being asked to.
+    """
+    objects = {
+        1: b"<< /Type /Catalog /Pages 2 0 R >>",
+        2: b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        3: b"<< /Type /Page /Parent 2 0 R /MediaBox %s /Resources << >> /Contents 4 0 R >>"
+        % box_text(MEDIA_BOX),
+        4: stream(rectangle_content(RECTANGLE, BLACK)),
+    }
+    # Numbers written with ten digits, so that they can be filled in once
+    # known without moving what follows.
+    out = bytearray(b"%PDF-1.7\n")
+    dictionary = len(out)
+    out += b"5 0 obj\n<< /Linearized 1 /E 0000000000 >>\nendobj\n"
+    first_table = len(out)
+    out += b"xref\n5 1\n%010d 00000 n \n" % dictionary
+    out += b"trailer\n<< /Size 6 /Root 1 0 R /Prev 0000000000 >>\n"
+    out += b"startxref\n%d\n%%%%EOF\n" % (first_table if first_page_offset else 0)
+    offsets = {}
+    for number, body in objects.items():
+        offsets[number] = len(out)
+        out += b"%d 0 obj\n%s\nendobj\n" % (number, body)
+    main_table = len(out)
+    out += b"xref\n0 5\n0000000000 65535 f \n"
+    out += b"".join(b"%010d 00000 n \n" % offsets[number] for number in objects)
+    out += b"trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % first_table
+    data = bytes(out)
+    data = data.replace(b"/E 0000000000", b"/E %010d" % main_table, 1)
+    data = data.replace(b"/Prev 0000000000", b"/Prev %010d" % main_table, 1)
+    return Linearized(data, main_table)
+
+
 def cut_inside_the_update() -> Changed:
     """incremental_update() cut inside the object of its update.
 

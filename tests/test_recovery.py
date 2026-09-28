@@ -254,13 +254,35 @@ def test_a_file_with_only_an_owner_password_stays_encrypted_and_opens_without_on
 
 
 def test_more_objects_than_allowed_are_refused():
-    result = pdfacts.recover(cases.cut_before_xref_table().data)
-    with reopened(result.data) as pdf:
-        size = int(pdf.trailer["/Size"])
+    case = cases.cut_before_xref_table()
+    # QPDF numbers the objects it writes from 1, and /Size is one more.
+    size = complete_objects(case.source.data, case.cut_at) + 1
     with pytest.raises(LimitExceededError) as raised:
-        pdfacts.recover(cases.cut_before_xref_table().data, limits=Limits(max_objects=size - 1))
+        pdfacts.recover(case.data, limits=Limits(max_objects=size - 1))
     assert (raised.value.limit, raised.value.found) == ("max_objects", size)
     limits = Limits(max_objects=size, max_pages=3)
+    assert pdfacts.recover(case.data, limits=limits).page_count == 3
+
+
+@pytest.mark.parametrize("checked", [1, 2], ids=["once rebuilt", "once checked"])
+def test_the_deadline_counts_from_the_start_of_recover(checked):
+    # The clock reads 0 at the start, then 10 at the check that counts.
+    readings = iter([0] * checked + [10])
+    with pytest.raises(LimitExceededError) as raised:
+        pdfacts.recover(
+            cases.cut_before_xref_table().data,
+            limits=Limits(deadline_seconds=5),
+            _clock=lambda: next(readings),
+        )
+    assert (raised.value.limit, raised.value.allowed, raised.value.found) == (
+        "deadline_seconds",
+        5,
+        10,
+    )
+
+
+def test_a_recovery_within_the_deadline_is_returned():
+    limits = Limits(deadline_seconds=60)
     assert pdfacts.recover(cases.cut_before_xref_table().data, limits=limits).page_count == 3
 
 
@@ -603,68 +625,44 @@ def test_a_filter_that_is_not_a_name_is_not_taken_for_encryption():
     assert pdfacts.recover(one_page_with(b"<< /Filter [/FlateDecode] /V 1 >>")).page_count == 1
 
 
-def cut_after_the_update() -> cases.Updated:
-    """incremental_update() cut after the object of its update, before its table."""
+def unfinished_updates() -> dict[str, bytes]:
+    """incremental_update() with its update left unfinished, each a way."""
     updated = cases.incremental_update()
-    end = updated.data.index(b"endobj", len(updated.source.data)) + len(b"endobj\n")
-    return dataclasses.replace(updated, data=updated.data[:end])
+    data, source = updated.data, updated.source.data
+    start = data.rindex(b"startxref")
+    table = b"%d" % int(data[start:].split()[1])
+    after_object = data.index(b"endobj", len(source)) + len(b"endobj\n")
+    cut_offset = cases.cut_inside_the_last_offset().data
+    return {
+        "cut after its object": data[:after_object],
+        "cut inside its object": cases.cut_inside_the_update().data,
+        "cut inside its table": data[: data.index(b"xref", len(source)) + len(b"xref\n4")],
+        "cut after startxref": data[: start + len(b"startxref")],
+        "cut after startxref and a line end": data[: start + len(b"startxref\n")],
+        "startxref glued to its offset": data[:start] + b"startxref" + table + b"\n",
+        "letters after the offset": data[:start] + b"startxref\n" + table + b"abc\n",
+        "glued, and %%EOF": data[:start] + b"startxref" + table + b"\n%%EOF\n",
+        "letters after the offset, and %%EOF": data[:start]
+        + b"startxref\n"
+        + table
+        + b"abc\n%%EOF\n",
+        "no offset, and %%EOF": data[:start] + b"startxref\n%%EOF\n",
+        "cut inside the offset, which names the earlier table": cut_offset,
+        "the same, a line end appended": cut_offset + b"\n",
+    }
 
 
-def test_an_update_cut_after_its_object_is_kept():
-    # QPDF would read the earlier revision through its startxref, without a
-    # word; it rebuilds the file from its objects, the later one counting.
-    case = cut_after_the_update()
-    result = pdfacts.recover(case.data)
-    assert result.warnings
-    with pdfacts.open(result.data) as document:
-        box = document.pages[0].geometry.visible_box
-    assert (box.x0, box.y0, box.x1, box.y1) == case.media_box
+UNFINISHED = unfinished_updates()
 
 
-@pytest.mark.parametrize("kept", [b"startxref", b"startxref\n"])
-def test_an_update_cut_after_its_startxref_is_kept(kept):
-    # QPDF passes over a startxref without an offset and would read the
-    # earlier revision through the one before, without a word.
-    updated = cases.incremental_update()
-    end = updated.data.rindex(b"startxref") + len(kept)
-    result = pdfacts.recover(updated.data[:end])
-    assert result.warnings
-    with pdfacts.open(result.data) as document:
-        box = document.pages[0].geometry.visible_box
-    assert (box.x0, box.y0, box.x1, box.y1) == updated.media_box
-
-
-@pytest.mark.parametrize("written", [b"startxref%d\n", b"startxref\n%dabc\n"])
-def test_an_update_whose_last_startxref_qpdf_passes_over_is_kept(written):
-    # A startxref glued to its offset, or one whose offset other characters
-    # follow: QPDF would read the earlier revision without a word.
-    updated = cases.incremental_update()
-    start = updated.data.rindex(b"startxref")
-    table = int(updated.data[start:].split()[1])
-    result = pdfacts.recover(updated.data[:start] + written % table)
-    assert result.warnings
-    with pdfacts.open(result.data) as document:
-        box = document.pages[0].geometry.visible_box
-    assert (box.x0, box.y0, box.x1, box.y1) == updated.media_box
-
-
-def test_an_update_cut_inside_the_offset_of_its_table_is_kept():
-    # The digits left name the earlier table, which QPDF would read through
-    # without a word, and does while it rebuilds the file from its objects:
-    # an offset that runs to the end of the file may be cut short.
-    case = cases.cut_inside_the_last_offset()
-    result = pdfacts.recover(case.data)
-    assert result.warnings
-    with pdfacts.open(result.data) as document:
-        box = document.pages[0].geometry.visible_box
-    assert (box.x0, box.y0, box.x1, box.y1) == case.media_box
-
-
-def test_an_update_cut_inside_its_object_is_not_returned_as_the_earlier_revision():
-    # QPDF takes the later, broken object and finds no page; the earlier
-    # revision, without a word about the update, is not what was asked for.
-    with pytest.raises(RecoveryFailedError):
-        pdfacts.recover(cases.cut_inside_the_update().data)
+@pytest.mark.parametrize("name", list(UNFINISHED))
+def test_a_file_that_ends_inside_an_incremental_update_is_refused(name):
+    # Objects follow the last whole revision. QPDF would read the revision
+    # before without a word, or, rebuilding the file from its objects, mix the
+    # update with it: it places objects in object streams only through a
+    # cross-reference stream, which an unfinished update lacks.
+    with pytest.raises(RecoveryFailedError, match="incremental update"):
+        pdfacts.recover(UNFINISHED[name])
 
 
 def test_a_form_cut_off_before_its_acroform_raises_no_python_warning():
@@ -694,36 +692,122 @@ def without_its_end(data: bytes) -> bytes:
     return data[:end] + data[end + len(b"%%EOF") :]
 
 
-def test_a_file_whose_end_alone_is_damaged_is_read_as_it_is_written():
-    # QPDF finds its startxref and nothing after it: no rebuild, no warning.
+# Damage after the offset of the last startxref, which QPDF reads through.
+END_DAMAGE = {
+    "%%EOF removed": without_its_end,
+    "cut after the offset": lambda data: data[: data.rindex(b"%%EOF")].rstrip(),
+    "junk within QPDF's search": lambda data: data + b"junk " * 60,
+    "junk beyond QPDF's search": lambda data: data + b"junk " * 600,
+}
+
+
+@pytest.mark.parametrize("damage", list(END_DAMAGE))
+def test_a_file_whose_end_alone_is_damaged_is_read_as_it_is_written(damage):
+    # What follows the last whole revision is left out: no rebuild, no warning.
     case = cases.three_pages()
-    result = pdfacts.recover(without_its_end(case.data))
+    result = pdfacts.recover(END_DAMAGE[damage](case.data))
     assert result.warnings == ()
     assert result.page_count == len(case.page_objects)
 
 
-def test_an_encrypted_file_with_object_streams_whose_end_alone_is_damaged_is_recovered():
+@pytest.mark.parametrize("damage", list(END_DAMAGE))
+def test_an_updated_file_whose_end_alone_is_damaged_is_read_as_its_last_revision(damage):
+    updated = cases.incremental_update()
+    result = pdfacts.recover(END_DAMAGE[damage](updated.data))
+    assert result.warnings == ()
+    with pdfacts.open(result.data) as document:
+        box = document.pages[0].geometry.visible_box
+    assert (box.x0, box.y0, box.x1, box.y1) == updated.media_box
+
+
+@pytest.mark.parametrize("damage", list(END_DAMAGE))
+def test_an_encrypted_file_with_object_streams_whose_end_alone_is_damaged_is_recovered(damage):
     # QPDF cannot rebuild such a file from its objects; read through its
     # startxref it needs no rebuilding.
     case = cases.three_pages()
     data = encrypt(case.data, user="", owner="owner", object_streams=True)
     assert b"/ObjStm" in data
-    result = pdfacts.recover(without_its_end(data))
+    result = pdfacts.recover(END_DAMAGE[damage](data))
     assert result.page_count == len(case.page_objects)
     with reopened(result.data) as recovered_pdf:
         assert recovered_pdf.is_encrypted
 
 
-def test_an_update_cut_inside_an_object_the_pages_do_not_need_loses_it():
-    # Cut after its obj keyword, the later, broken copy counts, and the
-    # earlier one is lost with it: the page keeps no content
-    # (docs/conventions.md, "Damaged files").
-    source = cases.plain_page()
-    content = cases.page_object(0) + 1
-    updated = cases.append_update(source.data, {content: stream(b"0 0 1 rg 0 0 10 10 re f")}, 1)
-    cut = updated[: updated.index(b"stream\n", len(source.data)) + len(b"stream\n0 0 1")]
-    result = pdfacts.recover(cut)
+def without_first_page_end(case: cases.Linearized) -> cases.Linearized:
+    """`case` with the linearization dictionary's /E renamed, its offsets unchanged."""
+    return dataclasses.replace(case, data=case.data.replace(b"/E ", b"/X ", 1))
+
+
+LINEARIZED = {
+    "first-page startxref 0": lambda: cases.linearized(first_page_offset=False),
+    "first-page startxref naming its table": lambda: cases.linearized(first_page_offset=True),
+    "first-page startxref 0, no /E": lambda: without_first_page_end(
+        cases.linearized(first_page_offset=False)
+    ),
+}
+
+
+@pytest.mark.parametrize("name", list(LINEARIZED))
+def test_a_linearized_file_is_read_as_it_is_written(name):
+    # Its last startxref names the first-page table, which lies before the
+    # startxref of the first-page trailer.
+    result = pdfacts.recover(LINEARIZED[name]().data)
+    assert result.warnings == ()
     assert result.page_count == 1
-    assert result.warnings
-    with reopened(result.data) as pdf:
-        assert "/Contents" not in pdf.pages[0].obj
+
+
+@pytest.mark.parametrize("name", list(LINEARIZED))
+def test_a_linearized_file_cut_before_its_main_table_is_rebuilt(name):
+    # Its first-page section is no revision of its own: the file does not end
+    # inside an update.
+    case = LINEARIZED[name]()
+    assert pdfacts.recover(case.data[: case.main_table]).page_count == 1
+
+
+XMP = (
+    b'<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>'
+    b'<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF '
+    b'xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" '
+    b'xmlns:pdf="http://ns.adobe.com/pdf/1.3/"><pdf:PDFVersion>1.4</pdf:PDFVersion>'
+    b'</rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end="w"?>'
+)
+# The data of a metadata stream, and the entries of its dictionary.
+METADATA = {
+    "XMP that names a PDF version": (XMP, b""),
+    "XMP that is not well formed": (b"<x:xmpmeta> not well formed <", b""),
+    "no XML": (b"plain words", b""),
+    "data that does not decode": (b"x\x9cnot deflated", b"/Filter /FlateDecode"),
+}
+
+
+def with_metadata(metadata: bytes) -> bytes:
+    """A one-page file whose catalog names `metadata`, object 5, as its /Metadata."""
+    return build(
+        {
+            1: b"<< /Type /Catalog /Pages 2 0 R /Metadata 5 0 R >>",
+            2: b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            3: b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Contents 4 0 R >>",
+            4: stream(cases.rectangle_content(cases.RECTANGLE, cases.BLACK)),
+            5: metadata,
+        },
+        1,
+    )
+
+
+@pytest.mark.parametrize("name", list(METADATA))
+def test_the_metadata_is_written_as_it_is(name):
+    # pikepdf would write XMP anew to set the PDF version in it, an empty
+    # packet in place of XMP it cannot parse, and fail on a stream it cannot
+    # decode.
+    content, entries = METADATA[name]
+    data = with_metadata(stream(content, b"/Type /Metadata /Subtype /XML " + entries))
+    for damaged in (data, data[: data.rindex(b"\nxref\n") + 1]):
+        with reopened(pdfacts.recover(damaged).data) as pdf:
+            assert pdf.Root.Metadata.read_raw_bytes() == content
+
+
+def test_metadata_that_is_no_stream_is_written_as_it_is():
+    data = with_metadata(b"<< /Type /Metadata /Subtype /XML >>")
+    with reopened(pdfacts.recover(data).data) as pdf:
+        assert not isinstance(pdf.Root.Metadata, pikepdf.Stream)
+        assert pdf.Root.Metadata.Subtype == "/XML"
