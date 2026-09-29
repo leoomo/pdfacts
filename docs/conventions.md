@@ -121,10 +121,24 @@ checked at run time:
 | When | Check |
 | --- | --- |
 | on open | both engines report the same number of pages |
+| on open | every object stream the cross-reference names can be read, and its header names every object once, never object 0, at the index the cross-reference gives. QPDF keeps the last of two objects with one number and finds an object by the number in the header; PDFium takes what sits at the index. Where this does not hold, every value from QPDF is unknown for the document |
 | before a value from QPDF is used for a page or an annotation | the object at the same position is the same in both engines. For a page, PDFium not exposing object numbers, that means the same visible box, within 0.001, and the same rotation. QPDF's visible box is its media box, US letter where it has none it can use, intersected with its crop box, corners in order; its rotation is taken modulo 360, and a value that is not a multiple of 90 counts as 0 |
 
 When a check fails, the values that depend on it are unknown and the reason is
 stated. Facts read through PDFium are returned as usual.
+
+No PDFium call gives an object number, so the check on open is made on
+QPDF's side alone. Measured: all 104 corpus files pass it; 93 of them use
+object streams.
+
+A known gap (measured): the cross-reference itself can make the engines
+resolve one object number to different objects. An object listed twice in
+one section is read by QPDF from the first entry and by PDFium from the
+last; an `/XRefStm` in the oldest section is read by QPDF only. The check
+on open does not see this. Where it happens to a page, QPDF's values of the
+page can describe another object than PDFium's; no corpus file does it.
+`recover()` writes such a file, and a file the check on open refuses, as
+QPDF reads it, without a note.
 
 Reason: a wrong object number is worse than none. A later change to the file
 would address the wrong object.
