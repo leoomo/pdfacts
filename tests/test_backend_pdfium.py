@@ -26,6 +26,7 @@ from pdfacts.backends.protocols import (
 )
 from pdfium_handles import watch
 from synthetic import cases
+from synthetic.builder import build, stream
 
 # The box PDFium uses for a page without any media box: US letter.
 LETTER = (0.0, 0.0, 612.0, 792.0)
@@ -649,3 +650,199 @@ def test_rows_are_packed_and_the_bytes_are_the_same_each_time(rgb):
         (81, 81 * (3 if rgb else 1))
     }
     assert len({bitmap.data for bitmap in bitmaps}) == 1
+
+
+# --- annotations as PDFium reads them ----------------------------------------------------
+
+
+def annots_page(annots: bytes) -> bytes:
+    return b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Annots %s >>" % annots
+
+
+def annots_file(annots: bytes, objects: dict[int, bytes] | None = None) -> bytes:
+    """A one-page file whose page has /Annots and `objects` beside the tree."""
+    return build(
+        {
+            1: b"<< /Type /Catalog /Pages 2 0 R >>",
+            2: b"<< /Type /Pages /Kids [4 0 R] /Count 1 >>",
+            4: annots_page(annots),
+            **(objects or {}),
+        },
+        1,
+    )
+
+
+def views_of(data: bytes, index: int = 0) -> tuple:
+    document = opened(data)
+    try:
+        return document.annotation_views(index)
+    finally:
+        document.close()
+
+
+FOUR_ENTRIES = b"[6 0 R null 42 7 0 R]"
+
+
+def test_the_count_counts_every_entry():
+    data = annots_file(
+        FOUR_ENTRIES,
+        {
+            6: b"<< /Type /Annot /Subtype /Widget /Rect [10 10 110 30] >>",
+            7: b"<< /Type /Annot /Subtype /Link >>",
+        },
+    )
+    document = opened(data)
+    try:
+        assert document.annotation_count(0) == 4
+    finally:
+        document.close()
+
+
+def test_an_entry_pdfium_gives_no_annotation_for():
+    data = annots_file(
+        FOUR_ENTRIES,
+        {
+            6: b"<< /Type /Annot /Subtype /Widget /Rect [10 10 110 30] >>",
+            7: b"<< /Type /Annot /Subtype /Link >>",
+        },
+    )
+    views = views_of(data)
+    assert len(views) == 4
+    assert views[1] is None
+    assert views[2] is None
+
+
+def test_a_widget_and_a_link():
+    data = annots_file(
+        FOUR_ENTRIES,
+        {
+            6: b"<< /Type /Annot /Subtype /Widget /Rect [10 10 110 30] >>",
+            7: b"<< /Type /Annot /Subtype /Link >>",
+        },
+    )
+    first, _, _, fourth = views_of(data)
+    assert first.widget is True
+    assert first.index == 0
+    assert first.rect == (10.0, 10.0, 110.0, 30.0)
+    assert fourth.widget is False
+    assert fourth.index == 3
+
+
+def test_the_texts_and_their_types():
+    data = annots_file(
+        b"[6 0 R]",
+        {
+            6: b"<< /Type /Annot /Subtype /Widget /T (name) /AS /On"
+            b" /TU (Label) /FT /Tx /V (x) /DV (y) >>"
+        },
+    )
+    (view,) = views_of(data)
+    assert view.t_type == pypdfium2.raw.FPDF_OBJECT_STRING
+    assert view.t == "name"
+    assert view.as_type == pypdfium2.raw.FPDF_OBJECT_NAME
+    assert view.as_text == "On"
+    assert view.values[b"TU"] == (pypdfium2.raw.FPDF_OBJECT_STRING, "Label")
+    assert view.values[b"FT"] == (pypdfium2.raw.FPDF_OBJECT_NAME, "Tx")
+    assert view.values[b"V"] == (pypdfium2.raw.FPDF_OBJECT_STRING, "x")
+    assert view.values[b"DV"] == (pypdfium2.raw.FPDF_OBJECT_STRING, "y")
+
+
+def test_absent_keys():
+    (view,) = views_of(annots_file(b"[6 0 R]", {6: b"<< /Type /Annot /Subtype /Widget >>"}))
+    assert (view.t_type, view.as_type, view.parent_type) == (0, 0, 0)
+    assert view.t == "" and view.as_text == ""
+    assert view.values == {key: (0, "") for key in (b"V", b"DV", b"TU", b"FT")}
+
+
+def test_explicit_null():
+    data = annots_file(
+        b"[6 0 R]", {6: b"<< /Type /Annot /Subtype /Widget /T null /AS null /Parent null >>"}
+    )
+    (view,) = views_of(data)
+    null = pypdfium2.raw.FPDF_OBJECT_NULLOBJ
+    assert (view.t_type, view.as_type, view.parent_type) == (null, null, null)
+
+
+def test_a_reference():
+    data = annots_file(
+        b"[6 0 R]",
+        {6: b"<< /Type /Annot /Subtype /Widget /Parent 8 0 R /DV 9 0 R >>", 9: b"(ref)"},
+    )
+    (view,) = views_of(data)
+    reference = pypdfium2.raw.FPDF_OBJECT_REFERENCE
+    assert view.parent_type == reference
+    assert view.values[b"DV"] == (reference, "ref")
+
+
+@pytest.mark.parametrize(
+    ("entries", "expected"),
+    [
+        (b"/T (a\\255b)", "a\x00b"),
+        (b"/AS /A#80B", "A•B"),
+        (b"/AS /M#C3#B6nnlich", "MÃ¶nnlich"),
+        (b"/T <FEFFD800004C>", "\ud800L"),
+    ],
+)
+def test_pdfiums_decoding(entries, expected):
+    data = annots_file(b"[6 0 R]", {6: b"<< /Type /Annot /Subtype /Widget %s >>" % entries})
+    (view,) = views_of(data)
+    if entries.startswith(b"/T"):
+        assert view.t == expected
+    else:
+        assert view.as_text == expected
+
+
+def test_a_long_name():
+    data = annots_file(
+        b"[6 0 R]", {6: b"<< /Type /Annot /Subtype /Widget /AS /%s >>" % (b"L" * 300)}
+    )
+    (view,) = views_of(data)
+    assert len(view.as_text) == 255
+
+
+def test_flags():
+    data = annots_file(b"[6 0 R]", {6: b"<< /Type /Annot /Subtype /Widget /F 2147483652 >>"})
+    (view,) = views_of(data)
+    assert view.flags == -2147483644
+
+
+def test_rendering_is_unchanged():
+    appearance = stream(b"0 g 0 0 100 20 re f", b"/Type /XObject /Subtype /Form /BBox [0 0 100 20]")
+    data = build(
+        {
+            1: b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >>",
+            2: b"<< /Type /Pages /Kids [4 0 R] /Count 1 >>",
+            4: annots_page(b"[6 0 R]"),
+            6: b"<< /Type /Annot /Subtype /Widget /FT /Btn /T (a) /Rect [10 10 110 30]"
+            b" /AP << /N 7 0 R >> >>",
+            7: appearance,
+        },
+        1,
+    )
+    document = opened(data)
+    try:
+        first = render(document, 0)
+        assert all(
+            byte == 255
+            for row in range(first.height)
+            for byte in first.data[row * first.row_length : row * first.row_length + first.width]
+        )
+        document.annotation_views(0)
+        second = render(document, 0)
+    finally:
+        document.close()
+    assert bytes(first.data) == bytes(second.data)
+
+
+def test_engine_failures():
+    document = opened(annots_file(b"[6 0 R]", {6: b"<< /Type /Annot /Subtype /Widget >>"}))
+    document.close()
+    with pytest.raises(EngineFailure) as raised:
+        document.annotation_views(0)
+    assert raised.value.kind is FailureKind.OTHER
+    document = opened(annots_file(b"[6 0 R]", {6: b"<< /Type /Annot /Subtype /Widget >>"}))
+    try:
+        with pytest.raises(IndexError):
+            document.annotation_views(1)
+    finally:
+        document.close()
