@@ -10,12 +10,28 @@ import math
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
+from types import MappingProxyType
 
 import pikepdf
 
-from pdfacts.backends.protocols import Box, EngineFailure, FailureKind, PageObject, RecoveredBytes
+from pdfacts.backends.protocols import (
+    AnnotationEntry,
+    Box,
+    EngineFailure,
+    FailureKind,
+    FieldEntry,
+    FieldNode,
+    FieldTree,
+    KidEntry,
+    Kids,
+    PageAnnotations,
+    PageObject,
+    RecoveredBytes,
+    WidgetEntry,
+    Written,
+)
 
 # How far from the end QPDF looks for startxref (measured: it finds one that
 # starts 1054 bytes before the end, not one that starts 1055 bytes before).
@@ -208,6 +224,8 @@ class QpdfDocument:
         self._pages = pages
         self._pages_as_written = pages_as_written
         self._objects_as_written = objects_as_written
+        # Plain data kept so that shared objects convert once (issue #36).
+        self._kept = _Kept()
         self._warnings: list[str] = []
         # The same warnings as a set: a damaged file can give tens of thousands.
         self._known_warnings: set[str] = set()
@@ -268,6 +286,80 @@ class QpdfDocument:
         """Whether each compressed object is named once in its object stream, at its index."""
         self._check_open()
         return self._objects_as_written
+
+    def annotation_count(self, index: int) -> int | None:
+        """The number of entries of the page's /Annots; None when it is no array."""
+        self._check_open()
+        objgen = self._annotated_page(index)
+        with _translated():
+            annots = self._unwalked.get_object(objgen).get("/Annots")
+        if annots is None:
+            return 0
+        if isinstance(annots, pikepdf.Array):
+            return len(annots)
+        return None
+
+    def annotations(self, index: int) -> PageAnnotations:
+        """The entries of the page's /Annots and its widgets, as the file writes them."""
+        self._check_open()
+        objgen = self._annotated_page(index)
+        with _translated():
+            annots = self._unwalked.get_object(objgen).get("/Annots")
+            if not isinstance(annots, pikepdf.Array):
+                return PageAnnotations((), annots is not None, ())
+            entries: list[AnnotationEntry] = []
+            widgets: list[WidgetEntry] = []
+            for position, item in enumerate(annots):
+                dictionary = isinstance(item, pikepdf.Dictionary)
+                item_objgen = item.objgen if dictionary and item.is_indirect else None
+                subtype_value = item.get("/Subtype") if dictionary else None
+                subtype = (
+                    _name_bytes(subtype_value) if isinstance(subtype_value, pikepdf.Name) else None
+                )
+                entry = AnnotationEntry(
+                    position,
+                    item_objgen[0] if item_objgen else None,
+                    item_objgen[1] if item_objgen else None,
+                    dictionary,
+                    subtype,
+                )
+                entries.append(entry)
+                if subtype != b"Widget":
+                    continue
+                kept = self._kept.widgets.get(item_objgen) if item_objgen else None
+                if kept is not None:
+                    # Listed again, on this page or another: converted once per
+                    # document, with its own annotation.
+                    widgets.append(replace(kept, annotation=entry))
+                    continue
+                one = _widget_entry(item, entry, self._kept)
+                if item_objgen is not None:
+                    self._kept.widgets[item_objgen] = one
+                widgets.append(one)
+            return PageAnnotations(tuple(entries), False, tuple(widgets))
+
+    def field_tree(self) -> FieldTree | None:
+        """The document's field tree from /AcroForm /Fields; None without /AcroForm."""
+        self._check_open()
+        if self._kept.tree_walked:
+            return self._kept.tree
+        with _translated():
+            tree = _field_tree(self._unwalked, self._kept)
+        self._kept.tree = tree
+        self._kept.tree_walked = True
+        return tree
+
+    def _annotated_page(self, index: int) -> tuple[int, int]:
+        """The objgen of page `index`, after the checks page_object() makes."""
+        count = self.page_count()
+        _check_index(index, count)
+        if not self._pages_as_written:
+            raise EngineFailure(
+                FailureKind.FORMAT,
+                "the pages QPDF found are not the objects the file's page tree lists, so "
+                "the object QPDF has at a page index may not be the file's",
+            )
+        return self._pages[index]
 
     def page_object(self, index: int) -> PageObject:
         """The page's object and what the file writes on it and its ancestors.
@@ -683,6 +775,405 @@ def _object_stream_header(pdf: pikepdf.Pdf, number: int) -> list[int] | None:
             return None
         numbers.append(int(token))
     return numbers[::2]
+
+
+# --- widgets and their fields, as written ---------------------------------------
+
+# The field keys a FieldEntry holds, as PDF names.
+_FIELD_KEYS = ("/T", "/TU", "/FT", "/Ff", "/V", "/DV", "/Opt")
+# The keys a WidgetEntry reads from the widget itself, as PDF names.
+_WIDGET_KEYS = ("/Rect", "/F", "/AS")
+# The keys it takes from /MK and /BS, as pairs of the PDF name and the bytes key.
+_MK_KEYS = (("/BC", b"MK/BC"), ("/BG", b"MK/BG"))
+_BS_KEYS = (("/W", b"BS/W"), ("/S", b"BS/S"))
+
+
+class _Kept:
+    """Plain data kept per document so that a shared object converts once.
+
+    A value, a parent or a /Kids array named by thousands of dictionaries is
+    converted once per document, not once per dictionary that names it. The
+    stores are keyed by object number and generation, the states and the
+    entries of /MK and /BS one store per role, so that one object can play two
+    (issue #36, decision 7). Nothing is dropped before close().
+    """
+
+    def __init__(self) -> None:
+        self.written: dict[tuple[int, int, int], Written] = {}
+        self.fields: dict[tuple[int, int], FieldEntry] = {}
+        self.kids: dict[tuple[int, int], Kids] = {}
+        self.direct_kids: dict[tuple[int, int], Kids] = {}
+        self.n_states: dict[tuple[int, int], tuple[bytes, ...]] = {}
+        self.ap_n_states: dict[tuple[int, int], tuple[bytes, ...]] = {}
+        self.mk: dict[tuple[int, int], dict[bytes, Written]] = {}
+        self.bs: dict[tuple[int, int], dict[bytes, Written]] = {}
+        self.widgets: dict[tuple[int, int], WidgetEntry] = {}
+        self.tree: FieldTree | None = None
+        self.tree_walked = False
+
+
+def _written(value: object, depth: int, kept: _Kept) -> Written:
+    """A value as the file writes it; an indirect one is converted once per depth."""
+    if isinstance(value, pikepdf.Object) and value.is_indirect:
+        key = (*value.objgen, depth)
+        if key in kept.written:
+            return kept.written[key]
+        written = _converted(value, depth, kept)
+        kept.written[key] = written
+        return written
+    return _converted(value, depth, kept)
+
+
+def _converted(value: object, depth: int, kept: _Kept) -> Written:
+    if value is None:
+        return Written("null", None)
+    if isinstance(value, bool):
+        return Written("boolean", value)
+    if isinstance(value, int):
+        return Written("integer", value)
+    if isinstance(value, Decimal):
+        number = float(value)
+        return Written("real", number) if math.isfinite(number) else Written("other", None)
+    if isinstance(value, pikepdf.String):
+        return Written("string", bytes(value))
+    if isinstance(value, pikepdf.Name):
+        return Written("name", _name_bytes(value))
+    if isinstance(value, pikepdf.Array):
+        if depth >= 2:
+            return Written("other", None)
+        return Written("array", tuple(_written(item, depth + 1, kept) for item in value))
+    if isinstance(value, pikepdf.Stream):
+        return Written("stream", None)
+    if isinstance(value, pikepdf.Dictionary):
+        return Written("dictionary", None)
+    return Written("other", None)
+
+
+def _name_bytes(name: pikepdf.Name) -> bytes:
+    """The bytes of a name: unparse() without its slash, #xx resolved."""
+    syntax = name.unparse(resolved=True)
+    out = bytearray()
+    at = 1
+    while at < len(syntax):
+        if syntax[at : at + 1] == b"#":
+            out.append(int(syntax[at + 1 : at + 3], 16))
+            at += 3
+        else:
+            out.append(syntax[at])
+            at += 1
+    return bytes(out)
+
+
+def _key_bytes(key: str) -> bytes:
+    """The bytes of a key of /AP /N, without its slash."""
+    return key.encode("utf-8", "surrogateescape")[1:]
+
+
+def _field_entry(dictionary: pikepdf.Dictionary, kept: _Kept) -> FieldEntry:
+    """A field dictionary's own entries; an indirect one is converted once."""
+    if dictionary.is_indirect and dictionary.objgen in kept.fields:
+        return kept.fields[dictionary.objgen]
+    entries: dict[bytes, Written] = {}
+    for key in _FIELD_KEYS:
+        value = dictionary.get(key)
+        if value is not None:
+            entries[key.encode("ascii")[1:]] = _written(value, 0, kept)
+    objgen = dictionary.objgen if dictionary.is_indirect else None
+    entry = FieldEntry(
+        object_number=objgen[0] if objgen else None,
+        generation=objgen[1] if objgen else None,
+        entries=MappingProxyType(entries),
+        kids=isinstance(dictionary.get("/Kids"), pikepdf.Array),
+        subtype_widget=dictionary.get("/Subtype") == pikepdf.Name("/Widget"),
+    )
+    if dictionary.is_indirect:
+        kept.fields[dictionary.objgen] = entry
+    return entry
+
+
+def _kids(array: pikepdf.Array) -> Kids:
+    """The entries of one /Kids array, with the positions of its widgets."""
+    entries: list[KidEntry] = []
+    positions: dict[tuple[int, int], list[int]] = {}
+    widgets = 0
+    all_widgets = True
+    for item in array:
+        dictionary = isinstance(item, pikepdf.Dictionary)
+        objgen = item.objgen if dictionary and item.is_indirect else None
+        widget = dictionary and item.get("/Subtype") == pikepdf.Name("/Widget")
+        entries.append(
+            KidEntry(objgen[0] if objgen else None, objgen[1] if objgen else None, widget)
+        )
+        if widget:
+            if objgen is not None:
+                positions.setdefault(objgen, []).append(widgets)
+            widgets += 1
+        else:
+            all_widgets = False
+    return Kids(
+        tuple(entries),
+        MappingProxyType({key: tuple(value) for key, value in positions.items()}),
+        all_widgets,
+    )
+
+
+def _parent_kids(dictionary: pikepdf.Dictionary, kept: _Kept) -> Kids | None:
+    """The /Kids of the widget's own /Parent; the array is read once per document."""
+    parent = dictionary.get("/Parent")
+    if not (isinstance(parent, pikepdf.Dictionary) and parent.is_indirect):
+        return None
+    kids_value = parent.get("/Kids")
+    if not isinstance(kids_value, pikepdf.Array):
+        return None
+    if kids_value.is_indirect:
+        store, key = kept.kids, kids_value.objgen
+    else:
+        # A direct array is kept by the indirect parent that holds it, so that
+        # parents sharing one array share one Kids.
+        store, key = kept.direct_kids, parent.objgen
+    if key not in store:
+        store[key] = _kids(kids_value)
+    return store[key]
+
+
+def _taken(source: pikepdf.Dictionary, names, kept: _Kept) -> dict[bytes, Written]:
+    taken = {}
+    for pdf_key, bytes_key in names:
+        value = source.get(pdf_key)
+        if value is not None:
+            taken[bytes_key] = _written(value, 0, kept)
+    return taken
+
+
+def _sub_entries(
+    source: pikepdf.Dictionary, names, store: dict, kept: _Kept
+) -> dict[bytes, Written]:
+    """Entries taken from /MK or /BS; an indirect one is converted once per role."""
+    if source.is_indirect:
+        if source.objgen in store:
+            return dict(store[source.objgen])
+        taken = _taken(source, names, kept)
+        store[source.objgen] = taken
+        return dict(taken)
+    return _taken(source, names, kept)
+
+
+def _states(n: pikepdf.Dictionary, ap: pikepdf.Dictionary, kept: _Kept) -> tuple[bytes, ...]:
+    """The keys of an /N dictionary in QPDF's order; converted once per role."""
+    if n.is_indirect:
+        store, key = kept.n_states, n.objgen
+    elif ap.is_indirect:
+        store, key = kept.ap_n_states, ap.objgen
+    else:
+        return tuple(_key_bytes(key) for key in n)
+    if key not in store:
+        store[key] = tuple(_key_bytes(key) for key in n)
+    return store[key]
+
+
+def _widget_entry(
+    dictionary: pikepdf.Dictionary, annotation: AnnotationEntry, kept: _Kept
+) -> WidgetEntry:
+    """One widget of a page, its own entries and the chain of dictionaries above it."""
+    entries: dict[bytes, Written] = {}
+    for key in _WIDGET_KEYS:
+        value = dictionary.get(key)
+        if value is not None:
+            entries[key.encode("ascii")[1:]] = _written(value, 0, kept)
+    mk = dictionary.get("/MK")
+    mk_invalid = mk is not None and not isinstance(mk, pikepdf.Dictionary)
+    if not mk_invalid and mk is not None:
+        entries.update(_sub_entries(mk, _MK_KEYS, kept.mk, kept))
+    bs = dictionary.get("/BS")
+    bs_invalid = bs is not None and not isinstance(bs, pikepdf.Dictionary)
+    if not bs_invalid and bs is not None:
+        entries.update(_sub_entries(bs, _BS_KEYS, kept.bs, kept))
+    ap = dictionary.get("/AP")
+    states: tuple[bytes, ...] | None = None
+    states_invalid = False
+    if ap is not None:
+        if not isinstance(ap, pikepdf.Dictionary):
+            states_invalid = True
+        else:
+            n = ap.get("/N")
+            if isinstance(n, pikepdf.Dictionary):
+                states = _states(n, ap, kept)
+            elif n is not None and not isinstance(n, pikepdf.Stream):
+                states_invalid = True
+    chain: list[FieldEntry] = [_field_entry(dictionary, kept)]
+    seen = {dictionary.objgen} if dictionary.is_indirect else set()
+    current = dictionary
+    chain_loops = chain_cut = parent_invalid = False
+    while True:
+        parent = current.get("/Parent")
+        if parent is None:
+            break
+        if not isinstance(parent, pikepdf.Dictionary):
+            parent_invalid = True
+            break
+        if len(chain) >= 33:
+            chain_cut = True
+            break
+        if parent.is_indirect and parent.objgen in seen:
+            chain_loops = True
+            break
+        chain.append(_field_entry(parent, kept))
+        if parent.is_indirect:
+            seen.add(parent.objgen)
+        current = parent
+    return WidgetEntry(
+        annotation=annotation,
+        entries=MappingProxyType(entries),
+        states=states,
+        states_invalid=states_invalid,
+        mk_invalid=mk_invalid,
+        bs_invalid=bs_invalid,
+        chain=tuple(chain),
+        chain_loops=chain_loops,
+        chain_cut=chain_cut,
+        parent_invalid=parent_invalid,
+        parent_kids=_parent_kids(dictionary, kept),
+    )
+
+
+class _TreeWalk:
+    """The state of one walk of the field tree, and its identity rules."""
+
+    def __init__(self, kept: _Kept) -> None:
+        self.kept = kept
+        self.entries: list[FieldEntry] = []
+        self.dictionaries: list[object] = []
+        self.kids: list[tuple[int | None, ...] | None] = []
+        self.parents: list[int | None] = []
+        self.matches: list[bool] = []
+        self.reached: list[bool] = []
+        # A node's identity: an objgen for an indirect one, otherwise what
+        # holds it and its position there.
+        self.index_of: dict[object, int] = {}
+        self.arrays_done: dict[tuple[int, int], tuple[int | None, ...]] = {}
+        self.arrays_active: set[tuple[int, int]] = set()
+        self.array_nodes: dict[tuple[int, int], list[int]] = {}
+        self.array_marked: set[tuple[int, int]] = set()
+        # Nodes whose /Kids is an array still being walked: their kids are that
+        # array's, filled in when its walk ends.
+        self.array_waiting: dict[tuple[int, int], list[int]] = {}
+        self.cut = False
+
+
+def _tree_entry(
+    entry: object, key: object, parent: int | None, level: int, walk: _TreeWalk
+) -> int | None:
+    """One entry of /Fields or of a /Kids array: its node's index, or None.
+
+    Called once per entry, so that a test can count the steps of a walk.
+    """
+    if not isinstance(entry, pikepdf.Dictionary):
+        return None
+    if entry.is_indirect:
+        key = entry.objgen
+    if key in walk.index_of:
+        index = walk.index_of[key]
+        walk.reached[index] = True
+        return index
+    index = len(walk.entries)
+    walk.index_of[key] = index
+    walk.entries.append(_field_entry(entry, walk.kept))
+    walk.dictionaries.append(entry)
+    walk.kids.append(None)
+    walk.parents.append(parent)
+    walk.matches.append(_parent_matches(entry, parent, walk))
+    walk.reached.append(False)
+    kids_value = entry.get("/Kids")
+    if isinstance(kids_value, pikepdf.Array):
+        if level >= 32:
+            walk.cut = True
+        else:
+            walk.kids[index] = _walk_kids(kids_value, key, index, level, walk)
+    else:
+        walk.kids[index] = ()
+    return index
+
+
+def _parent_matches(entry: pikepdf.Dictionary, parent: int | None, walk: _TreeWalk) -> bool:
+    """Whether the node's /Parent is the dictionary of the node it was reached through."""
+    named = entry.get("/Parent")
+    if parent is None:
+        return named is None
+    if not (isinstance(named, pikepdf.Dictionary) and named.is_indirect):
+        return False
+    above = walk.dictionaries[parent]
+    return above.is_indirect and above.objgen == named.objgen
+
+
+def _walk_kids(
+    array: pikepdf.Array, node_key: object, node_index: int, level: int, walk: _TreeWalk
+) -> tuple[int | None, ...]:
+    """The node indices of a /Kids array's entries; an indirect one is walked once."""
+    if not array.is_indirect:
+        return _kids_entries(array, (node_key, "direct kids"), node_index, level, walk)
+    key = array.objgen
+    if key in walk.arrays_done:
+        if key not in walk.array_marked:
+            walk.array_marked.add(key)
+            for held in walk.array_nodes[key]:
+                walk.reached[held] = True
+        return walk.arrays_done[key]
+    if key in walk.arrays_active:
+        # A loop through the array: it is not walked again. The node gets its
+        # kids when the walk of the array ends, and they count as met again.
+        walk.array_waiting.setdefault(key, []).append(node_index)
+        return ()
+    walk.arrays_active.add(key)
+    try:
+        kids = _kids_entries(array, key, node_index, level, walk)
+    finally:
+        walk.arrays_active.discard(key)
+    walk.arrays_done[key] = kids
+    walk.array_nodes[key] = [index for index in kids if index is not None]
+    waiting = walk.array_waiting.pop(key, [])
+    for node in waiting:
+        walk.kids[node] = kids
+    if waiting:
+        walk.array_marked.add(key)
+        for held in walk.array_nodes[key]:
+            walk.reached[held] = True
+    return kids
+
+
+def _kids_entries(
+    array: pikepdf.Array, holder_key: object, parent_index: int, level: int, walk: _TreeWalk
+) -> tuple[int | None, ...]:
+    kids = []
+    for position, item in enumerate(array):
+        kids.append(_tree_entry(item, (holder_key, position), parent_index, level + 1, walk))
+    return tuple(kids)
+
+
+def _field_tree(pdf: pikepdf.Pdf, kept: _Kept) -> FieldTree | None:
+    """The field tree from /AcroForm /Fields, each node once, depth first."""
+    acroform = pdf.Root.get("/AcroForm")
+    if acroform is None:
+        return None
+    if not isinstance(acroform, pikepdf.Dictionary):
+        return FieldTree((), (), True, False)
+    fields = acroform.get("/Fields")
+    if not isinstance(fields, pikepdf.Array):
+        return FieldTree((), (), True, False)
+    walk = _TreeWalk(kept)
+    holder = fields.objgen if fields.is_indirect else "fields"
+    roots = []
+    invalid = False
+    for position, item in enumerate(fields):
+        if not isinstance(item, pikepdf.Dictionary):
+            invalid = True
+        roots.append(_tree_entry(item, (holder, position), None, 0, walk))
+    nodes = tuple(
+        FieldNode(entry, kids, parent, matches, reached)
+        for entry, kids, parent, matches, reached in zip(
+            walk.entries, walk.kids, walk.parents, walk.matches, walk.reached, strict=True
+        )
+    )
+    return FieldTree(nodes, tuple(roots), invalid, walk.cut)
 
 
 def _inherited(page: pikepdf.Dictionary, key: str) -> object:
