@@ -72,7 +72,7 @@ installed the font policy. What is there:
 | Script | What it does |
 | --- | --- |
 | `digest.py` | SHA-256 over int, float and str values; the module states the encoding |
-| `gates/m1.py` | reads the corpus and writes one receipt: per file a geometry digest, a glyph digest exact and rounded to three decimals, counts, warnings |
+| `gates/m1.py` | reads the corpus and writes one receipt: per file a geometry digest, a glyph digest, counts, warnings |
 | `gates/compare.py` | compares two or more receipts, prints one table per file and column: identical, differs, missing, error |
 
 Run the gate on one machine, from the repository root, with the corpus in
@@ -103,9 +103,33 @@ Receipts go to `bench/out/`, which git ignores; they are never committed. A
 receipt holds digests, counts and versions, never text of a document and
 never a warning text.
 
-The run on three platforms (macOS natively, Linux arm64 and Linux x86_64 in
-the containers of `tools/checks.py`) arrives with the second pull request of
-issue #14.
+### The run on three platforms
+
+```bash
+python3 bench/gates/run.py
+```
+
+`run.py` runs the gate on macOS natively (in a fresh copy of the working
+tree) and in the Linux arm64 and Linux x86_64 containers of `tools/checks.py`,
+all three over the same snapshot of the tree. It refuses to run while the
+working tree has uncommitted changes, and when
+`bench/corpus/fetch.py --verify-only` does not report `104 files: ok 104`.
+The corpus is not part of the snapshot: each run places it from a read-only
+source with `fetch.py --from`, which checks every hash. A platform that fails
+leaves no receipt of an earlier run behind.
+
+The three receipts go to `bench/out/`, named `m1-darwin-arm64.json`,
+`m1-linux-arm64.json` and `m1-linux-amd64.json` on this machine. A full run
+took 14.5 s on the host, 25.0 s in the arm64 container and 32.3 s in the
+emulated amd64 container (2026-09-29); reading the corpus alone took 13.1 s,
+19.0 s and 25.0 s. Compare them with:
+
+```bash
+uv run python bench/gates/compare.py bench/out/m1-darwin-arm64.json bench/out/m1-linux-arm64.json bench/out/m1-linux-amd64.json
+```
+
+`run.py` does not compare the receipts itself; that is the next step, and its
+exit status says whether every file was identical on every platform.
 
 ## Comparison with other libraries
 

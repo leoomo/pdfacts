@@ -42,6 +42,29 @@ Not run: Windows, musl-based Linux, native x86_64 hardware.
 The minimum Python version was raised to 3.13 after this run. The 3.11 row is
 kept as a record of what was run.
 
+## Milestone M1: gate
+
+Run on 2026-09-29 with `bench/gates/run.py` on commit `46f27c6db8fe880fb830ca972b8c0f4a7d1f34b3`, over the 104
+files of `bench/corpus/manifest.csv`: glyph data read through PDFium after the
+font policy was installed, and page geometry read through `pdfacts.open`.
+Every platform reported pypdfium2 5.13.0, PDFium 153.0.7999.0, pikepdf 10.14.0,
+QPDF 12.4.1 and the font policy embedded-only.
+
+| Platform | `uname -m` | Python | Files read | Pages | Glyphs | Seconds |
+| --- | --- | --- | --- | --- | --- | --- |
+| macOS arm64, natively | arm64 | 3.13.5 | 104 | 467 | 1104117 | 13.1 |
+| Linux arm64, container `python:3.13.5-slim` | aarch64 | 3.13.5 | 104 | 467 | 1104117 | 19.0 |
+| Linux x86_64, container `python:3.13.5-slim`, emulated on an arm64 host | x86_64 | 3.13.5 | 104 | 467 | 1104117 | 25.0 |
+
+| Compared on all three platforms | Files identical |
+| --- | --- |
+| page geometry | 104 of 104 |
+| glyph data, unrounded | 104 of 104 |
+
+No file failed, and no page failed the check that both engines describe it
+alike. Glyphs are those the engine did not generate itself. Seconds are the
+time the gate script took to read the corpus.
+
 ## What the engines provide
 
 Measured before the first implementation, on 109 files (104 official German
@@ -105,7 +128,7 @@ glyphs). These are findings about the engines, not features of pdfacts.
 | Glyphs with host fonts in use | different for the 28 forms that contain fonts which are not embedded |
 | Glyphs with host fonts ignored | identical for all 104 forms, compared at 0.001 pt |
 | Unrounded values, Linux arm64 against Linux x86_64 | glyph, path and widget digests identical for all 104 forms |
-| Unrounded values, macOS against Linux | paths and widgets identical for all 104 forms; glyphs not measured with host fonts ignored |
+| Unrounded values, macOS against Linux | paths and widgets identical for all 104 forms; glyphs, with host fonts ignored, identical for all 104 forms (M1 gate, 2026-09-29) |
 
 ## Corpus
 

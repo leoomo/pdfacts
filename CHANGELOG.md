@@ -145,6 +145,9 @@ may break callers.
 - There are two coordinate spaces, user and display. There is no third space
   with y pointing downwards.
 - The digest is a tool under `bench/`, not part of the public interface.
+- The digest hashes exact values, and platforms are compared by hash. The M1
+  gate found the glyph data and page geometry of all 104 corpus files
+  identical on macOS arm64, Linux arm64 and Linux x86_64 with unrounded values.
 
 ### Corrected
 

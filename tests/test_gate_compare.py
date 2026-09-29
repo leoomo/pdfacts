@@ -35,7 +35,6 @@ def file_entry(**changes) -> dict:
         "geometry": "1" * 64,
         "glyph_count": 3,
         "glyphs": "2" * 64,
-        "glyphs_rounded3": "3" * 64,
         "page_count": 2,
         "warning_count": 0,
     }
@@ -83,19 +82,22 @@ def row(cells) -> str:
 def test_identical_receipts(tmp_path, capsys):
     status, captured = run(tmp_path, capsys, receipt(), receipt())
     assert status == 0
-    for column in ("geometry", "glyphs", "glyphs, rounded"):
+    lines = captured.out.splitlines()
+    assert "| file | geometry | glyphs |" in lines
+    assert "| --- | --- | --- |" in lines
+    for column in ("geometry", "glyphs"):
         assert f"{column}: identical in 2 of 2 files" in captured.out
 
 
-@pytest.mark.parametrize("key", ["geometry", "glyphs", "glyphs_rounded3"])
+@pytest.mark.parametrize("key", ["geometry", "glyphs"])
 def test_a_digest_differs(tmp_path, capsys, key):
     first, second = receipt(), receipt()
     second["files"]["b.pdf"][key] = "4" * 64
     status, captured = run(tmp_path, capsys, first, second)
     assert status == 1
-    assert row(["a.pdf", "identical", "identical", "identical"]) in captured.out
-    cells = ["identical"] * 3
-    cells[["geometry", "glyphs", "glyphs_rounded3"].index(key)] = "differs"
+    assert row(["a.pdf", "identical", "identical"]) in captured.out
+    cells = ["identical"] * 2
+    cells[["geometry", "glyphs"].index(key)] = "differs"
     assert row(["b.pdf", *cells]) in captured.out
 
 
@@ -104,7 +106,7 @@ def test_the_third_receipt_is_compared(tmp_path, capsys):
     receipts[2]["files"]["a.pdf"]["glyphs"] = "4" * 64
     status, captured = run(tmp_path, capsys, *receipts)
     assert status == 1
-    assert row(["a.pdf", "identical", "differs", "identical"]) in captured.out
+    assert row(["a.pdf", "identical", "differs"]) in captured.out
 
 
 def test_a_file_missing_in_a_later_receipt(tmp_path, capsys):
@@ -112,7 +114,7 @@ def test_a_file_missing_in_a_later_receipt(tmp_path, capsys):
     del second["files"]["b.pdf"]
     status, captured = run(tmp_path, capsys, first, second)
     assert status == 1
-    assert row(["b.pdf", "missing", "missing", "missing"]) in captured.out
+    assert row(["b.pdf", "missing", "missing"]) in captured.out
 
 
 def test_a_file_only_in_a_later_receipt(tmp_path, capsys):
@@ -120,7 +122,7 @@ def test_a_file_only_in_a_later_receipt(tmp_path, capsys):
     second["files"]["c.pdf"] = file_entry()
     status, captured = run(tmp_path, capsys, first, second)
     assert status == 1
-    assert row(["c.pdf", "missing", "missing", "missing"]) in captured.out
+    assert row(["c.pdf", "missing", "missing"]) in captured.out
 
 
 def test_a_file_failed_on_one_platform(tmp_path, capsys):
@@ -129,7 +131,7 @@ def test_a_file_failed_on_one_platform(tmp_path, capsys):
     second["errors"]["b.pdf"] = "DamagedFileError"
     status, captured = run(tmp_path, capsys, first, second)
     assert status == 1
-    assert row(["b.pdf", "error", "error", "error"]) in captured.out
+    assert row(["b.pdf", "error", "error"]) in captured.out
 
 
 def test_a_file_failed_alike_everywhere(tmp_path, capsys):
@@ -139,7 +141,7 @@ def test_a_file_failed_alike_everywhere(tmp_path, capsys):
         data["errors"]["b.pdf"] = "GlyphReadError"
     status, captured = run(tmp_path, capsys, first, second)
     assert status == 1
-    assert row(["b.pdf", "error", "error", "error"]) in captured.out
+    assert row(["b.pdf", "error", "error"]) in captured.out
 
 
 @pytest.mark.parametrize(
