@@ -59,7 +59,44 @@ def read_receipt(path: str) -> dict | None:
         if not isinstance(entry, dict) or not set(FILE_KEYS) <= set(entry):
             refuse(path, f"not a receipt: the entry of {name} lacks one of the file keys")
             return None
+    if not read_report(path, receipt):
+        return None
     return receipt
+
+
+def read_report(path: str, receipt: dict) -> bool:
+    """Refuse what the report reads but cannot trust; True when all of it is there.
+
+    A key that is missing, or a value of another type, would crash the report
+    with status 1; it is refused with 2 instead, the key named.
+    """
+    environment = receipt["environment"]
+    missing = [key for key in ("platform", "machine", "python", "date") if key not in environment]
+    if missing:
+        refuse(path, "not a receipt: environment without " + ", ".join(missing))
+        return False
+    seconds = receipt.get("seconds")
+    if isinstance(seconds, bool) or not isinstance(seconds, (int, float)):
+        refuse(path, "not a receipt: seconds is not a number")
+        return False
+    for name, entry in receipt["files"].items():
+        for key in ("page_count", "glyph_count", "warning_count"):
+            if type(entry[key]) is not int:
+                refuse(path, f"not a receipt: {name}: {key} is not an int")
+                return False
+        failed = entry["cross_check_failed"]
+        if not isinstance(failed, list) or any(type(index) is not int for index in failed):
+            refuse(path, f"not a receipt: {name}: cross_check_failed is not a list of ints")
+            return False
+        for key in ("geometry", "glyphs", "glyphs_rounded3"):
+            if not isinstance(entry[key], str):
+                refuse(path, f"not a receipt: {name}: {key} is not a string")
+                return False
+    for name, kind in receipt["errors"].items():
+        if not isinstance(kind, str):
+            refuse(path, f"not a receipt: the error of {name} is not a string")
+            return False
+    return True
 
 
 def print_block(path: str, receipt: dict) -> None:
@@ -100,8 +137,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
         receipts.append((path, receipt))
     for path, receipt in receipts:
-        if receipt["partial"] is True:
-            return refuse(path, "is partial")
+        if receipt["partial"] is not False:
+            return refuse(path, "partial is not false")
     engines = receipts[0][1]["environment"]["engine_info"]
     for path, receipt in receipts[1:]:
         other = receipt["environment"]["engine_info"]
