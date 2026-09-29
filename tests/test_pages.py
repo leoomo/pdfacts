@@ -1049,3 +1049,29 @@ def test_a_refused_file_with_an_object_limit():
         pdfacts.open(data, limits=Limits(max_objects=100))
     assert raised.value.limit == "max_objects"
     assert raised.value.reason.reason is UnknownReason.INVALID
+
+
+def test_a_header_is_checked_once_however_many_objects_it_holds(monkeypatch):
+    looked_through = []
+
+    class Header(list):
+        def __iter__(self):
+            looked_through.append(1)
+            return super().__iter__()
+
+        def __contains__(self, value):
+            looked_through.append(1)
+            return super().__contains__(value)
+
+    read = qpdf._object_stream_header
+
+    def counted(pdf, number):
+        header = read(pdf, number)
+        return None if header is None else Header(header)
+
+    monkeypatch.setattr(qpdf, "_object_stream_header", counted)
+    compressed = [(9, b"2"), *((10 + i, b"1") for i in range(100))]
+    indices = {number: index for index, (number, _) in enumerate(compressed)}
+    with pdfacts.open(object_stream_file(compressed, indices)) as document:
+        assert document.pages[0].ref.object_number == 4
+    assert len(looked_through) <= 2
