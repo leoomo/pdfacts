@@ -80,6 +80,10 @@ may break callers.
   `open()` failed to open such a file with QPDF under a filter that turns
   warnings into errors.
 
+- Fact types for forms: `Annotation`, `Widget`, `Field`, `FieldType`,
+  `ChoiceOption`, `DeviceColour`, `BorderStyle`, the references
+  `AnnotationRef` and `FieldRef`, and `Name` with `NameEncoding`. Nothing
+  returns them yet.
 ### Changed
 
 - `EngineInfo` has a new required field `font_policy`: the active font policy,
@@ -167,6 +171,9 @@ may break callers.
   with one and the same engine. That was measured with the reference engine,
   not with PDFium. The section now lists what was measured and what was not.
 
+- Text strings are decoded as ISO 32000-2 says, UTF-16LE read as well,
+  language escapes removed, and what does not decode given as U+FFFD. Names
+  are returned as their bytes and as text, UTF-8 where valid, else latin-1.
 ## 0.0.1
 
 Project skeleton: pinned engines, `engine_info()`, import checks, corpus
