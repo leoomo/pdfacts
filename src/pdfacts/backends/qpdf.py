@@ -632,16 +632,16 @@ def _objects_as_written(pdf: pikepdf.Pdf) -> bool:
     index. Both read the same only when the header names the object at that
     index and names no number twice.
     """
-    headers: dict[int, list[int] | None] = {}
+    headers: dict[int, list[int]] = {}
     for (number, _), entry in pdf.get_xref_table().items():
         if entry.type != 2:
             continue
-        stream_number = entry.obj_stream_number
-        if stream_number not in headers:
-            headers[stream_number] = _object_stream_header(pdf, stream_number)
-        header = headers[stream_number]
-        if header is None or 0 in header or len(set(header)) != len(header):
-            return False
+        header = headers.get(entry.obj_stream_number)
+        if header is None:
+            header = _object_stream_header(pdf, entry.obj_stream_number)
+            if header is None or 0 in header or len(set(header)) != len(header):
+                return False
+            headers[entry.obj_stream_number] = header
         index = entry.obj_stream_index
         if not 0 <= index < len(header) or header[index] != number:
             return False
