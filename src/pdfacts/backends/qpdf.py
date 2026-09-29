@@ -333,6 +333,20 @@ class QpdfDocument:
             raise EngineFailure(FailureKind.OTHER, "closed")
 
 
+def revision_part_follows(data: bytes) -> bool:
+    """Whether part of a revision follows the end of the last whole revision.
+
+    The end is where QPDF reads the file to (_revision_ends); part of a
+    revision is what _REVISION_PART finds after it. False when the file has
+    no whole revision.
+    """
+    return _part_follows(data, _revision_ends(data))
+
+
+def _part_follows(data: bytes, ends: list[int]) -> bool:
+    return bool(ends) and _REVISION_PART.search(data, ends[-1]) is not None
+
+
 def rewrite_recovered(data: bytes, password: str | None) -> RecoveredBytes:
     """The document QPDF rebuilds from `data`, with recovery on, written anew.
 
@@ -366,7 +380,7 @@ def rewrite_recovered(data: bytes, password: str | None) -> RecoveredBytes:
     """
     ends = _revision_ends(data)
     last = ends[-1] if ends else None
-    if last is not None and _REVISION_PART.search(data, last):
+    if _part_follows(data, ends):
         raise _unfinished()
     if last is not None and _reads_as_written(data[:last], password):
         data = data[:last]
