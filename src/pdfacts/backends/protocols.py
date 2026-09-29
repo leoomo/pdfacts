@@ -210,7 +210,9 @@ class AnnotationView:
 
     index: int
     widget: bool  # FPDFAnnot_GetSubtype is FPDF_ANNOT_WIDGET
-    # FPDFAnnot_GetRect when it returns true, corners as PDFium gives them.
+    # FPDFAnnot_GetRect, corners as PDFium gives them. PDFium gives (0, 0, 0, 0)
+    # for an absent /Rect, one of fewer than four numbers or one it cannot hold,
+    # and returns true (measured); None where it returns false.
     rect: Box | None
     flags: int  # FPDFAnnot_GetFlags, as PDFium gives it (bit 32 makes it negative)
     t_type: int  # FPDFAnnot_GetValueType for "T"

@@ -10,6 +10,7 @@ import ctypes
 import sys
 import typing
 from functools import partial
+from types import MappingProxyType
 
 import pypdfium2
 import pypdfium2.raw
@@ -18,6 +19,7 @@ import pytest
 from pdfacts.backends import pdfium as pdfium_backend
 from pdfacts.backends.pdfium import PdfiumDocument
 from pdfacts.backends.protocols import (
+    AnnotationViewer,
     EngineFailure,
     FailureKind,
     GeometryReader,
@@ -862,3 +864,57 @@ def test_every_annotation_handle_is_closed(monkeypatch):
     views_of(data)
     assert len(handles.opened) == 2
     assert handles.closed == handles.opened
+
+
+# --- the review of #47 ---------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("rect", [b"", b"/Rect [1 2 3]"], ids=["absent", "three numbers"])
+def test_a_rect_pdfium_cannot_use_comes_back_as_zeros(rect):
+    # Measured: PDFium's FPDFAnnot_GetRect returns true here and gives zeros;
+    # P4 reads the rectangle from QPDF first, so this is no agreement.
+    (view,) = views_of(
+        annots_file(b"[6 0 R]", {6: b"<< /Type /Annot /Subtype /Widget %s >>" % rect})
+    )
+    assert view.rect == (0.0, 0.0, 0.0, 0.0)
+
+
+def test_the_corners_in_pdfiums_order():
+    (view,) = views_of(
+        annots_file(b"[6 0 R]", {6: b"<< /Type /Annot /Subtype /Widget /Rect [10 20 110 30] >>"})
+    )
+    assert view.rect == (10.0, 20.0, 110.0, 30.0)
+    assert type(view.values) is MappingProxyType
+
+
+def test_every_annotation_handle_is_closed_when_a_read_fails(monkeypatch):
+    from pdfium_handles import watch_annots
+
+    data = annots_file(b"[6 0 R]", {6: b"<< /Type /Annot /Subtype /Widget >>"})
+    handles = watch_annots(monkeypatch)
+
+    def failing(*args):
+        raise RuntimeError("the engine failed")
+
+    monkeypatch.setattr(pypdfium2.raw, "FPDFAnnot_GetValueType", failing)
+    with pytest.raises(EngineFailure):
+        views_of(data)
+    assert len(handles.opened) == 1
+    assert handles.closed == handles.opened
+
+
+def test_annotation_count_after_close_and_outside_the_pages():
+    document = opened(annots_file(b"[6 0 R]", {6: b"<< /Type /Annot /Subtype /Widget >>"}))
+    try:
+        with pytest.raises(IndexError):
+            document.annotation_count(1)
+    finally:
+        document.close()
+    with pytest.raises(EngineFailure):
+        document.annotation_count(0)
+
+
+def test_it_implements_the_annotation_viewer():
+    members = typing.get_protocol_members(AnnotationViewer)
+    assert members == {"annotation_count", "annotation_views"}
+    assert all(callable(getattr(PdfiumDocument, name)) for name in members)
