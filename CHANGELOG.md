@@ -79,6 +79,10 @@ may break callers.
 - A password given for a file that needs none no longer lets pikepdf warn:
   `open()` failed to open such a file with QPDF under a filter that turns
   warnings into errors.
+- Fact types for forms: `Annotation`, `Widget`, `Field`, `FieldType`,
+  `ChoiceOption`, `DeviceColour`, `BorderStyle`, the references
+  `AnnotationRef` and `FieldRef`, and `Name` with `NameEncoding`. Nothing
+  returns them yet.
 
 ### Changed
 
@@ -160,6 +164,9 @@ may break callers.
 - The digest hashes exact values, and platforms are compared by hash. The M1
   gate found the glyph data and page geometry of all 104 corpus files
   identical on macOS arm64, Linux arm64 and Linux x86_64 with unrounded values.
+- Text strings are decoded as ISO 32000-2 says, UTF-16LE read as well,
+  language escapes removed, and what does not decode given as U+FFFD. Names
+  are returned as their bytes and as text, UTF-8 where valid, else Latin-1.
 
 ### Corrected
 

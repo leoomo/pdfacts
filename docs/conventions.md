@@ -143,6 +143,31 @@ QPDF reads it, without a note.
 Reason: a wrong object number is worse than none. A later change to the file
 would address the wrong object.
 
+## Forms
+
+### Text strings and names
+
+A text string of the file, such as a field's name or label, is decoded as
+ISO 32000-2 7.9.2.2 says: UTF-16BE after the bytes FE FF, UTF-8 after
+EF BB BF, PDFDocEncoding otherwise. UTF-16LE after FF FE is read as well,
+as both engines read it. Language escape sequences (U+001B, a language
+code, an optional country code, U+001B) are removed from the Unicode
+forms; an escape that is not closed is removed with all that follows it.
+What does not decode becomes U+FFFD: an odd last byte, a lone surrogate,
+invalid UTF-8, and the bytes 0x7F, 0x9F and 0xAD, which PDFDocEncoding
+leaves undefined. Decoding never fails.
+
+Reason: PDFium gives U+0000 for the undefined bytes, keeps lone
+surrogates and drops invalid UTF-8; pikepdf gives U+FFFD for the
+undefined bytes and fails on invalid UTF-8 (measured). U+FFFD marks what
+the file holds without making up a character.
+
+A name, such as an appearance state, is returned as its exact bytes and
+as text: UTF-8 where the bytes are valid UTF-8, Latin-1 otherwise, with
+the encoding stated. Reason: 59 appearance states in the corpus are
+Latin-1 bytes and no valid UTF-8; PDFium decodes every name as a text
+string, which garbles UTF-8; filling a form writes the exact bytes back.
+
 ## Three answers
 
 | Answer | Meaning | How it is expressed |

@@ -1,5 +1,6 @@
 """pdfacts: structured, verifiable facts from PDF files."""
 
+from pdfacts.annotations.model import Annotation
 from pdfacts.core.bitmap import Bitmap, Colour
 from pdfacts.core.capabilities import Capability, capabilities, require
 from pdfacts.core.document import Document, Page, open
@@ -23,23 +24,40 @@ from pdfacts.core.errors import (
 from pdfacts.core.geometry import Matrix, PageGeometry, Point, Rect
 from pdfacts.core.limits import Limits
 from pdfacts.core.recovery import Recovery, recover
-from pdfacts.core.refs import PageRef
+from pdfacts.core.refs import AnnotationRef, FieldRef, PageRef
 from pdfacts.core.runtime import FontPolicy, configure
+from pdfacts.core.strings import Name, NameEncoding
 from pdfacts.core.values import Unknown, UnknownReason
+from pdfacts.forms.model import (
+    BorderStyle,
+    ChoiceOption,
+    DeviceColour,
+    Field,
+    FieldType,
+    Widget,
+)
 
 __version__ = "0.0.1"
 
 __all__ = [
+    "Annotation",
+    "AnnotationRef",
     "Bitmap",
+    "BorderStyle",
     "Capability",
+    "ChoiceOption",
     "ClosedError",
     "Colour",
     "ConfigurationError",
     "DamagedFileError",
+    "DeviceColour",
     "Document",
     "EmptyInputError",
     "EngineError",
     "EngineInfo",
+    "Field",
+    "FieldRef",
+    "FieldType",
     "FontPolicy",
     "InputError",
     "LimitError",
@@ -47,6 +65,8 @@ __all__ = [
     "LimitUncheckedError",
     "Limits",
     "Matrix",
+    "Name",
+    "NameEncoding",
     "NotPdfError",
     "Page",
     "PageGeometry",
@@ -60,6 +80,7 @@ __all__ = [
     "Unknown",
     "UnknownReason",
     "UnsupportedError",
+    "Widget",
     "__version__",
     "capabilities",
     "configure",
