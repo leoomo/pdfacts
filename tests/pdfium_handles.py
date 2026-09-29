@@ -52,3 +52,34 @@ def watch(monkeypatch, on_free: Callable[[], object] | None = None) -> Handles:
     monkeypatch.setattr(pypdfium2.raw, "FPDF_LoadMemDocument64", loading)
     monkeypatch.setattr(pypdfium2.raw, "FPDF_CloseDocument", freeing)
     return handles
+
+
+class AnnotHandles:
+    def __init__(self) -> None:
+        self.opened: list[int] = []
+        self.closed: list[int] = []
+
+
+def watch_annots(monkeypatch) -> AnnotHandles:
+    """Record the annotation handles PDFium gives and closes from now on.
+
+    A NULL handle is not recorded, since nothing closes it.
+    """
+    gc.collect()
+    handles = AnnotHandles()
+    get, close = pypdfium2.raw.FPDFPage_GetAnnot, pypdfium2.raw.FPDFPage_CloseAnnot
+
+    def getting(*args):
+        annot = get(*args)
+        if annot:
+            handles.opened.append(_address(annot))
+        return annot
+
+    def closing(annot):
+        if _address(annot) in handles.opened:
+            handles.closed.append(_address(annot))
+        return close(annot)
+
+    monkeypatch.setattr(pypdfium2.raw, "FPDFPage_GetAnnot", getting)
+    monkeypatch.setattr(pypdfium2.raw, "FPDFPage_CloseAnnot", closing)
+    return handles

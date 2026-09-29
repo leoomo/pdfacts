@@ -846,3 +846,19 @@ def test_engine_failures():
             document.annotation_views(1)
     finally:
         document.close()
+
+
+def test_every_annotation_handle_is_closed(monkeypatch):
+    from pdfium_handles import watch_annots
+
+    data = annots_file(
+        FOUR_ENTRIES,
+        {
+            6: b"<< /Type /Annot /Subtype /Widget /Rect [10 10 110 30] >>",
+            7: b"<< /Type /Annot /Subtype /Link >>",
+        },
+    )
+    handles = watch_annots(monkeypatch)
+    views_of(data)
+    assert len(handles.opened) == 2
+    assert handles.closed == handles.opened
