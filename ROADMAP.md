@@ -10,7 +10,7 @@ with form fields, later for documents without.
 | Order | Milestone | Content | State |
 | --- | --- | --- | --- |
 | 1 | M0 | project skeleton, pinned engines, corpus manifest | done 2026-09-27 |
-| 2 | M1 | documents, geometry, determinism, test and gate tooling | in progress |
+| 2 | M1 | documents, geometry, determinism, test and gate tooling | done 2026-09-29 |
 | 3 | M2 | forms: fields and widgets | planned |
 | 4 | M3 | paths and images | planned |
 | 5 | M4a | text, first level | planned |
@@ -90,6 +90,8 @@ Gate
   explicit recovery; a failed recovery is reported as a failure, never as an
   empty result
 - the architecture check passes
+
+Recorded results are in [docs/capabilities.md](docs/capabilities.md).
 
 ## M2 Forms
 

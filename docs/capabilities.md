@@ -15,6 +15,8 @@ on. Three states are used throughout:
 | --- | --- | --- |
 | Engine identity (`engine_info`) | proven | `tests/test_engine_info.py` |
 | Import boundaries | proven | `tests/test_architecture.py`; the tests fail when the checker is disabled |
+| Error types, values that are unknown, the capability table (`PdfactsError`, `Unknown`, `capabilities()`, `require()`) | proven | `tests/test_errors.py`, `tests/test_values.py`, `tests/test_capabilities.py` |
+| Fonts installed on the host are ignored (`FONT_POLICY_EMBEDDED_ONLY`) | proven | `tests/test_runtime.py`; the M1 gate: the glyph data of all 104 corpus files identical on macOS arm64, Linux arm64 and Linux x86_64 |
 | Opening a document, classification of the input, limits (`open`, `Document`, `Limits`) | proven | `tests/test_open.py`, `tests/test_limits.py`; all 104 corpus files open |
 | Page geometry (`PAGE_GEOMETRY`) | proven | `tests/test_pages.py`, including where PDFium draws a rectangle of known position |
 | Object numbers of pages (`OBJECT_NUMBERS`), `UserUnit` (`USER_UNIT`) | proven | `tests/test_pages.py`; on the corpus both engines agree on all 467 pages |
@@ -64,6 +66,26 @@ QPDF 12.4.1 and the font policy embedded-only.
 No file failed, and no page failed the check that both engines describe it
 alike. Glyphs are those the engine did not generate itself. Seconds are the
 time the gate script took to read the corpus.
+
+The other parts of the gate are shown by tests on constructed files and by the
+architecture check. They ran with `python3 tools/checks.py --all` on commit
+`4c91929eda644f66d28107546a182e442b325acd`, the merge of #41 and the last
+change to the code of M1. Every check passed: 1218 tests on macOS arm64, and
+1217 on Linux arm64 and on Linux x86_64, where one test that needs macOS is
+skipped.
+
+| Part of the gate in `ROADMAP.md` | Shown by |
+| --- | --- |
+| constructed geometry cases | `tests/test_pages.py`, `test_the_geometry_of_every_geometry_case` over the 23 cases of `cases.GEOMETRY`: a plain page, and the same page with its rectangle red; rotation 0, 90, 180 and 270, and -90, 450 and 45 as written; a crop box inside the media box, also rotated, and one larger than it; a media box with a shifted origin and one with reversed corners; the media box, alone and with the rotation, inherited from the root of the page tree; no media box; UserUnit 2, 2.5 and three invalid values; three pages. The value of UserUnit: `test_a_user_unit_that_is_absent_or_a_number_above_zero` and `test_a_user_unit_that_is_not_a_number_above_zero_is_invalid`, and `test_user_unit_does_not_scale_display_space` in `tests/test_geometry.py`. `test_the_ink_is_where_the_geometry_says` checks where PDFium draws; `tests/test_geometry.py` the transforms. An inherited crop box, and values inherited from further up than the parent, are tested on the QPDF side only, in `tests/test_backend_qpdf.py` |
+| glyph data identical on three platforms for every corpus file | the run above: 104 of 104 files |
+| unrounded digests compared on three platforms, the result deciding the digest | the run above: identical, so exact values are hashed (`docs/conventions.md`, "Digest") |
+| invalid input maps to a specific error | `tests/test_open.py`: empty input `EmptyInputError`; a header only `DamagedFileError`; garbage `NotPdfError`, and after a header `DamagedFileError`; a user password not given or wrong `PasswordRequiredError` |
+| a truncated file is reported as damaged by `open` and is readable after explicit recovery; a failed recovery is a failure | `tests/test_open.py`: six truncated files, each `DamagedFileError`. `tests/test_recovery.py`: four of them recovered with the pages they kept, each result opening with every page passing the cross-check; a fifth, a rotated page with a crop box, recovered with its geometry (`test_the_geometry_survives_recovery`); the sixth, cut inside the catalog, and a header alone fail with `RecoveryFailedError`; a rewritten file without pages is a `RecoveryFailedError`, not an empty result (`test_the_verification_catches_a_result_without_pages`) |
+| the architecture check passes | the step "architecture check" of that run |
+
+A gap found after the gate was set: a file whose last whole revision is
+followed by part of a revision opens with the pages of that last whole
+revision, without a warning. #32 closes the gap in M2.
 
 ## What the engines provide
 

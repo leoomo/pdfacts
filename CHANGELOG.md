@@ -100,6 +100,8 @@ may break callers.
 
 ### Conventions
 
+- The conventions of `docs/conventions.md` are binding since milestone M1 was
+  done on 2026-09-29.
 - A file counts as damaged also when it does not end with `%%EOF` and white
   space, when PDFium can read it only by rebuilding its cross-reference table,
   and when PDFium finds no page in it or no page dictionary for a page it
