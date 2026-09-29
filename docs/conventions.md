@@ -230,6 +230,14 @@ These count as files the engine cannot load:
 | the file does not end with `%%EOF` and white space: there is no `%%EOF`, or anything but white space follows the last one | a file cut short can end in an earlier revision's cross-reference table, which the engines then read without a word; so can a file with bytes appended |
 | PDFium can read the file only by rebuilding its cross-reference table | that is a repair |
 | PDFium finds no page, or no page dictionary for one of the pages it counts | an empty page tree, a missing one and one that names no object look the same to PDFium; the count comes from `/Count` and can promise pages that are not there |
+| part of a revision, an object, a cross-reference section or a trailer, follows the end of the last whole revision where QPDF reads the file to: the last `startxref` cannot be read, or the last update is unfinished. A comment that holds what looks like an object counts too | the engines read the revision before without a word (#32) |
+
+A known gap (measured): the test does not know comments, and it finds the
+first-page trailer of a linearized file only where at most one object lies
+between the linearization dictionary and the first-page cross-reference
+section. So a comment holding what looks like an object after the last
+revision, and a linearized file with two or more objects in that place,
+count as damaged. No corpus file has either, and QPDF writes neither.
 
 A page counts as damaged when it is read, and reading it raises
 `DamagedFileError` while the other pages are read as usual, when PDFium's
@@ -254,7 +262,8 @@ unknown.
 
 Measured: every one of the 104 intact corpus files ends with `%%EOF` and white
 space, has a cross-reference table PDFium accepts as written, and has a page
-dictionary for every page. A linearized corpus form cut at 60 % opened in
+dictionary for every page. None of them has part of a revision after its last
+whole revision. A linearized corpus form cut at 60 % opened in
 PDFium, which rebuilt its table. PDFium looks for `startxref` in the last 4096
 bytes, so more than about 4 KB of white space after `%%EOF` makes it rebuild
 the table, and the file counts as damaged.
