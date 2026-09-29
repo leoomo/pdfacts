@@ -31,8 +31,9 @@ from pdfacts.backends import pdfium as pdfium_backend
 from pdfacts.backends import qpdf
 from pdfacts.backends.protocols import EngineFailure, FailureKind, PageObject
 from pdfacts.core import runtime
+from pdfacts.core.document import OBJECT_STREAMS
 from synthetic import cases
-from synthetic.builder import PageSpec, build, document, stream
+from synthetic.builder import PageSpec, build, build_with_object_stream, document, stream
 
 # The box PDFium uses for a page without any media box: US letter.
 LETTER = (0.0, 0.0, 612.0, 792.0)
@@ -961,3 +962,116 @@ def test_a_thread_that_waited_while_the_page_was_read_gets_it_also_past_the_dead
 
     outcome = read_first_page_after_waiting(monkeypatch, document_, read_then_time_passes)
     assert outcome is read[0]
+
+
+# --- object streams ---------------------------------------------------------------------
+
+
+def object_stream_file(compressed, indices):
+    """A file whose catalog, page tree and page are uncompressed and whose
+    object 9 sits in an object stream, as issue #35 builds its inputs."""
+    page = (
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Resources << >> /UserUnit 9 0 R >>"
+    )
+    return build_with_object_stream(
+        {
+            1: b"<< /Type /Catalog /Pages 2 0 R >>",
+            2: b"<< /Type /Pages /Kids [4 0 R] /Count 1 >>",
+            4: page,
+        },
+        compressed,
+        indices,
+        1,
+    )
+
+
+def assert_qpdf_unknown(document):
+    """Every value from QPDF unknown with reason invalid-in-file, the note first."""
+    page = document.pages[0]
+    assert page.ref.object_number.reason is UnknownReason.INVALID
+    assert page.ref.generation.reason is UnknownReason.INVALID
+    assert page.geometry.user_unit.reason is UnknownReason.INVALID
+    assert document.object_count.reason is UnknownReason.INVALID
+    assert document.warnings[0] == OBJECT_STREAMS
+    box = page.geometry.visible_box
+    assert (box.x0, box.y0, box.x1, box.y1) == (0.0, 0.0, 400.0, 300.0)
+
+
+def test_a_sound_object_stream_keeps_the_values_of_qpdf():
+    with pdfacts.open(object_stream_file([(9, b"2")], {9: 0})) as document:
+        page = document.pages[0]
+        assert page.ref.object_number == 4
+        assert page.geometry.user_unit == 2.0
+        assert type(document.object_count) is int
+        assert OBJECT_STREAMS not in document.warnings
+
+
+def test_an_object_named_twice_leaves_every_value_from_qpdf_unknown():
+    with pdfacts.open(object_stream_file([(9, b"2"), (9, b"3")], {9: 0})) as document:
+        assert_qpdf_unknown(document)
+
+
+def test_an_object_at_another_index_leaves_every_value_from_qpdf_unknown():
+    with pdfacts.open(object_stream_file([(10, b"3"), (9, b"2")], {9: 0, 10: 1})) as document:
+        assert_qpdf_unknown(document)
+
+
+def test_a_number_named_twice_is_refused_whatever_the_index():
+    with pdfacts.open(object_stream_file([(9, b"2"), (9, b"3")], {9: 1})) as document:
+        assert_qpdf_unknown(document)
+
+
+def test_a_file_without_object_streams_is_not_affected():
+    with pdfacts.open(cases.three_pages().data) as document:
+        assert all(isinstance(page.ref.object_number, int) for page in document.pages)
+
+
+def test_a_header_with_fewer_numbers_than_its_n_leaves_every_value_from_qpdf_unknown():
+    data = object_stream_file([(9, b"2")], {9: 0})
+    data = data.replace(b"/N 1 /First", b"/N 2 /First", 1)
+    with pdfacts.open(data) as document:
+        assert_qpdf_unknown(document)
+
+
+def test_a_header_naming_object_0_leaves_every_value_from_qpdf_unknown():
+    with pdfacts.open(object_stream_file([(0, b"1"), (9, b"2")], {9: 1})) as document:
+        assert_qpdf_unknown(document)
+
+
+def test_an_index_beyond_the_header_leaves_every_value_from_qpdf_unknown():
+    with pdfacts.open(object_stream_file([(9, b"2")], {9: 1})) as document:
+        assert_qpdf_unknown(document)
+
+
+def test_a_refused_file_with_an_object_limit():
+    data = object_stream_file([(9, b"2"), (9, b"3")], {9: 0})
+    with pytest.raises(LimitUncheckedError) as raised:
+        pdfacts.open(data, limits=Limits(max_objects=100))
+    assert raised.value.limit == "max_objects"
+    assert raised.value.reason.reason is UnknownReason.INVALID
+
+
+def test_a_header_is_checked_once_however_many_objects_it_holds(monkeypatch):
+    looked_through = []
+
+    class Header(list):
+        def __iter__(self):
+            looked_through.append(1)
+            return super().__iter__()
+
+        def __contains__(self, value):
+            looked_through.append(1)
+            return super().__contains__(value)
+
+    read = qpdf._object_stream_header
+
+    def counted(pdf, number):
+        header = read(pdf, number)
+        return None if header is None else Header(header)
+
+    monkeypatch.setattr(qpdf, "_object_stream_header", counted)
+    compressed = [(9, b"2"), *((10 + i, b"1") for i in range(100))]
+    indices = {number: index for index, (number, _) in enumerate(compressed)}
+    with pdfacts.open(object_stream_file(compressed, indices)) as document:
+        assert document.pages[0].ref.object_number == 4
+    assert len(looked_through) <= 2

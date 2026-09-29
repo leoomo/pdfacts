@@ -197,6 +197,7 @@ class QpdfDocument:
         sources: list[_Input],
         pages: tuple[tuple[int, int], ...],
         pages_as_written: bool,
+        objects_as_written: bool,
     ) -> None:
         # Use open(); this takes documents that are already open.
         self._walked = walked
@@ -206,6 +207,7 @@ class QpdfDocument:
         # in proportion to the page count for each access to its page list.
         self._pages = pages
         self._pages_as_written = pages_as_written
+        self._objects_as_written = objects_as_written
         self._warnings: list[str] = []
         # The same warnings as a set: a damaged file can give tens of thousands.
         self._known_warnings: set[str] = set()
@@ -233,6 +235,7 @@ class QpdfDocument:
                 # from the start.
                 pages = tuple(page.obj.objgen for page in walked.pages)
                 as_written = _page_objects_as_written(unwalked)
+                objects_as_written = _objects_as_written(unwalked)
         except BaseException:
             for view in views:
                 # The first exception is the one to report. MemoryError is
@@ -242,7 +245,7 @@ class QpdfDocument:
             for source in sources:
                 source.close()
             raise
-        return cls(walked, unwalked, sources, pages, pages == as_written)
+        return cls(walked, unwalked, sources, pages, pages == as_written, objects_as_written)
 
     def page_count(self) -> int:
         """The number of pages QPDF found."""
@@ -260,6 +263,11 @@ class QpdfDocument:
         if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
             return None
         return int(size)
+
+    def objects_as_written(self) -> bool:
+        """Whether each compressed object is named once in its object stream, at its index."""
+        self._check_open()
+        return self._objects_as_written
 
     def page_object(self, index: int) -> PageObject:
         """The page's object and what the file writes on it and its ancestors.
@@ -613,6 +621,68 @@ def _page_objects_as_written(pdf: pikepdf.Pdf) -> tuple[tuple[int, int] | None, 
         else:
             pages.append(node.objgen)
     return tuple(pages)
+
+
+def _objects_as_written(pdf: pikepdf.Pdf) -> bool:
+    """Whether each compressed object is named once in its object stream, at its index.
+
+    The cross-reference gives a compressed object as an object stream and an
+    index. QPDF finds the object by the number in the stream's header and
+    keeps the last of two with one number; PDFium takes what sits at the
+    index. Both read the same only when the header names the object at that
+    index and names no number twice.
+    """
+    headers: dict[int, list[int]] = {}
+    for (number, _), entry in pdf.get_xref_table().items():
+        if entry.type != 2:
+            continue
+        header = headers.get(entry.obj_stream_number)
+        if header is None:
+            header = _object_stream_header(pdf, entry.obj_stream_number)
+            if header is None or 0 in header or len(set(header)) != len(header):
+                return False
+            headers[entry.obj_stream_number] = header
+        index = entry.obj_stream_index
+        if not 0 <= index < len(header) or header[index] != number:
+            return False
+    return True
+
+
+def _object_stream_header(pdf: pikepdf.Pdf, number: int) -> list[int] | None:
+    """The object numbers the header of object stream `number` names, in order.
+
+    None when the object `(number, 0)` is not a stream, its /N or /First is
+    not an integer from 0, reading its data raises, or the bytes before
+    /First are not exactly 2 * N tokens of ASCII digits separated by PDF
+    white space. The even tokens are the numbers.
+    """
+    try:
+        stream = pdf.get_object(number, 0)
+        if not isinstance(stream, pikepdf.Stream):
+            return None
+        count = stream.get("/N")
+        first = stream.get("/First")
+        if (
+            isinstance(count, bool)
+            or not isinstance(count, int)
+            or count < 0
+            or isinstance(first, bool)
+            or not isinstance(first, int)
+            or first < 0
+        ):
+            return None
+        head = stream.read_bytes()[:first]
+    except (pikepdf.PdfError, ValueError):
+        return None
+    tokens = re.split(rb"[\x00\t\n\x0c\r ]+", head.strip(b"\x00\t\n\x0c\r "))
+    if len(tokens) != 2 * count:
+        return None
+    numbers = []
+    for token in tokens:
+        if not token.isdigit():
+            return None
+        numbers.append(int(token))
+    return numbers[::2]
 
 
 def _inherited(page: pikepdf.Dictionary, key: str) -> object:

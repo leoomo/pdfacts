@@ -49,6 +49,11 @@ WHITE_SPACE = b"\x00\t\n\x0c\r "
 BOX_TOLERANCE = 0.001
 # The media box PDFium takes for a page without one it can use: US letter.
 LETTER: Box = (0.0, 0.0, 612.0, 792.0)
+OBJECT_STREAMS = (
+    "an object stream cannot be read, names object 0 or an object twice, or holds an object "
+    "at another index than the cross-reference gives, so QPDF and PDFium may read different "
+    "objects"
+)
 
 
 class Page:
@@ -516,6 +521,8 @@ def _open_qpdf(
         return None, Unknown(
             UnknownReason.UNREADABLE, f"QPDF could not open the file: {failure.detail}"
         )
+    if not _qpdf_call(qpdf.objects_as_written):
+        return qpdf, Unknown(UnknownReason.INVALID, OBJECT_STREAMS)
     try:
         count = _qpdf_call(qpdf.page_count)
     except BaseException:

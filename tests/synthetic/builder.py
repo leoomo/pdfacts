@@ -6,11 +6,14 @@ given, valid or not: writing broken files on purpose is one of its jobs.
 
 Files have a classic cross-reference table and a trailer, no object streams
 and no cross-reference streams, so that every byte can be read by eye.
+`build_with_object_stream` is the one exception: it writes one object stream
+and a cross-reference stream.
 """
 
 from __future__ import annotations
 
 import re
+import struct
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
@@ -47,6 +50,68 @@ def build(objects: Mapping[int, bytes], root: int, *, header: bytes = HEADER) ->
             out += b"%010d 00001 f \n" % following[number]
     out += b"trailer\n<< /Size %d /Root %d 0 R >>\n" % (size, root)
     out += b"startxref\n%d\n%%%%EOF\n" % table
+    return bytes(out)
+
+
+def build_with_object_stream(
+    objects: Mapping[int, bytes],
+    compressed: Sequence[tuple[int, bytes]],
+    indices: Mapping[int, int],
+    root: int,
+) -> bytes:
+    """A file with one object stream and a cross-reference stream.
+
+    `objects` are written uncompressed. `compressed` go into one object
+    stream in that order, each as a pair of its number and offset in the
+    stream's header, a number that repeats included. The cross-reference
+    stream gives each number of `indices` as compressed in that stream at
+    that index, whatever the header holds there. The object stream is
+    object 7 and the cross-reference stream object 8, as in the script of the
+    issue; the arguments do not use these numbers. Entries are
+    /W [1 4 2].
+    """
+    body = b""
+    offsets: list[int] = []
+    for _, content in compressed:
+        offsets.append(len(body))
+        body += content + b" "
+    head = (
+        b" ".join(
+            b"%d %d" % (number, offset)
+            for (number, _), offset in zip(compressed, offsets, strict=True)
+        )
+        + b" "
+    )
+    data = head + body
+    out = bytearray(HEADER)
+    where: dict[int, int] = {}
+    for number in sorted(objects):
+        where[number] = len(out)
+        out += b"%d 0 obj\n%s\nendobj\n" % (number, objects[number])
+    where[7] = len(out)
+    out += (
+        b"7 0 obj\n<< /Type /ObjStm /N %d /First %d /Length %d >>\nstream\n%s\nendstream\nendobj\n"
+        % (len(compressed), len(head), len(data), data)
+    )
+    size = max([*objects, 7, 8, *indices]) + 1
+    at = len(out)
+    rows = []
+    for number in range(size):
+        if number in where:
+            rows.append(struct.pack(">BIH", 1, where[number], 0))
+        elif number == 8:
+            rows.append(struct.pack(">BIH", 1, at, 0))
+        elif number in indices:
+            rows.append(struct.pack(">BIH", 2, 7, indices[number]))
+        else:
+            rows.append(struct.pack(">BIH", 0, 0, 65535 if number == 0 else 0))
+    table = b"".join(rows)
+    out += b"8 0 obj\n<< /Type /XRef /Size %d /W [1 4 2] /Root %d 0 R /Length %d >>\nstream\n" % (
+        size,
+        root,
+        len(table),
+    )
+    out += table + b"\nendstream\nendobj\nstartxref\n%d\n%%%%EOF\n" % at
     return bytes(out)
 
 
