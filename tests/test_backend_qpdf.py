@@ -734,7 +734,14 @@ def test_no_engine_type_leaves_the_backend():
 
 def test_it_implements_the_object_reader():
     members = typing.get_protocol_members(ObjectReader)
-    assert members == {"page_count", "object_count", "page_object", "warnings", "close"}
+    assert members == {
+        "page_count",
+        "object_count",
+        "objects_as_written",
+        "page_object",
+        "warnings",
+        "close",
+    }
     assert all(callable(getattr(QpdfDocument, name)) for name in members)
 
 

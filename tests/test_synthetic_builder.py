@@ -18,7 +18,15 @@ import pypdfium2
 import pytest
 
 from synthetic import builder, cases
-from synthetic.builder import PAGE_TREE, build, document, page_object, stream, truncate
+from synthetic.builder import (
+    PAGE_TREE,
+    build,
+    build_with_object_stream,
+    document,
+    page_object,
+    stream,
+    truncate,
+)
 
 
 def table_entries(data: bytes) -> dict[int, tuple[int, int, bytes]]:
@@ -512,3 +520,25 @@ def test_the_cases_without_pages_are_what_their_names_say():
     assert 7 not in table_entries(missing)
     for data in (empty, none, missing):
         assert b"/Type /Page " not in data
+
+
+def test_the_object_stream_holds_what_it_was_given():
+    page = (
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Resources << >> /UserUnit 9 0 R >>"
+    )
+    data = build_with_object_stream(
+        {
+            1: b"<< /Type /Catalog /Pages 2 0 R >>",
+            2: b"<< /Type /Pages /Kids [4 0 R] /Count 1 >>",
+            4: page,
+        },
+        [(9, b"2")],
+        {9: 0},
+        1,
+    )
+    with pikepdf.open(io.BytesIO(data), attempt_recovery=False) as pdf:
+        assert int(pdf.get_object(9, 0)) == 2
+        entry = pdf.get_xref_table()[(9, 0)]
+        assert entry.type == 2
+        assert entry.obj_stream_number == 7
+        assert entry.obj_stream_index == 0
