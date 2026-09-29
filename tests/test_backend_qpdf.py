@@ -19,9 +19,12 @@ from pdfacts.backends import qpdf as qpdf_backend
 from pdfacts.backends.protocols import (
     EngineFailure,
     FailureKind,
+    FieldTree,
     ObjectReader,
+    PageAnnotations,
     PageObject,
     RecoveredBytes,
+    Written,
 )
 from pdfacts.backends.qpdf import QpdfDocument, rewrite_recovered
 from synthetic import cases
@@ -735,6 +738,9 @@ def test_no_engine_type_leaves_the_backend():
 def test_it_implements_the_object_reader():
     members = typing.get_protocol_members(ObjectReader)
     assert members == {
+        "annotation_count",
+        "annotations",
+        "field_tree",
         "page_count",
         "object_count",
         "objects_as_written",
@@ -850,3 +856,602 @@ def test_every_document_and_input_the_backend_opens_is_closed(monkeypatch, make,
     assert len(opened) == opens
     assert all(any(pdf is done for done in closed) for pdf in opened)
     assert inputs and all(source.closed for source in inputs)
+
+
+# --- widgets and fields as written ------------------------------------------------------
+
+
+def annots_page(annots: bytes | None) -> bytes:
+    """The dictionary of a page with /Annots `annots`, or without it for None."""
+    extra = b" /Annots %s" % annots if annots is not None else b""
+    return b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Resources << >>%s >>" % extra
+
+
+def annots_file(
+    annots: bytes | None, objects: dict[int, bytes] | None = None, catalog: bytes = CATALOG
+) -> bytes:
+    """A one-page file whose page has /Annots and `objects` beside the tree."""
+    return build(
+        {
+            1: catalog,
+            2: b"<< /Type /Pages /Kids [4 0 R] /Count 1 >>",
+            4: annots_page(annots),
+            **(objects or {}),
+        },
+        1,
+    )
+
+
+def acroform_file(fields: bytes, objects: dict[int, bytes] | None = None) -> bytes:
+    """A one-page file whose catalog holds /AcroForm << /Fields `fields` >>."""
+    catalog = b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields %s >> >>" % fields
+    return annots_file(None, objects, catalog)
+
+
+def widget(entries: bytes) -> bytes:
+    return b"<< /Type /Annot /Subtype /Widget %s >>" % entries
+
+
+def annotations_of(data: bytes, index: int = 0) -> PageAnnotations:
+    document_ = opened(data)
+    try:
+        return document_.annotations(index)
+    finally:
+        document_.close()
+
+
+def field_tree_of(data: bytes) -> FieldTree | None:
+    document_ = opened(data)
+    try:
+        return document_.field_tree()
+    finally:
+        document_.close()
+
+
+def test_no_annots_is_no_entry_and_not_an_array():
+    document_ = opened(annots_file(None))
+    try:
+        assert document_.annotation_count(0) == 0
+        page = document_.annotations(0)
+    finally:
+        document_.close()
+    assert page.entries == ()
+    assert page.widgets == ()
+    assert page.not_an_array is False
+
+
+def test_annots_that_is_no_array():
+    document_ = opened(annots_file(b"5"))
+    try:
+        assert document_.annotation_count(0) is None
+        page = document_.annotations(0)
+    finally:
+        document_.close()
+    assert page.entries == ()
+    assert page.not_an_array is True
+
+
+def test_entries_of_every_kind():
+    data = annots_file(
+        b"[6 0 R null 7 0 R 42 << /Subtype /Widget /Rect [0 0 1 1] >>]",
+        {6: widget(b"/Rect [0 0 1 1]"), 7: b"<< /Type /Annot /Subtype /Link >>"},
+    )
+    document_ = opened(data)
+    try:
+        assert document_.annotation_count(0) == 5
+        page = document_.annotations(0)
+    finally:
+        document_.close()
+    first, second, third, fourth, fifth = page.entries
+    assert (first.index, first.object_number, first.generation) == (0, 6, 0)
+    assert (first.dictionary, first.subtype) == (True, b"Widget")
+    assert (second.index, second.object_number, second.dictionary, second.subtype) == (
+        1,
+        None,
+        False,
+        None,
+    )
+    assert (third.index, third.object_number, third.subtype) == (2, 7, b"Link")
+    assert (fourth.index, fourth.object_number, fourth.dictionary) == (3, None, False)
+    assert (fifth.index, fifth.object_number, fifth.dictionary, fifth.subtype) == (
+        4,
+        None,
+        True,
+        b"Widget",
+    )
+    assert [one.annotation.index for one in page.widgets] == [0, 4]
+
+
+def test_a_widget_listed_twice_is_converted_once():
+    page = annotations_of(annots_file(b"[6 0 R 6 0 R]", {6: widget(b"/Rect [0 0 1 1] /T (a)")}))
+    first, second = page.widgets
+    assert (first.annotation.index, second.annotation.index) == (0, 1)
+    assert dataclasses.replace(first, annotation=second.annotation) == second
+
+
+def test_the_kinds_of_written():
+    data = annots_file(
+        b"[6 0 R]",
+        {
+            6: widget(
+                b"/Rect [1 2.5 true null] /AS /A#F6 /F 4"
+                b" /MK << /BC [1 0 0] >> /BS << /W 2.0 /S /D >>"
+            )
+        },
+    )
+    entries = annotations_of(data).widgets[0].entries
+    assert entries[b"Rect"].kind == "array"
+    assert [(one.kind, one.data) for one in entries[b"Rect"].data] == [
+        ("integer", 1),
+        ("real", 2.5),
+        ("boolean", True),
+        ("null", None),
+    ]
+    assert entries[b"AS"] == Written("name", b"A\xf6")
+    assert entries[b"F"] == Written("integer", 4)
+    assert [one.data for one in entries[b"MK/BC"].data] == [1, 0, 0]
+    assert entries[b"BS/W"] == Written("real", 2.0)
+    assert entries[b"BS/S"] == Written("name", b"D")
+
+
+def test_a_real_beyond_a_double_is_other():
+    number = b"1" + b"0" * 400 + b".5"
+    page = annotations_of(annots_file(b"[6 0 R]", {6: widget(b"/F " + number)}))
+    assert page.widgets[0].entries[b"F"].kind == "other"
+
+
+def test_arrays_two_levels_deep():
+    data = annots_file(b"[6 0 R]", {6: widget(b"/Opt [(a) [(b) (c)] [[(d)]]]")})
+    chain = annotations_of(data).widgets[0].chain
+    top = chain[0].entries[b"Opt"]
+    assert top.kind == "array"
+    string, inner, nested = top.data
+    assert string == Written("string", b"a")
+    assert inner.kind == "array" and [one.data for one in inner.data] == [b"b", b"c"]
+    assert nested.kind == "array" and nested.data[0].kind == "other"
+
+
+def test_names_with_number_sign_escapes():
+    data = annots_file(
+        b"[6 0 R]",
+        {
+            6: widget(b"/AS /M#C3#B6nnlich /AP << /N << /M#F6nnlich 9 0 R /Off 9 0 R >> >>"),
+            9: stream(b""),
+        },
+    )
+    one = annotations_of(data).widgets[0]
+    assert one.entries[b"AS"] == Written("name", b"M\xc3\xb6nnlich")
+    assert one.states == (b"M\xf6nnlich", b"Off")
+
+
+@pytest.mark.parametrize(
+    ("body", "states", "invalid"),
+    [
+        (b"/AP << /N << /A 9 0 R >> >>", (b"A",), False),
+        (b"/AP << /N 9 0 R >>", None, False),
+        (b"", None, False),
+        (b"/AP 5", None, True),
+    ],
+)
+def test_ap_n_shapes(body, states, invalid):
+    page = annotations_of(annots_file(b"[6 0 R]", {6: widget(body), 9: stream(b"")}))
+    one = page.widgets[0]
+    assert one.states == states
+    assert one.states_invalid is invalid
+
+
+def test_mk_and_bs_that_are_no_dictionaries():
+    page = annotations_of(annots_file(b"[6 0 R]", {6: widget(b"/MK 1 /BS 2")}))
+    one = page.widgets[0]
+    assert one.mk_invalid is True
+    assert one.bs_invalid is True
+    assert not [key for key in one.entries if key.startswith((b"MK/", b"BS/"))]
+
+
+def test_a_merged_widget_field_and_a_kid():
+    data = annots_file(
+        b"[6 0 R 7 0 R]",
+        {
+            6: widget(b"/T (a) /FT /Tx"),
+            7: widget(b"/Parent 8 0 R"),
+            8: b"<< /T (b) /FT /Btn /Kids [7 0 R] >>",
+        },
+    )
+    six, seven = annotations_of(data).widgets
+    assert len(six.chain) == 1
+    assert six.chain[0].entries[b"T"] == Written("string", b"a")
+    assert len(seven.chain) == 2
+    assert seven.chain[1].object_number == 8
+    assert seven.chain[1].entries[b"T"] == Written("string", b"b")
+    assert seven.chain[1].kids is True
+    kids = seven.parent_kids
+    assert kids is not None
+    assert (kids.entries[0].object_number, kids.entries[0].widget) == (7, True)
+    assert kids.widget_positions == {(7, 0): (0,)}
+    assert kids.all_widgets is True
+
+
+def test_a_chain_that_loops():
+    data = annots_file(
+        b"[7 0 R]",
+        {7: widget(b"/Parent 8 0 R"), 8: b"<< /Parent 10 0 R >>", 10: b"<< /Parent 8 0 R >>"},
+    )
+    one = annotations_of(data).widgets[0]
+    assert one.chain_loops is True
+    assert [entry.object_number for entry in one.chain] == [7, 8, 10]
+
+
+def test_a_parent_that_is_no_dictionary():
+    one = annotations_of(annots_file(b"[6 0 R]", {6: widget(b"/Parent 5")})).widgets[0]
+    assert one.parent_invalid is True
+    assert len(one.chain) == 1
+
+
+@pytest.mark.parametrize(("ancestors", "cut"), [(32, False), (33, True)])
+def test_the_chain_bound(ancestors, cut):
+    objects = {6: widget(b"/Parent 7 0 R")}
+    for number in range(7, 7 + ancestors):
+        above = b"/Parent %d 0 R" % (number + 1) if number + 1 < 7 + ancestors else b""
+        objects[number] = b"<< /T (p) %s >>" % above
+    one = annotations_of(annots_file(b"[6 0 R]", objects)).widgets[0]
+    assert len(one.chain) == 33
+    assert one.chain_cut is cut
+
+
+def test_parent_kids_counts_widgets():
+    data = annots_file(
+        b"[7 0 R]",
+        {
+            5: b"<< /Type /Annot /Subtype /Link >>",
+            7: widget(b"/Parent 8 0 R"),
+            8: b"<< /Kids [5 0 R << /Subtype /Widget /Parent 8 0 R >> 7 0 R 7 0 R] >>",
+        },
+    )
+    kids = annotations_of(data).widgets[0].parent_kids
+    assert kids is not None
+    assert kids.all_widgets is False
+    assert kids.widget_positions == {(7, 0): (1, 2)}
+
+
+def test_no_acroform_is_no_tree():
+    assert field_tree_of(annots_file(None)) is None
+
+
+@pytest.mark.parametrize(
+    "acroform",
+    [b"/AcroForm 5", b"/AcroForm << >>", b"/AcroForm << /Fields [null] >>"],
+)
+def test_fields_shapes(acroform):
+    catalog = b"<< /Type /Catalog /Pages 2 0 R %s >>" % acroform
+    tree = field_tree_of(annots_file(None, catalog=catalog))
+    assert tree is not None
+    assert tree.invalid is True
+    if acroform == b"/AcroForm << /Fields [null] >>":
+        assert tree.roots == (None,)
+    else:
+        assert tree.roots == ()
+    assert tree.nodes == ()
+
+
+def test_a_tree_in_order():
+    data = acroform_file(
+        b"[10 0 R 11 0 R]",
+        {
+            10: b"<< /T (a) /Kids [12 0 R 13 0 R] >>",
+            11: b"<< /T (b) >>",
+            12: b"<< /T (c) >>",
+            13: b"<< /T (d) >>",
+        },
+    )
+    tree = field_tree_of(data)
+    assert [node.entry.object_number for node in tree.nodes] == [10, 12, 13, 11]
+    assert tree.roots == (0, 3)
+    assert tree.nodes[1].parent == 0
+
+
+def test_direct_dictionaries_in_kids():
+    data = acroform_file(b"[10 0 R]", {10: b"<< /Kids [<< /T (d) >>] >>"})
+    tree = field_tree_of(data)
+    assert len(tree.nodes) == 2
+    assert tree.nodes[1].entry.object_number is None
+    assert tree.nodes[1].parent == 0
+
+
+def test_a_direct_node_in_a_direct_node():
+    data = acroform_file(b"[10 0 R]", {10: b"<< /Kids [<< /T (d) /Kids [<< /T (e) >>] >>] >>"})
+    tree = field_tree_of(data)
+    assert len(tree.nodes) == 3
+    assert tree.nodes[1].parent == 0
+    assert tree.nodes[2].parent == 1
+    assert not any(node.reached_twice for node in tree.nodes)
+
+
+@pytest.mark.parametrize(
+    ("kid_body", "root_body", "matches"),
+    [
+        (b"<< /Parent 10 0 R >>", b"", True),
+        (b"<< /Parent 12 0 R >>", b"", False),
+        (b"", b"/Parent 12 0 R", False),
+    ],
+)
+def test_parent_matches(kid_body, root_body, matches):
+    data = acroform_file(
+        b"[10 0 R]", {10: b"<< %s /Kids [%s] >>" % (root_body, kid_body), 12: b"<< /T (o) >>"}
+    )
+    tree = field_tree_of(data)
+    assert tree.nodes[-1].parent_matches is matches
+
+
+def test_a_node_reached_twice():
+    data = acroform_file(b"[10 0 R 10 0 R]", {10: b"<< /T (a) >>"})
+    tree = field_tree_of(data)
+    assert tree.nodes[0].reached_twice is True
+
+
+def test_a_kid_of_two_parents_is_reached_twice():
+    data = acroform_file(
+        b"[10 0 R 11 0 R]",
+        {10: b"<< /Kids [12 0 R] >>", 11: b"<< /Kids [12 0 R] >>", 12: b"<< /T (x) >>"},
+    )
+    tree = field_tree_of(data)
+    assert [node.entry.object_number for node in tree.nodes] == [10, 12, 11]
+    assert tree.nodes[1].reached_twice is True
+
+
+def test_parents_sharing_one_indirect_kids_array():
+    data = acroform_file(
+        b"[10 0 R 11 0 R]",
+        {
+            10: b"<< /Kids 20 0 R >>",
+            11: b"<< /Kids 20 0 R >>",
+            20: b"[12 0 R]",
+            12: b"<< /T (x) >>",
+        },
+    )
+    tree = field_tree_of(data)
+    assert [node.entry.object_number for node in tree.nodes] == [10, 12, 11]
+    assert tree.nodes[1].reached_twice is True
+    assert tree.nodes[0].kids == (1,)
+    assert tree.nodes[2].kids == (1,)
+
+
+def test_a_tree_that_loops():
+    data = acroform_file(b"[10 0 R]", {10: b"<< /Kids [11 0 R] >>", 11: b"<< /Kids [10 0 R] >>"})
+    tree = field_tree_of(data)
+    assert [node.entry.object_number for node in tree.nodes] == [10, 11]
+    assert tree.nodes[0].reached_twice is True
+
+
+def test_a_loop_through_an_indirect_kids_array():
+    data = acroform_file(
+        b"[10 0 R]",
+        {10: b"<< /Kids 20 0 R >>", 20: b"[11 0 R]", 11: b"<< /Kids 20 0 R >>"},
+    )
+    tree = field_tree_of(data)
+    assert [node.entry.object_number for node in tree.nodes] == [10, 11]
+    assert tree.nodes[1].reached_twice is True
+    assert tree.nodes[0].kids == (1,)
+    assert tree.nodes[1].kids == (1,)
+
+
+@pytest.mark.parametrize(("with_kids", "cut"), [(33, True), (32, False)])
+def test_the_tree_bound(with_kids, cut):
+    objects = {}
+    for number in range(10, 10 + with_kids):
+        if number + 1 < 10 + with_kids:
+            objects[number] = b"<< /Kids [%d 0 R] >>" % (number + 1)
+        else:
+            objects[number] = b"<< /Kids [<< /T (leaf) >>] >>"
+    tree = field_tree_of(acroform_file(b"[10 0 R]", objects))
+    assert tree.cut is cut
+    assert (tree.nodes[-1].kids is None) is cut
+    if not cut:
+        assert all(isinstance(node.kids, tuple) for node in tree.nodes)
+
+
+def counted_module_function(monkeypatch, name):
+    """`name` of the qpdf module wrapped to count its calls."""
+    calls = []
+    real = getattr(qpdf_backend, name)
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(qpdf_backend, name, counting)
+    return calls
+
+
+def test_linear_on_a_shared_kids_array(monkeypatch):
+    calls = counted_module_function(monkeypatch, "_tree_entry")
+    objects = {20: b"[" + b" ".join(b"<< /T (k%d) >>" % i for i in range(300)) + b"]"}
+    for i in range(300):
+        objects[30 + i] = b"<< /T (f%d) /Kids 20 0 R >>" % i
+    fields = b"[" + b" ".join(b"%d 0 R" % (30 + i) for i in range(300)) + b"]"
+    field_tree_of(acroform_file(fields, objects))
+    assert len(calls) < 10 * (len(objects) + 3)
+
+
+def test_linear_on_a_chain_of_shared_kids(monkeypatch):
+    calls = counted_module_function(monkeypatch, "_tree_entry")
+    objects = {10: b"<< /Kids 21 0 R >>"}
+    for number in range(21, 39):
+        body = b"/Kids %d 0 R" % (number + 1) if number < 38 else b""
+        objects[number] = b"[" + b" ".join(b"<< /T (x) %s >>" % body for _ in range(2)) + b"]"
+    field_tree_of(acroform_file(b"[10 0 R]", objects))
+    assert len(calls) < 10 * (len(objects) + 3)
+
+
+def test_linear_on_a_shared_value(monkeypatch):
+    calls = counted_module_function(monkeypatch, "_written")
+    objects = {20: b"[" + b" ".join(b"(s%d)" % i for i in range(300)) + b"]"}
+    for i in range(300):
+        objects[30 + i] = b"<< /T (f%d) /FT /Ch /Opt 20 0 R >>" % i
+    fields = b"[" + b" ".join(b"%d 0 R" % (30 + i) for i in range(300)) + b"]"
+    field_tree_of(acroform_file(fields, objects))
+    assert len(calls) < 10 * (len(objects) + 3)
+
+
+def test_linear_on_shared_widget_entries(monkeypatch):
+    calls = counted_module_function(monkeypatch, "_written")
+    keys = b" ".join(b"/K%d 9 0 R" % i for i in range(300))
+    objects = {
+        21: b"[" + b" ".join(b"%d" % i for i in range(300)) + b"]",
+        22: b"<< /BC [" + b" ".join(b"0" for _ in range(300)) + b"] >>",
+        23: b"<< %s >>" % keys,
+        9: stream(b""),
+    }
+    for i in range(300):
+        objects[40 + i] = widget(b"/Rect 21 0 R /MK 22 0 R /AP << /N 23 0 R >>")
+    annots = b"[" + b" ".join(b"%d 0 R" % (40 + i) for i in range(300)) + b"]"
+    page = annotations_of(annots_file(annots, objects))
+    assert len(calls) < 10 * (len(objects) + 3)
+    states = page.widgets[0].states
+    background = page.widgets[0].entries[b"MK/BC"]
+    assert all(one.states is states for one in page.widgets)
+    assert all(one.entries[b"MK/BC"] is background for one in page.widgets)
+
+
+def test_parents_sharing_one_kids_array_share_one_kids():
+    objects = {20: b"[" + b" ".join(b"%d 0 R" % (40 + i) for i in range(300)) + b"]"}
+    for i in range(300):
+        objects[40 + i] = widget(b"/Rect [0 0 1 1] /Parent %d 0 R" % (340 + i))
+        objects[340 + i] = b"<< /T (p%d) /FT /Btn /Kids 20 0 R >>" % i
+    annots = b"[" + b" ".join(b"%d 0 R" % (40 + i) for i in range(300)) + b"]"
+    page = annotations_of(annots_file(annots, objects))
+    kids = page.widgets[0].parent_kids
+    assert kids is not None
+    assert all(one.parent_kids is kids for one in page.widgets)
+
+
+def test_kept_per_document(monkeypatch):
+    page_of = lambda annots: (  # noqa: E731
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Resources << >> /Annots %s >>"
+        % annots
+    )
+    data = build(
+        {
+            1: b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [8 0 R] >> >>",
+            2: b"<< /Type /Pages /Kids [4 0 R 5 0 R] /Count 2 >>",
+            4: page_of(b"[6 0 R]"),
+            5: page_of(b"[7 0 R]"),
+            6: widget(b"/Parent 8 0 R /Rect [0 0 1 1]"),
+            7: widget(b"/Parent 8 0 R /Rect [0 0 1 1]"),
+            8: b"<< /T (p) /FT /Tx /Kids [6 0 R 7 0 R] >>",
+        },
+        1,
+    )
+    document_ = opened(data)
+    try:
+        first = document_.field_tree()
+        assert first is not None
+        assert document_.field_tree() is first
+        document_.annotations(0)
+        calls = counted_module_function(monkeypatch, "_written")
+        document_.annotations(1)
+    finally:
+        document_.close()
+    assert len(calls) == 5
+
+
+def test_an_explicit_null_is_absent():
+    one = annotations_of(annots_file(b"[6 0 R]", {6: widget(b"/T null /Parent null")})).widgets[0]
+    assert b"T" not in one.chain[0].entries
+    assert len(one.chain) == 1
+    assert one.parent_invalid is False
+
+
+def test_annotations_after_close_is_an_engine_failure():
+    document_ = opened(annots_file(b"[6 0 R]", {6: widget(b"")}))
+    document_.close()
+    with pytest.raises(EngineFailure) as raised:
+        document_.annotations(0)
+    assert raised.value.kind is FailureKind.OTHER
+
+
+def test_a_failing_unwalked_view_is_translated():
+    document_ = opened(annots_file(b"[6 0 R]", {6: widget(b"")}))
+    try:
+
+        class Broken:
+            def get_object(self, *args, **kwargs):
+                raise pikepdf.PdfError("broken")
+
+        real = document_._unwalked
+        document_._unwalked = Broken()
+        try:
+            with pytest.raises(EngineFailure):
+                document_.annotations(0)
+        finally:
+            document_._unwalked = real
+    finally:
+        document_.close()
+
+
+def test_a_page_tree_qpdf_reads_otherwise():
+    data = build(
+        {
+            1: CATALOG,
+            2: b"<< /Type /Pages /Kids [4 0 R 4 0 R] /Count 2 >>",
+            4: page(2),
+            9: stream(b""),
+        },
+        1,
+    )
+    document_ = opened(data)
+    try:
+        with pytest.raises(EngineFailure) as raised:
+            document_.annotation_count(0)
+        assert raised.value.kind is FailureKind.FORMAT
+        with pytest.raises(EngineFailure):
+            document_.annotations(0)
+    finally:
+        document_.close()
+
+
+def test_an_index_outside_the_pages():
+    document_ = opened(annots_file(None))
+    try:
+        with pytest.raises(IndexError):
+            document_.annotation_count(1)
+        with pytest.raises(IndexError):
+            document_.annotations(1)
+        with pytest.raises(TypeError):
+            document_.annotation_count(True)
+    finally:
+        document_.close()
+
+
+def test_the_order_of_states():
+    body = b"/AP << /N << /Zz 9 0 R /Yes 9 0 R /Off 9 0 R /M#F6 9 0 R /B 9 0 R /A 9 0 R >> >>"
+    page = annotations_of(annots_file(b"[6 0 R]", {6: widget(body), 9: stream(b"")}))
+    assert page.widgets[0].states == (b"A", b"B", b"M\xf6", b"Off", b"Yes", b"Zz")
+
+
+@pytest.mark.parametrize("order", [b"[10 0 R 11 0 R]", b"[11 0 R 10 0 R]"])
+def test_one_object_in_two_roles(order):
+    data = annots_file(
+        order,
+        {
+            10: widget(b"/AP 30 0 R"),
+            11: widget(b"/AP << /N 30 0 R >>"),
+            30: b"<< /N << /On 9 0 R /Off 9 0 R >> >>",
+            9: stream(b""),
+        },
+    )
+    page = annotations_of(data)
+    by_number = {one.chain[0].object_number: one for one in page.widgets}
+    assert by_number[10].states == (b"Off", b"On")
+    assert by_number[11].states == (b"N",)
+
+
+def test_mk_and_bs_sharing_one_object():
+    data = annots_file(
+        b"[6 0 R]",
+        {6: widget(b"/MK 22 0 R /BS 22 0 R"), 22: b"<< /BC [1 0 0] /W 2 /S /D >>"},
+    )
+    entries = annotations_of(data).widgets[0].entries
+    assert set(entries) == {b"MK/BC", b"BS/W", b"BS/S"}
+    assert [one.data for one in entries[b"MK/BC"].data] == [1, 0, 0]
+    assert entries[b"BS/W"] == Written("integer", 2)
+    assert entries[b"BS/S"] == Written("name", b"D")
