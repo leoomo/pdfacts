@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from math import isfinite
 
 from pdfacts.annotations.model import Annotation
+from pdfacts.core.geometry import _finite_float
 from pdfacts.core.refs import FieldRef
 from pdfacts.core.strings import Name
 from pdfacts.core.values import Unknown
@@ -50,14 +50,11 @@ class DeviceColour:
             raise TypeError(f"components must be a tuple, not {type(self.components).__name__}")
         if len(self.components) not in (0, 1, 3, 4):
             raise ValueError(f"a colour has 0, 1, 3 or 4 components, not {len(self.components)}")
-        for component in self.components:
-            if isinstance(component, bool) or not isinstance(component, (int, float)):
-                raise TypeError(f"a component is a number, not {type(component).__name__}")
-            if not isfinite(component) or not 0 <= component <= 1:
+        components = tuple(_finite_float(component, "a component") for component in self.components)
+        for component in components:
+            if not 0 <= component <= 1:
                 raise ValueError(f"a component is between 0 and 1, not {component}")
-        object.__setattr__(
-            self, "components", tuple(float(component) + 0.0 for component in self.components)
-        )
+        object.__setattr__(self, "components", components)
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,14 +65,11 @@ class BorderStyle:
     style: Name | None
 
     def __post_init__(self) -> None:
-        if self.width is None:
-            pass
-        elif isinstance(self.width, bool) or not isinstance(self.width, (int, float)):
-            raise TypeError(f"width must be a number or None, not {type(self.width).__name__}")
-        elif not isfinite(self.width) or self.width < 0:
-            raise ValueError(f"width is a finite number from 0, not {self.width}")
-        else:
-            object.__setattr__(self, "width", float(self.width) + 0.0)
+        if self.width is not None:
+            width = _finite_float(self.width, "width")
+            if width < 0:
+                raise ValueError(f"width is a finite number from 0, not {width}")
+            object.__setattr__(self, "width", width)
         if self.style is not None and not isinstance(self.style, Name):
             raise TypeError(f"style must be a Name or None, not {type(self.style).__name__}")
 

@@ -7,6 +7,7 @@ by the code under test (AGENTS.md, rule 2).
 from __future__ import annotations
 
 import dataclasses
+import time
 
 import pytest
 
@@ -115,3 +116,11 @@ def test_a_name_is_frozen():
     name = decode_name(b"Ja")
     with pytest.raises(dataclasses.FrozenInstanceError):
         name.text = "Nein"
+
+
+def test_language_escapes_are_removed_in_linear_time():
+    # Two million escapes: removed by slicing the rest each time, they took
+    # 15 s (measured); scanned by index, 0.14 s.
+    started = time.perf_counter()
+    assert decode_text_string(b"\xef\xbb\xbf" + b"\x1b" * 2_000_000) == ""
+    assert time.perf_counter() - started < 3

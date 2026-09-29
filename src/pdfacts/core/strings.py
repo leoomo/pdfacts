@@ -41,7 +41,7 @@ class Name:
         if (self.text, self.encoding) != _decoded(self.raw):
             raise ValueError(
                 "text must be what raw decodes to in its encoding: "
-                f"{_decoded(self.raw)[1]!r} bytes in {_decoded(self.raw)[0]!r}"
+                f"{_decoded(self.raw)[0]!r} in {_decoded(self.raw)[1]!r}"
             )
 
 
@@ -96,12 +96,12 @@ def _without_language_escapes(text: str) -> str:
     everything that follows it.
     """
     out: list[str] = []
-    rest = text
-    while (at := rest.find("\x1b")) >= 0:
-        out.append(rest[:at])
-        closing = rest.find("\x1b", at + 1)
+    start = 0
+    while (at := text.find("\x1b", start)) >= 0:
+        out.append(text[start:at])
+        closing = text.find("\x1b", at + 1)
         if closing < 0:
             return "".join(out)
-        rest = rest[closing + 1 :]
-    out.append(rest)
+        start = closing + 1
+    out.append(text[start:])
     return "".join(out)
