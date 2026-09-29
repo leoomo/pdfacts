@@ -437,6 +437,71 @@ def test_the_cut_update_ends_inside_the_object_of_its_update():
     assert b"endobj" not in case.data[len(case.source.data) :]
 
 
+def test_the_offset_left_after_the_last_startxref_names_the_earlier_table():
+    case = cases.cut_inside_the_last_offset()
+    earlier = int(re.findall(rb"startxref\n(\d+)", case.source.data)[-1])
+    assert case.data.startswith(case.source.data)
+    assert case.data.endswith(b"startxref\n%d" % earlier)
+    assert case.data[earlier:].startswith(b"xref\n")
+    assert case.data[10 * earlier :].startswith(b"xref\n")
+    update = case.data[len(case.source.data) : 10 * earlier]
+    assert update.startswith(b"4 0 obj\n<< /Type /Page ")
+    assert update.count(b" obj\n") == update.count(b"\nendobj\n") == 2
+
+
+def test_the_offset_left_after_the_last_startxref_can_name_the_update():
+    case = cases.cut_inside_the_last_offset(naming_the_update=True)
+    named = len(case.source.data)
+    assert case.data.endswith(b"startxref\n%d" % named)
+    assert case.data[named:].startswith(b"4 0 obj\n<< /Type /Page ")
+    assert case.data[10 * named :].startswith(b"xref\n")
+
+
+@pytest.mark.parametrize("first_page_offset", [False, True])
+def test_the_linearized_case_has_the_layout_of_annex_f(first_page_offset):
+    case = cases.linearized(first_page_offset=first_page_offset)
+    data = case.data
+    first_table = data.index(b"xref\n5 1\n")
+    found = list(re.finditer(rb"startxref\n(\d+)", data))
+    assert [int(match.group(1)) for match in found] == [
+        first_table if first_page_offset else 0,
+        first_table,
+    ]
+    assert data[case.main_table :].startswith(b"xref\n0 5\n")
+    first_page_end = int(re.search(rb"/E (\d+)", data[:1024]).group(1))
+    assert found[0].start() < first_page_end < found[1].start()
+    assert b"/Prev %010d" % case.main_table in data
+    with pikepdf.open(io.BytesIO(data), attempt_recovery=False) as pdf:
+        assert len(pdf.pages) == 1
+        assert pdf.get_warnings() == []
+
+
+def test_the_linearized_case_without_a_first_page_trailer_has_one_table():
+    case = cases.linearized(first_page_trailer=False)
+    data = case.data
+    assert [int(offset) for offset in re.findall(rb"startxref\n(\d+)", data)] == [case.main_table]
+    assert data[case.main_table :].startswith(b"xref\n0 6\n")
+    assert data.index(b"/Linearized") < 1024
+    with pikepdf.open(io.BytesIO(data), attempt_recovery=False) as pdf:
+        assert len(pdf.pages) == 1
+        assert pdf.get_warnings() == []
+
+
+def test_the_update_in_a_cross_reference_stream_points_at_its_objects():
+    case = cases.update_in_a_cross_reference_stream()
+    data = case.data
+    table = int(re.findall(rb"startxref\n(\d+)", data)[-1])
+    assert data[table:].startswith(b"7 0 obj\n<< /Type /XRef ")
+    earlier = int(re.findall(rb"startxref\n(\d+)", case.source.data)[-1])
+    assert b"/Prev %d " % earlier in data[table:]
+    start = data.index(b"stream\n", table) + len(b"stream\n")
+    entries = data[start : start + 12]
+    offsets = [int.from_bytes(entries[at + 1 : at + 5], "big") for at in (0, 6)]
+    assert data[offsets[0] :].startswith(b"4 0 obj\n<< /Type /Page ")
+    assert offsets[1] == table
+    assert entries[0] == entries[6] == 1
+
+
 def test_the_cases_without_pages_are_what_their_names_say():
     empty = cases.empty_page_tree().data
     assert b"/Kids [] /Count 0" in empty

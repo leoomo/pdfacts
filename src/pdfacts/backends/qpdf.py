@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import io
 import math
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
@@ -14,7 +15,72 @@ from decimal import Decimal
 
 import pikepdf
 
-from pdfacts.backends.protocols import Box, EngineFailure, FailureKind, PageObject
+from pdfacts.backends.protocols import Box, EngineFailure, FailureKind, PageObject, RecoveredBytes
+
+# How far from the end QPDF looks for startxref (measured: it finds one that
+# starts 1054 bytes before the end, not one that starts 1055 bytes before).
+_STARTXREF_SEARCH = 1054
+# White space as QPDF reads it around startxref, its offset and the sections
+# and objects it looks for: PDF's six characters and the vertical tab
+# (measured, review, round 8).
+_SPACE = rb"[\x00\t\n\x0b\x0c\r ]"
+# The header: %PDF- and a version, as QPDF takes it. Offsets in the file count
+# from it, and it may follow other bytes (measured: QPDF and PDFium read such a
+# file as written). It is looked for as far as classified() accepts it, one
+# byte further than QPDF (review, round 8): where QPDF misses it, QPDF cannot
+# read the last revision, and the file is refused or rebuilt.
+_HEADER = re.compile(rb"%PDF-[0-9]+\.[0-9]+")
+# startxref and the white space and comments before its offset, matched once
+# and never inside the run of another, so that the file is read once however
+# its startxrefs are laid out; possessive, so that a long run costs no memory.
+_STARTXREF = re.compile(rb"startxref(?:" + _SPACE + rb"|%[^\r\n]*)++")
+# White space and comments between the numbers and the keyword of an object
+# header, and a sign on a number, which QPDF reads there (measured, reviews,
+# rounds 9 and 11). An object header is looked for from every number, so what
+# one gap may hold is bounded, and a crafted run of numbers and comments is
+# not read to its end from each: at most eight runs of white space and
+# comments, a comment ending at its end of line within 64 bytes. A header
+# with more, or a longer comment, is not seen; no writer is known to write
+# one.
+_HEADER_GAP = rb"(?:" + _SPACE + rb"++|%[^\r\n]{0,64}[\r\n]){1,8}+"
+_NUMBER = rb"[+-]?[0-9]+"
+# The offset after startxref, in the forms QPDF reads through (measured): white
+# space or comments before it, as above, a plus sign on it, a delimiter or the
+# end of the file after it. It passes over a startxref without an offset, one
+# glued to its offset and one whose offset other characters follow. An offset
+# of more digits, leading zeros aside, names nothing in any file.
+_OFFSET = re.compile(rb"\+?([0-9]+)(?![^\x00\t\n\x0b\x0c\r ()<>\[\]{}/%])")
+_OFFSET_DIGITS = 20
+# What the offset after startxref can name: a cross-reference table, or an
+# object, which may be a cross-reference stream; QPDF, recovery off, tells
+# whether it reads it. White space before it is allowed, more than QPDF reads
+# (measured: one blank, not ten), and only the first bytes are looked at, so
+# that a crafted file whose offsets all name a long run of white space is not
+# read over and over.
+_SECTION = re.compile(
+    _SPACE + rb"*(?:xref|" + _NUMBER + _HEADER_GAP + _NUMBER + _HEADER_GAP + rb"obj)"
+)
+_REACH = 64
+# Where the data of a stream begins, after its dictionary, and where it ends;
+# endstream may follow the data directly (6 corpus files write it after a
+# letter). The text of a startxref between the two ends no revision.
+_STREAM_BOUNDARY = re.compile(rb">>" + _SPACE + rb"*stream(?=[\r\n])|endstream")
+# "N G obj", where an object begins, in the forms QPDF reads.
+_OBJECT_HEADER = re.compile(
+    rb"(?<![0-9+\-])" + _NUMBER + _HEADER_GAP + _NUMBER + _HEADER_GAP + rb"obj(?![A-Za-z])"
+)
+# What a revision is written of: objects, a cross-reference table whose first
+# numbers follow xref, a trailer whose dictionary follows it, either cut short
+# at the end. Words alone, such as obj, stream or trailer in a web page
+# appended to a file, are none (reviews, rounds 10 and 11).
+_REVISION_PART = re.compile(
+    _OBJECT_HEADER.pattern
+    + rb"|(?<![A-Za-z])xref(?="
+    + _SPACE
+    + rb"*+(?:[0-9]|\Z))|(?<![A-Za-z])trailer(?="
+    + _SPACE
+    + rb"*+(?:<<|\Z))"
+)
 
 
 @dataclass(frozen=True)
@@ -53,6 +119,39 @@ def _translated() -> Iterator[None]:
         raise EngineFailure(FailureKind.FORMAT, str(error)) from error
     except Exception as error:
         raise EngineFailure(FailureKind.OTHER, str(error)) from error
+
+
+def _opened(
+    data: bytes, password: str | None, sources: list[_Input], **options: bool
+) -> pikepdf.Pdf:
+    """pikepdf.open with the password given only where the file needs one.
+
+    pikepdf warns when a password is given for a file that is not encrypted,
+    and quieting it with warnings.catch_warnings would change the warning
+    state of the whole process. So the file is opened without a password
+    first, and again with it when that fails or the file is encrypted, so
+    that a wrong password is refused. The input the returned document reads
+    from is added to `sources`, for the caller to close.
+    """
+    source = _Input(data)
+    try:
+        pdf = pikepdf.open(source, password="", **options)
+    except pikepdf.PasswordError:
+        source.close()
+        if not password:
+            raise
+    except BaseException:
+        source.close()
+        raise
+    else:
+        if not password or not pdf.is_encrypted:
+            sources.append(source)
+            return pdf
+        pdf.close()
+        source.close()
+    source = _Input(data)
+    sources.append(source)
+    return pikepdf.open(source, password=password, **options)
 
 
 def _check_index(index: int, count: int) -> None:
@@ -116,14 +215,15 @@ class QpdfDocument:
     def open(cls, data: bytes, password: str | None) -> QpdfDocument:
         """Open `data`. A damaged file is a FORMAT failure: recovery is off."""
         views: list[pikepdf.Pdf] = []
-        sources = [_Input(data), _Input(data)]
+        sources: list[_Input] = []
         try:
             with _translated():
-                for source in sources:
+                for _ in range(2):
                     views.append(
-                        pikepdf.open(
-                            source,
-                            password="" if password is None else password,
+                        _opened(
+                            data,
+                            password,
+                            sources,
                             attempt_recovery=False,
                             inherit_page_attributes=False,
                         )
@@ -231,6 +331,243 @@ class QpdfDocument:
         # is not something to rely on.
         if self._closed:
             raise EngineFailure(FailureKind.OTHER, "closed")
+
+
+def rewrite_recovered(data: bytes, password: str | None) -> RecoveredBytes:
+    """The document QPDF rebuilds from `data`, with recovery on, written anew.
+
+    A FORMAT failure when QPDF cannot rebuild it. /Size is set in the trailer
+    before saving, so that QPDF writes the right one: when it could not read
+    the damaged file's trailer, it would write one without /Size, and the
+    result would be damaged again. Encryption is kept; pikepdf would drop it.
+    Object streams are kept as they are and none are generated (issue #13,
+    decision 3; without /Size set, QPDF could not open what it generated even
+    with recovery on); nothing is linearized. An unencrypted result gets an
+    /ID made from its content, not from the time, so that the same input
+    gives the same bytes.
+
+    A FORMAT failure also when the rebuilt document is not encrypted and yet
+    holds an encryption dictionary: QPDF did not find the trailer that names
+    it, and read the encrypted strings and streams as they are.
+
+    QPDF reads the file up to the end of its last whole revision
+    (_revision_ends), and what follows is left out. Where part of a revision
+    follows, an object, a cross-reference table or a trailer, the last
+    revision is unfinished; where QPDF, recovery off, cannot read the last
+    revision after another, its startxref leads nowhere. Either is a FORMAT
+    failure, since QPDF would read the revision before without a word, or,
+    rebuilding the file from its objects, mix the two; it places objects in
+    object streams only through a cross-reference stream, which an
+    unfinished update lacks. A file without a whole revision is rebuilt from
+    its objects.
+
+    The warnings are those QPDF gave while it rebuilt the file, walked its
+    pages and wrote it: it reads streams only when it writes them.
+    """
+    ends = _revision_ends(data)
+    last = ends[-1] if ends else None
+    if last is not None and _REVISION_PART.search(data, last):
+        raise _unfinished()
+    if last is not None and _reads_as_written(data[:last], password):
+        data = data[:last]
+    elif len(ends) > 1:
+        raise _unfinished()
+    else:
+        # No startxref leads QPDF to a whole revision: it has to rebuild the
+        # file from its objects, the last of each number counting. A comment
+        # longer than its search for startxref keeps it from reading one
+        # first, which fails outside its recovery where the offset is too
+        # large for it (measured), and from dropping an object that only white
+        # space follows to the end ("EOF after endobj"). Comments mean nothing,
+        # and QPDF does not write them.
+        data += b"%" + b" " * (2 * _STARTXREF_SEARCH)
+    sources: list[_Input] = []
+    try:
+        with _translated():
+            pdf = _opened(
+                data, password, sources, attempt_recovery=True, inherit_page_attributes=False
+            )
+            try:
+                page_count = len(pdf.pages)
+                if _lost_encryption(pdf):
+                    raise EngineFailure(
+                        FailureKind.FORMAT,
+                        "the file is encrypted, and QPDF did not find the trailer that names "
+                        "its encryption dictionary",
+                    )
+                # Any value: QPDF writes the number of objects it writes.
+                pdf.trailer["/Size"] = 1
+                written = io.BytesIO()
+                encrypted = pdf.is_encrypted
+                # pikepdf's save() adds a warning about widgets the form does
+                # not reach, a form cut off before its /AcroForm; _save is what
+                # it calls to write. pikepdf would also write the XMP metadata
+                # anew to set the PDF version in it, an empty packet in place
+                # of metadata it cannot parse.
+                pdf._save(
+                    written,
+                    encryption=encrypted,
+                    deterministic_id=not encrypted,
+                    fix_metadata_version=False,
+                )
+                # Everything QPDF reported since the file was opened.
+                reported = tuple(str(message) for message in pdf.get_warnings())
+            finally:
+                pdf.close()
+    finally:
+        for source in sources:
+            source.close()
+    return RecoveredBytes(data=written.getvalue(), page_count=page_count, warnings=reported)
+
+
+def _unfinished() -> EngineFailure:
+    return EngineFailure(
+        FailureKind.FORMAT,
+        "its last revision is unfinished, or its startxref leads nowhere: QPDF would read "
+        "the revision before without a word or, rebuilding the file from its objects, mix "
+        "the two",
+    )
+
+
+def _revision_ends(data: bytes) -> list[int]:
+    """Where the offsets after the startxrefs of whole revisions end, in order.
+
+    A startxref ends a revision where QPDF reads through it, it lies outside
+    the data of a stream (between the dictionary's stream and an endstream
+    that follows), and its offset, counted from the header, names a
+    cross-reference table or an object after the startxref of the revision
+    before: a later revision's section lies nowhere else, and an offset cut
+    short, or cut short and followed by other bytes, can name an earlier one.
+    The first-page trailer of a linearized file ends no revision
+    (_first_page_trailer).
+    """
+    heading = _HEADER.search(data, 0, 1024 + len(b"%PDF-9.9"))
+    header = heading.start() if heading else 0
+    first_page = _first_page_trailer(data, header)
+    # The stream boundaries around each startxref, read once in file order.
+    boundaries = _STREAM_BOUNDARY.finditer(data)
+    before = None
+    after = next(boundaries, None)
+    ends: list[int] = []
+    previous = None
+    for found in _STARTXREF.finditer(data):
+        while after is not None and after.start() < found.start():
+            before, after = after, next(boundaries, None)
+        if found.start() == first_page or (
+            before is not None
+            and before.group().startswith(b">>")
+            and after is not None
+            and after.group() == b"endstream"
+        ):
+            continue
+        match = _OFFSET.match(data, found.end())
+        if match is None:
+            continue
+        digits = match.group(1).lstrip(b"0") or b"0"
+        if len(digits) > _OFFSET_DIGITS:
+            continue
+        section = header + int(digits)
+        if section >= len(data) or not _SECTION.match(data, section, section + _REACH):
+            continue
+        if previous is not None and section <= previous:
+            continue
+        ends.append(match.end())
+        previous = found.start()
+    return ends
+
+
+def _first_page_trailer(data: bytes, header: int) -> int | None:
+    """Where the startxref of a linearized file's first-page trailer begins.
+
+    None where the file is not linearized or has no such trailer. The
+    linearization dictionary is the first object, within the first 1024
+    bytes (ISO 32000-1, F.2), and the first-page cross-reference section
+    follows it (F.3): its startxref is the first, with at most the object of
+    a cross-reference stream between. The last startxref of the revision
+    names the first-page section, which lies before this one; some files
+    have no first-page trailer.
+    """
+    first = _OBJECT_HEADER.search(data, header, header + 1024)
+    if first is None:
+        return None
+    closing = data.find(b"endobj", first.end(), header + 1024)
+    if closing < 0 or b"/Linearized" not in data[first.end() : closing]:
+        return None
+    found = _STARTXREF.search(data, closing)
+    if found is None:
+        return None
+    between = _OBJECT_HEADER.finditer(data, closing, found.start())
+    if next(between, None) is not None and next(between, None) is not None:
+        return None
+    return found.start()
+
+
+def _reads_as_written(data: bytes, password: str | None) -> bool:
+    """Whether QPDF, recovery off, reads the cross-reference sections of `data`.
+
+    QPDF reads them when it opens a file: from the last startxref through
+    each /Prev.
+    """
+    sources: list[_Input] = []
+    try:
+        with _translated():
+            _opened(
+                data, password, sources, attempt_recovery=False, inherit_page_attributes=False
+            ).close()
+    except EngineFailure as failure:
+        if failure.kind is not FailureKind.FORMAT:
+            raise
+        return False
+    finally:
+        for source in sources:
+            source.close()
+    return True
+
+
+def _lost_encryption(pdf: pikepdf.Pdf) -> bool:
+    """Whether a document QPDF reads as unencrypted holds an encryption dictionary.
+
+    One that the catalog does not reach: only a trailer names an encryption
+    dictionary, and one the document uses, such as the seed values of a
+    signature field, is none.
+    """
+    if pdf.is_encrypted:
+        return False
+    found = {obj.objgen for obj in pdf.objects if _encryption_dictionary(obj)}
+    return bool(found - _reachable(pdf.Root))
+
+
+def _reachable(root: pikepdf.Object) -> set[tuple[int, int]]:
+    """The indirect objects reached from `root` through dictionaries and arrays."""
+    seen: set[tuple[int, int]] = set()
+    stack: list[object] = [root]
+    while stack:
+        node = stack.pop()
+        if not isinstance(node, pikepdf.Dictionary | pikepdf.Array | pikepdf.Stream):
+            continue
+        if node.is_indirect:
+            if node.objgen in seen:
+                continue
+            seen.add(node.objgen)
+        stack.extend(node if isinstance(node, pikepdf.Array) else node.values())
+    return seen
+
+
+def _encryption_dictionary(obj: object) -> bool:
+    """A security handler's name in /Filter, and what only encryption holds.
+
+    /O and /U of the standard handler, /Recipients of the public-key one,
+    crypt filters (/CF, /StmF, /StrF) from version 4 on, or else /V for the
+    algorithm. A signature dictionary also names a handler in /Filter and may
+    have /V; it has /ByteRange and /Contents, which encryption never has.
+    """
+    if not isinstance(obj, pikepdf.Dictionary) or not isinstance(obj.get("/Filter"), pikepdf.Name):
+        return False
+    if "/ByteRange" in obj or "/Contents" in obj:
+        return False
+    return ("/O" in obj and "/U" in obj) or any(
+        key in obj for key in ("/Recipients", "/CF", "/StmF", "/StrF", "/V")
+    )
 
 
 def _page_objects_as_written(pdf: pikepdf.Pdf) -> tuple[tuple[int, int] | None, ...] | None:

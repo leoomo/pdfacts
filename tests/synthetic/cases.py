@@ -400,14 +400,142 @@ class Updated:
     media_box: Box
 
 
+UPDATED_MEDIA_BOX: Box = (0, 0, 300, 200)
+
+
+def _updated_page() -> bytes:
+    """The page of plain_page() with UPDATED_MEDIA_BOX."""
+    resources = b"/Resources << /Font << /F1 %d 0 R >> >>" % FONT_OBJECT
+    return b"<< /Type /Page /Parent %d 0 R /MediaBox %s %s /Contents %d 0 R >>" % (
+        PAGE_TREE,
+        box_text(UPDATED_MEDIA_BOX),
+        resources,
+        FIRST_PAGE + 1,
+    )
+
+
 def incremental_update() -> Updated:
     source = plain_page()
-    media_box: Box = (0, 0, 300, 200)
-    page = b"<< /Type /Page /Parent %d 0 R /MediaBox %s " % (PAGE_TREE, box_text(media_box)) + (
-        b"/Resources << /Font << /F1 %d 0 R >> >> /Contents %d 0 R >>"
-        % (FONT_OBJECT, FIRST_PAGE + 1)
+    data = append_update(source.data, {FIRST_PAGE: _updated_page()}, 1)
+    return Updated(data, source, UPDATED_MEDIA_BOX)
+
+
+def cut_inside_the_last_offset(*, naming_the_update: bool = False, closed: bool = True) -> Updated:
+    """The update of incremental_update(), padded, cut inside its last offset.
+
+    A string that nothing uses pads the update until its table lies at ten
+    times the offset that the cut leaves after the last startxref: the offset
+    of the source's table, or with `naming_the_update` that of the update's
+    first object. Without `closed`, the source's %%EOF is left out before the
+    update. The objects of the update are whole.
+    """
+    source = plain_page()
+    written = source.data if closed else source.data[: source.data.rindex(b"%%EOF")]
+    _, earlier = _startxref(source.data)
+    named = len(written) if naming_the_update else earlier
+
+    def padded(padding: int) -> bytes:
+        objects = {FIRST_PAGE: _updated_page(), size_of_document(1): b"(%s)" % (b"x" * padding)}
+        return append_update(written, objects, 1)
+
+    _, table = _startxref(padded(0))
+    data = padded(10 * named - table)
+    start, _ = _startxref(data)
+    return Updated(data[: start + len(b"%d" % named)], source, UPDATED_MEDIA_BOX)
+
+
+def update_in_a_cross_reference_stream(
+    *, gap: bytes = b" ", sign: bytes = b"", generation: bytes = b"0"
+) -> Updated:
+    """The update of incremental_update() written with a cross-reference stream.
+
+    Its entries are not compressed. `gap` separates the numbers and the
+    keyword of the update's two object headers, `sign` comes before each
+    object number, and `generation` is written as the generation, as QPDF
+    reads them.
+    """
+    source = plain_page()
+    _, earlier = _startxref(source.data)
+
+    def header(number: int) -> bytes:
+        return sign + b"%d" % number + gap + generation + gap + b"obj\n"
+
+    out = bytearray(source.data)
+    page = len(out)
+    out += header(FIRST_PAGE) + _updated_page() + b"\nendobj\n"
+    table = len(out)
+    number = size_of_document(1) + 1
+    entries = b"".join(bytes([1]) + at.to_bytes(4, "big") + bytes([0]) for at in (page, table))
+    out += header(number)
+    out += b"<< /Type /XRef /Size %d /W [1 4 1] /Index [%d 1 %d 1] /Root 1 0 R /Prev %d " % (
+        number + 1,
+        FIRST_PAGE,
+        number,
+        earlier,
     )
-    return Updated(append_update(source.data, {FIRST_PAGE: page}, 1), source, media_box)
+    out += b"/Length %d >>\nstream\n%s\nendstream\nendobj\n" % (len(entries), entries)
+    out += b"startxref\n%d\n%%%%EOF\n" % table
+    return Updated(bytes(out), source, UPDATED_MEDIA_BOX)
+
+
+@dataclass(frozen=True)
+class Linearized:
+    """A one-page file laid out as a linearized one, and where its main table begins."""
+
+    data: bytes
+    main_table: int
+
+
+def linearized(
+    *, first_page_offset: bool = False, first_page_trailer: bool = True, between: int = 0
+) -> Linearized:
+    """A one-page file with the layout of ISO 32000-1, Annex F.
+
+    A linearization dictionary, its /E the end of the first page; a
+    first-page section with its own table and a trailer whose /Prev names the
+    main table; the objects; the main table, whose startxref names the
+    first-page table. The first-page trailer's startxref is 0, or with
+    `first_page_offset` the offset of the first-page table. Without
+    `first_page_trailer`, as some files are written, the first-page section
+    has no table and trailer of its own: the main table lists every object,
+    and its startxref names it. `between` objects that nothing uses lie
+    between the linearization dictionary and the first-page table, a layout
+    the standard does not have. Hint streams are left out: no engine reads
+    them without being asked to.
+    """
+    objects = {
+        1: b"<< /Type /Catalog /Pages 2 0 R >>",
+        2: b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        3: b"<< /Type /Page /Parent 2 0 R /MediaBox %s /Resources << >> /Contents 4 0 R >>"
+        % box_text(MEDIA_BOX),
+        4: stream(rectangle_content(RECTANGLE, BLACK)),
+    }
+    # Numbers written with ten digits, so that they can be filled in once
+    # known without moving what follows.
+    out = bytearray(b"%PDF-1.7\n")
+    dictionary = len(out)
+    out += b"5 0 obj\n<< /Linearized 1 /E 0000000000 >>\nendobj\n"
+    for number in range(between):
+        out += b"%d 0 obj\n<< >>\nendobj\n" % (6 + number)
+    first_table = len(out)
+    if first_page_trailer:
+        out += b"xref\n5 1\n%010d 00000 n \n" % dictionary
+        out += b"trailer\n<< /Size 6 /Root 1 0 R /Prev 0000000000 >>\n"
+        out += b"startxref\n%d\n%%%%EOF\n" % (first_table if first_page_offset else 0)
+    offsets = {5: dictionary}
+    for number, body in objects.items():
+        offsets[number] = len(out)
+        out += b"%d 0 obj\n%s\nendobj\n" % (number, body)
+    main_table = len(out)
+    listed = [*objects] if first_page_trailer else [*objects, 5]
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(listed) + 1)
+    out += b"".join(b"%010d 00000 n \n" % offsets[number] for number in listed)
+    named = first_table if first_page_trailer else main_table
+    out += b"trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % named
+    data = bytes(out)
+    data = data.replace(b"/E 0000000000", b"/E %010d" % main_table, 1)
+    data = data.replace(b"/Prev 0000000000", b"/Prev %010d" % main_table, 1)
+    return Linearized(data, main_table)
 
 
 def cut_inside_the_update() -> Changed:

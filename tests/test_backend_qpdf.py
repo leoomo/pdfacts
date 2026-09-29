@@ -7,6 +7,7 @@ are the numbers the cases were built from.
 from __future__ import annotations
 
 import dataclasses
+import io
 import re
 import threading
 import typing
@@ -14,8 +15,15 @@ import typing
 import pikepdf
 import pytest
 
-from pdfacts.backends.protocols import EngineFailure, FailureKind, ObjectReader, PageObject
-from pdfacts.backends.qpdf import QpdfDocument
+from pdfacts.backends import qpdf as qpdf_backend
+from pdfacts.backends.protocols import (
+    EngineFailure,
+    FailureKind,
+    ObjectReader,
+    PageObject,
+    RecoveredBytes,
+)
+from pdfacts.backends.qpdf import QpdfDocument, rewrite_recovered
 from synthetic import cases
 from synthetic.builder import PageSpec, build, document, stream
 
@@ -728,3 +736,110 @@ def test_it_implements_the_object_reader():
     members = typing.get_protocol_members(ObjectReader)
     assert members == {"page_count", "object_count", "page_object", "warnings", "close"}
     assert all(callable(getattr(QpdfDocument, name)) for name in members)
+
+
+# --- rewrite_recovered -----------------------------------------------------------------
+
+
+def test_a_truncated_file_is_rebuilt_and_written_anew():
+    case = cases.cut_before_xref_table()
+    rewritten = rewrite_recovered(case.data, None)
+    assert type(rewritten) is RecoveredBytes
+    assert type(rewritten.data) is bytes and rewritten.data != case.data
+    assert rewritten.page_count == case.pages_built
+    assert rewritten.warnings and all(type(w) is str for w in rewritten.warnings)
+    # The input is named without a memory address.
+    assert all("0x" not in warning for warning in rewritten.warnings)
+    assert any(warning.startswith("stream <input>") for warning in rewritten.warnings)
+
+
+def test_the_rewritten_file_has_a_size_and_opens_with_recovery_off():
+    rewritten = rewrite_recovered(cases.cut_before_xref_table().data, None)
+    with pikepdf.open(io.BytesIO(rewritten.data), attempt_recovery=False) as pdf:
+        assert "/Size" in pdf.trailer
+        assert pdf.get_warnings() == []
+
+
+@pytest.mark.parametrize(
+    "data",
+    [cases.cut_inside_catalog().data, cases.header_only().data],
+    ids=["cut inside the catalog", "header only"],
+)
+def test_a_file_qpdf_cannot_rebuild_is_a_format_failure(data):
+    with pytest.raises(EngineFailure) as raised:
+        rewrite_recovered(data, None)
+    assert raised.value.kind is FailureKind.FORMAT
+
+
+def test_a_missing_password_is_a_password_failure():
+    with pytest.raises(EngineFailure) as raised:
+        rewrite_recovered(cases.user_password().data, None)
+    assert raised.value.kind is FailureKind.PASSWORD
+
+
+def test_encryption_is_kept():
+    case = cases.user_password()
+    rewritten = rewrite_recovered(case.data, case.user_password)
+    with pytest.raises(pikepdf.PasswordError):
+        pikepdf.open(io.BytesIO(rewritten.data))
+    with pikepdf.open(io.BytesIO(rewritten.data), password=case.user_password) as pdf:
+        assert pdf.is_encrypted
+
+
+def test_an_unencrypted_file_stays_unencrypted():
+    rewritten = rewrite_recovered(cases.three_pages().data, None)
+    with pikepdf.open(io.BytesIO(rewritten.data)) as pdf:
+        assert not pdf.is_encrypted
+    assert rewritten.warnings == ()
+
+
+def watching_opens(monkeypatch) -> tuple[list[pikepdf.Pdf], list[pikepdf.Pdf], list[object]]:
+    """The documents pikepdf opens, those closed, and every input the backend makes."""
+    opened: list[pikepdf.Pdf] = []
+    closed: list[pikepdf.Pdf] = []
+    inputs: list[object] = []
+    original_open, original_close = pikepdf.open, pikepdf.Pdf.close
+
+    def opening(*args, **kwargs):
+        pdf = original_open(*args, **kwargs)
+        opened.append(pdf)
+        return pdf
+
+    def closing(self):
+        closed.append(self)
+        return original_close(self)
+
+    class Recorded(qpdf_backend._Input):
+        def __init__(self, data: bytes) -> None:
+            super().__init__(data)
+            inputs.append(self)
+
+    monkeypatch.setattr(pikepdf, "open", opening)
+    monkeypatch.setattr(pikepdf.Pdf, "close", closing)
+    monkeypatch.setattr(qpdf_backend, "_Input", Recorded)
+    return opened, closed, inputs
+
+
+@pytest.mark.parametrize(
+    ("make", "password", "opens"),
+    [
+        # The recovery opens the file twice, once with recovery off to see
+        # that it reads as written; QpdfDocument opens it twice.
+        (cases.owner_password_only, None, 4),
+        # Each opened without the password first, then again with it.
+        (cases.owner_password_only, "owner", 8),
+        # Each first open, without a password, is refused.
+        (cases.user_password, "user", 4),
+    ],
+    ids=["owner password, none given", "owner password given", "user password given"],
+)
+def test_every_document_and_input_the_backend_opens_is_closed(monkeypatch, make, password, opens):
+    # Built before the watching starts: the encrypted cases are made with pikepdf.
+    data = make().data
+    opened, closed, inputs = watching_opens(monkeypatch)
+    rewrite_recovered(data, password)
+    opened_once = QpdfDocument.open(data, password)
+    opened_once.close()
+    assert len(opened) == opens
+    assert all(any(pdf is done for done in closed) for pdf in opened)
+    assert inputs and all(source.closed for source in inputs)

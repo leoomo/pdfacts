@@ -407,23 +407,7 @@ def open(
     `_clock` is for tests: the deadline counts from the start of open().
     """
     started = _clock()
-    if not isinstance(data, bytes):
-        raise TypeError(f"data must be bytes, not {type(data).__name__}")
-    if password is not None:
-        _check_password(password)
-    if limits is None:
-        limits = Limits()
-    elif not isinstance(limits, Limits):
-        raise TypeError(f"limits must be a Limits or None, not {type(limits).__name__}")
-
-    # The input is classified before an engine sees it: PDFium gives the same
-    # error for an empty file, a file without a header and a truncated one.
-    if not data:
-        raise EmptyInputError()
-    if limits.max_bytes is not None and len(data) > limits.max_bytes:
-        raise LimitExceededError(limit="max_bytes", allowed=limits.max_bytes, found=len(data))
-    if HEADER not in data[:HEADER_SEARCH_BYTES]:
-        raise NotPdfError()
+    limits = classified(data, password, limits)
     # A file cut short can end in an earlier revision's cross-reference table,
     # which PDFium then reads without a word; so can one with bytes appended.
     end = data.rfind(END)
@@ -485,6 +469,31 @@ def open(
                 with suppress(EngineFailure):
                     qpdf.close()
             raise
+
+
+def classified(data: bytes, password: str | None, limits: Limits | None) -> Limits:
+    """The limits to apply, once the arguments and the input have passed.
+
+    TypeError or ValueError for an argument of the wrong kind. Then the input
+    is classified before an engine sees it, since PDFium gives the same error
+    for an empty file, a file without a header and a truncated one:
+    EmptyInputError, LimitExceededError for max_bytes, NotPdfError.
+    """
+    if not isinstance(data, bytes):
+        raise TypeError(f"data must be bytes, not {type(data).__name__}")
+    if password is not None:
+        _check_password(password)
+    if limits is None:
+        limits = Limits()
+    elif not isinstance(limits, Limits):
+        raise TypeError(f"limits must be a Limits or None, not {type(limits).__name__}")
+    if not data:
+        raise EmptyInputError()
+    if limits.max_bytes is not None and len(data) > limits.max_bytes:
+        raise LimitExceededError(limit="max_bytes", allowed=limits.max_bytes, found=len(data))
+    if HEADER not in data[:HEADER_SEARCH_BYTES]:
+        raise NotPdfError()
+    return limits
 
 
 def _open_qpdf(
