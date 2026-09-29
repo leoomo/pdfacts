@@ -10,12 +10,19 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from functools import partial
+from types import MappingProxyType
 from typing import TypeVar
 
 import pypdfium2
 import pypdfium2.raw as pdfium_c
 
-from pdfacts.backends.protocols import Box, EngineFailure, FailureKind, RawBitmap
+from pdfacts.backends.protocols import (
+    AnnotationView,
+    Box,
+    EngineFailure,
+    FailureKind,
+    RawBitmap,
+)
 
 T = TypeVar("T")
 
@@ -127,10 +134,11 @@ def _check_index(index: int, count: int) -> None:
 
 
 class PdfiumDocument:
-    """A document opened by PDFium: a GeometryReader and a Renderer.
+    """A document opened by PDFium: a GeometryReader, a Renderer, an AnnotationViewer.
 
     It holds the native handle; no method returns a pypdfium2 object. A page is
-    opened for one call and closed before the call returns.
+    opened for one call and closed before the call returns. No form environment
+    is ever made: the document that renders must draw as M1 recorded.
     """
 
     def __init__(self, document: pypdfium2.PdfDocument, data: bytes) -> None:
@@ -231,6 +239,20 @@ class PdfiumDocument:
             raise ValueError(rendered)
         return rendered
 
+    def annotation_count(self, index: int) -> int:
+        """The number of annotations PDFium counts on the page, every entry."""
+        return self._read_page(index, lambda page: int(pdfium_c.FPDFPage_GetAnnotCount(page.raw)))
+
+    def annotation_views(self, index: int) -> tuple[AnnotationView | None, ...]:
+        """What PDFium reads in each annotation dictionary of the page's /Annots.
+
+        One view per entry PDFium counts, `None` where `FPDFPage_GetAnnot`
+        gives no annotation: for a NULL handle the reading functions answer as
+        for an annotation without entries, so nothing but the None tells that
+        there is no dictionary.
+        """
+        return self._read_page(index, _annotation_views)
+
     def close(self) -> None:
         """Close the document. A further call does nothing but finish this one.
 
@@ -261,6 +283,54 @@ class PdfiumDocument:
                 return read(page)
             finally:
                 page.close()
+
+
+def _annotation_views(page: pypdfium2.PdfPage) -> tuple[AnnotationView | None, ...]:
+    views: list[AnnotationView | None] = []
+    for index in range(pdfium_c.FPDFPage_GetAnnotCount(page.raw)):
+        views.append(_annotation_view(page, index))
+    return tuple(views)
+
+
+def _annotation_view(page: pypdfium2.PdfPage, index: int) -> AnnotationView | None:
+    annot = pdfium_c.FPDFPage_GetAnnot(page.raw, index)
+    if not annot:
+        return None
+    try:
+        rect: Box | None = None
+        bounds = pdfium_c.FS_RECTF()
+        if pdfium_c.FPDFAnnot_GetRect(annot, ctypes.byref(bounds)):
+            rect = (bounds.left, bounds.bottom, bounds.right, bounds.top)
+        values = {
+            key: (pdfium_c.FPDFAnnot_GetValueType(annot, key), _annot_text(annot, key))
+            for key in (b"V", b"DV", b"TU", b"FT")
+        }
+        return AnnotationView(
+            index=index,
+            widget=pdfium_c.FPDFAnnot_GetSubtype(annot) == pdfium_c.FPDF_ANNOT_WIDGET,
+            rect=rect,
+            flags=pdfium_c.FPDFAnnot_GetFlags(annot),
+            t_type=pdfium_c.FPDFAnnot_GetValueType(annot, b"T"),
+            t=_annot_text(annot, b"T"),
+            as_type=pdfium_c.FPDFAnnot_GetValueType(annot, b"AS"),
+            as_text=_annot_text(annot, b"AS"),
+            parent_type=pdfium_c.FPDFAnnot_GetValueType(annot, b"Parent"),
+            values=MappingProxyType(values),
+        )
+    finally:
+        pdfium_c.FPDFPage_CloseAnnot(annot)
+
+
+def _annot_text(annot: pdfium_c.FPDF_ANNOTATION, key: bytes) -> str:
+    """FPDFAnnot_GetStringValue as text: UTF-16 with lone surrogates kept."""
+    needed = pdfium_c.FPDFAnnot_GetStringValue(annot, key, None, 0)
+    if needed <= 2:
+        return ""
+    buffer = ctypes.create_string_buffer(needed)
+    pdfium_c.FPDFAnnot_GetStringValue(
+        annot, key, ctypes.cast(buffer, ctypes.POINTER(pdfium_c.FPDF_WCHAR)), needed
+    )
+    return buffer.raw[:-2].decode("utf-16-le", "surrogatepass")
 
 
 def _check_as_written(raw: pdfium_c.FPDF_DOCUMENT) -> None:
