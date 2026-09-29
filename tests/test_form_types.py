@@ -302,3 +302,71 @@ def test_the_exports():
     ):
         assert name in pdfacts.__all__
     assert "decode_text_string" not in pdfacts.__all__
+
+
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda: DeviceColour((10**400,)),
+        lambda: BorderStyle(10**400, None),
+    ],
+    ids=["a component", "a width"],
+)
+def test_an_int_too_large_for_a_float_is_a_value_error(make):
+    with pytest.raises(ValueError):
+        make()
+
+
+def test_the_largest_flags_are_accepted():
+    assert annotation(annotation_flags=2**32 - 1).annotation_flags == 2**32 - 1
+    assert field(field_flags=2**32 - 1).field_flags == 2**32 - 1
+
+
+@pytest.mark.parametrize("components", [(), (0.0, 0.25, 0.5, 1.0)], ids=["none", "four"])
+def test_device_colour_accepts_zero_and_four_components(components):
+    assert DeviceColour(components).components == components
+
+
+@pytest.mark.parametrize(
+    "value", [decode_name(b"Ja"), ("a", "b")], ids=["a name", "a tuple of text"]
+)
+def test_field_accepts_a_name_or_a_tuple_of_text_as_value(value):
+    assert field(value=value).value == value
+
+
+@pytest.mark.parametrize(
+    ("make", "changes"),
+    [
+        (field, {"name": 1}),
+        (field, {"label": 1}),
+        (field, {"ref": "x"}),
+        (annotation, {"ref": "x"}),
+        (widget, {"border": "x"}),
+        (widget, {"border_colour": "x"}),
+        (widget, {"background_colour": "x"}),
+    ],
+    ids=[
+        "field name",
+        "field label",
+        "field ref",
+        "annotation ref",
+        "border",
+        "border colour",
+        "background colour",
+    ],
+)
+def test_the_other_fields_are_checked(make, changes):
+    with pytest.raises(TypeError):
+        make(**changes)
+
+
+@pytest.mark.parametrize("make", [annotation, field, field_ref, widget])
+def test_keywords_only(make):
+    valid = make()
+    values = [getattr(valid, one.name) for one in dataclasses.fields(valid)]
+    with pytest.raises(TypeError):
+        type(valid)(*values)
+
+
+def test_a_widget_has_no_dict():
+    assert not hasattr(widget(), "__dict__")
