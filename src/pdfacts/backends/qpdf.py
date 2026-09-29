@@ -36,8 +36,10 @@ _HEADER = re.compile(rb"%PDF-[0-9]+\.[0-9]+")
 _STARTXREF = re.compile(rb"startxref(?:" + _SPACE + rb"|%[^\r\n]*)++")
 # White space and comments between the numbers and the keyword of an object
 # header, and a plus sign on a number, which QPDF reads there (measured,
-# review, round 9).
-_HEADER_GAP = rb"(?:" + _SPACE + rb"|%[^\r\n]*)++"
+# review, round 9). A comment there has to end at its end of line within 64
+# bytes: an object header is looked for from every number, and a crafted
+# line of numbers and comments is not read to its end from each.
+_HEADER_GAP = rb"(?:" + _SPACE + rb"|%[^\r\n]{0,64}[\r\n])++"
 _NUMBER = rb"\+?[0-9]+"
 # The offset after startxref, in the forms QPDF reads through (measured): white
 # space or comments before it, as above, a plus sign on it, a delimiter or the
@@ -60,17 +62,14 @@ _REACH = 64
 # endstream may follow the data directly (6 corpus files write it after a
 # letter). The text of a startxref between the two ends no revision.
 _STREAM_BOUNDARY = re.compile(rb">>" + _SPACE + rb"*stream(?=[\r\n])|endstream")
-# "N G obj", where an object begins, counted where a linearized file's
-# first-page trailer is looked for.
+# "N G obj", where an object begins, in the forms QPDF reads.
 _OBJECT_HEADER = re.compile(
-    rb"(?<![0-9+])" + _NUMBER + _SPACE + rb"+" + _NUMBER + _SPACE + rb"+obj(?![A-Za-z])"
+    rb"(?<![0-9+])" + _NUMBER + _HEADER_GAP + _NUMBER + _HEADER_GAP + rb"obj(?![A-Za-z])"
 )
-# The keywords a revision is written with: objects and streams, a
-# cross-reference table, a trailer. Found by keyword, an object is seen in
-# any form of its header.
-_REVISION_PART = re.compile(
-    rb"(?<![A-Za-z])(?:obj|endobj|stream|endstream|xref|trailer)(?![A-Za-z])"
-)
+# What a revision is written of: objects, a cross-reference table, a trailer.
+# Words alone, such as obj or stream in a web page appended to a file, are
+# none (review, round 10).
+_REVISION_PART = re.compile(_OBJECT_HEADER.pattern + rb"|(?<![A-Za-z])(?:xref|trailer)(?![A-Za-z])")
 
 
 @dataclass(frozen=True)

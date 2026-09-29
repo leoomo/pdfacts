@@ -91,12 +91,12 @@ def recover(
     pikepdf's logger instead, for example about a kid it drops. QPDF may
     repair the page tree while it walks it, for example give a page without
     a media box US letter; the repair is written into the result and named
-    among the warnings. The
-    object numbers of the result differ from those of the input.
+    among the warnings. The object numbers of the result differ from those
+    of the input.
 
     The metadata keeps its content, as every stream does, though QPDF may
-    encode a stream otherwise. An encrypted file stays encrypted, and
-    its result differs from run to run; an unencrypted result is the same
+    encode a stream otherwise. An encrypted file stays encrypted, and its
+    result differs from run to run; an unencrypted result is the same
     for the same input. When QPDF finds no trailer, it does not know that
     the file is encrypted: if the encryption dictionary is left,
     RecoveryFailedError, also for an unencrypted file that holds one nothing

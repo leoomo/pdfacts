@@ -741,6 +741,14 @@ END_DAMAGE = {
     "cut after the offset": lambda data: data[: data.rindex(b"%%EOF")].rstrip(),
     "junk within QPDF's search": lambda data: data + b"junk " * 60,
     "junk beyond QPDF's search": lambda data: data + b"junk " * 600,
+    # Words a revision is written with, which alone end no revision.
+    "a web page appended": lambda data: (
+        data
+        + b"<html><script>track(obj);</script><p>The upload stream was interrupted.</p></html>\n"
+    ),
+    "a MIME part appended": lambda data: (
+        data + b"--boundary\r\nContent-Type: application/octet-stream\r\n\r\n--boundary--\r\n"
+    ),
 }
 
 
@@ -1026,6 +1034,10 @@ LINEARIZED = {
         (case := cases.linearized(first_page_offset=True))
         and with_content_opened_after_a_vertical_tab(case, b"%%startxref %010d" % first_table(case))
     ),
+    "a comment inside the linearization dictionary's object header": lambda: (
+        (case := cases.linearized(first_page_offset=True))
+        and dataclasses.replace(case, data=case.data.replace(b"5 0 obj\n", b"5%\n0 obj", 1))
+    ),
     "no first-page trailer": lambda: cases.linearized(first_page_trailer=False),
     # The first-page trailer, too far from the dictionary to be known as one,
     # ends no revision: its offset, 0, names no section.
@@ -1077,6 +1089,16 @@ def test_a_crafted_file_is_read_once(name):
     started = time.perf_counter()
     with pytest.raises(RecoveryFailedError):
         pdfacts.recover(CRAFTED[name])
+    assert time.perf_counter() - started < 5
+
+
+def test_a_crafted_line_after_the_last_revision_is_read_once():
+    # Numbers and comments on one line, each comment running to its end: an
+    # object header looked for from every number, its comments read to the
+    # end of the line each time, would take many seconds. None is there.
+    data = cases.plain_page().data + b"1 %1 " * 200_000 + b"\n"
+    started = time.perf_counter()
+    assert pdfacts.recover(data).page_count == 1
     assert time.perf_counter() - started < 5
 
 
