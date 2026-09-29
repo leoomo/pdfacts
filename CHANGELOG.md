@@ -24,7 +24,8 @@ may break callers.
   manager. Before an engine sees the input: `EmptyInputError` for no bytes,
   `LimitExceededError` for more than `max_bytes`, `NotPdfError` without a
   header, `DamagedFileError` when the file does not end with `%%EOF` and
-  white space. From PDFium: `PasswordRequiredError`, `DamagedFileError` (also
+  white space, or when part of a revision follows the end of its last whole
+  revision. From PDFium: `PasswordRequiredError`, `DamagedFileError` (also
   when it has to rebuild the cross-reference table, finds no page, or finds
   no page dictionary for a page it counts), `EngineError`, and
   `LimitExceededError` for more than `max_pages`. Data that is not `bytes`, a
@@ -106,6 +107,10 @@ may break callers.
   space, when PDFium can read it only by rebuilding its cross-reference table,
   and when PDFium finds no page in it or no page dictionary for a page it
   counts.
+- A file counts as damaged also when part of a revision, an object, a
+  cross-reference section or a trailer, follows the end of its last whole
+  revision: its last `startxref` cannot be read, or its last update is
+  unfinished (#32).
 - A page counts as damaged when it is read if PDFium's visible box for it is
   not finite or has no area, or the boxes the file writes leave no area (a
   flat crop box, or a media box that is flat or that, intersected with the
