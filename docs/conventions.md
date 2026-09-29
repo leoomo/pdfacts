@@ -1,6 +1,6 @@
 # Conventions
 
-Status: draft. These become binding with milestone M1. Until version 1.0 a
+Status: binding since milestone M1 was done on 2026-09-29. Until version 1.0 a
 convention changes only with the maintainer's consent, and every change is
 recorded in [CHANGELOG.md](../CHANGELOG.md).
 
