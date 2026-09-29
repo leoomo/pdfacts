@@ -204,6 +204,33 @@ class FieldTree:
     cut: bool  # a node 32 levels below a root has /Kids, which were not followed
 
 
+@dataclass(frozen=True, slots=True)
+class AnnotationView:
+    """What PDFium reads in the annotation dictionary at an index of a page's /Annots."""
+
+    index: int
+    widget: bool  # FPDFAnnot_GetSubtype is FPDF_ANNOT_WIDGET
+    # FPDFAnnot_GetRect when it returns true, corners as PDFium gives them.
+    rect: Box | None
+    flags: int  # FPDFAnnot_GetFlags, as PDFium gives it (bit 32 makes it negative)
+    t_type: int  # FPDFAnnot_GetValueType for "T"
+    t: str  # FPDFAnnot_GetStringValue for "T"
+    as_type: int  # FPDFAnnot_GetValueType for "AS"
+    as_text: str  # FPDFAnnot_GetStringValue for "AS"
+    parent_type: int  # FPDFAnnot_GetValueType for "Parent"
+    # For each of b"V", b"DV", b"TU", b"FT": its value type and
+    # FPDFAnnot_GetStringValue.
+    values: Mapping[bytes, tuple[int, str]]
+
+
+class AnnotationViewer(Protocol):
+    """Annotation dictionaries as an engine that interprets the page reads them."""
+
+    def annotation_count(self, index: int) -> int: ...
+
+    def annotation_views(self, index: int) -> tuple[AnnotationView | None, ...]: ...
+
+
 class GeometryReader(Protocol):
     """Page geometry as an engine that interprets the page sees it."""
 
