@@ -10,7 +10,13 @@ from pathlib import Path
 import pytest
 
 import pdfacts.backends.protocols as protocols
-from pdfacts.backends.protocols import EngineFailure, FailureKind, PageObject, RawBitmap
+from pdfacts.backends.protocols import (
+    EngineFailure,
+    FailureKind,
+    PageObject,
+    RawBitmap,
+    RecoveredBytes,
+)
 
 
 def test_the_protocols_import_no_engine_and_nothing_from_the_core():
@@ -72,3 +78,12 @@ def test_the_raw_bitmap_has_the_fields_of_issue_12_and_is_frozen():
     bitmap = RawBitmap(1, 1, 1, 1, b"\x00")
     with pytest.raises(dataclasses.FrozenInstanceError):
         bitmap.width = 2  # type: ignore[misc]
+
+
+def test_the_recovered_bytes_have_the_fields_of_issue_13_and_are_frozen():
+    names = [field.name for field in dataclasses.fields(RecoveredBytes)]
+    assert names == ["data", "page_count", "warnings"]
+    recovered = RecoveredBytes(b"%PDF-1.7", 1, ())
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        recovered.page_count = 2  # type: ignore[misc]
+    assert "PDF" not in repr(recovered)
