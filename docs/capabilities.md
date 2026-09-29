@@ -44,7 +44,7 @@ kept as a record of what was run.
 
 ## Milestone M1: gate
 
-Run on 2026-09-29 with `bench/gates/run.py` on commit `4a6a853a32df14ec65e1044bda62b5e6f551a94e`, over the 104
+Run on 2026-09-29 with `bench/gates/run.py` on commit `46f27c6db8fe880fb830ca972b8c0f4a7d1f34b3`, over the 104
 files of `bench/corpus/manifest.csv`: glyph data read through PDFium after the
 font policy was installed, and page geometry read through `pdfacts.open`.
 Every platform reported pypdfium2 5.13.0, PDFium 153.0.7999.0, pikepdf 10.14.0,
@@ -52,9 +52,9 @@ QPDF 12.4.1 and the font policy embedded-only.
 
 | Platform | `uname -m` | Python | Files read | Pages | Glyphs | Seconds |
 | --- | --- | --- | --- | --- | --- | --- |
-| macOS arm64, natively | arm64 | 3.13.5 | 104 | 467 | 1104117 | 10.2 |
-| Linux arm64, container `python:3.13.5-slim` | aarch64 | 3.13.5 | 104 | 467 | 1104117 | 11.7 |
-| Linux x86_64, container `python:3.13.5-slim`, emulated on an arm64 host | x86_64 | 3.13.5 | 104 | 467 | 1104117 | 22.0 |
+| macOS arm64, natively | arm64 | 3.13.5 | 104 | 467 | 1104117 | 13.1 |
+| Linux arm64, container `python:3.13.5-slim` | aarch64 | 3.13.5 | 104 | 467 | 1104117 | 19.0 |
+| Linux x86_64, container `python:3.13.5-slim`, emulated on an arm64 host | x86_64 | 3.13.5 | 104 | 467 | 1104117 | 25.0 |
 
 | Compared on all three platforms | Files identical |
 | --- | --- |

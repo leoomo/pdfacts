@@ -120,9 +120,9 @@ leaves no receipt of an earlier run behind.
 
 The three receipts go to `bench/out/`, named `m1-darwin-arm64.json`,
 `m1-linux-arm64.json` and `m1-linux-amd64.json` on this machine. A full run
-took 11.5 s on the host, 17.2 s in the arm64 container and 28.7 s in the
-emulated amd64 container (2026-09-29); reading the corpus alone took 10.2 s,
-11.7 s and 22.0 s. Compare them with:
+took 14.5 s on the host, 25.0 s in the arm64 container and 32.3 s in the
+emulated amd64 container (2026-09-29); reading the corpus alone took 13.1 s,
+19.0 s and 25.0 s. Compare them with:
 
 ```bash
 uv run python bench/gates/compare.py bench/out/m1-darwin-arm64.json bench/out/m1-linux-arm64.json bench/out/m1-linux-amd64.json
