@@ -749,6 +749,9 @@ END_DAMAGE = {
     "a MIME part appended": lambda data: (
         data + b"--boundary\r\nContent-Type: application/octet-stream\r\n\r\n--boundary--\r\n"
     ),
+    "a page mentioning a trailer appended": lambda data: (
+        data + b"<html><p>Watch the trailer.</p></html>\n"
+    ),
 }
 
 
@@ -878,7 +881,8 @@ HEADER_FORMS = {
     "a space": {},
     "a comment": {"gap": b" %c\n"},
     "a vertical tab": {"gap": b"\x0b"},
-    "a plus sign": {"sign": b"+"},
+    "a plus sign": {"sign": b"+", "generation": b"+0"},
+    "a minus zero": {"generation": b"-0"},
 }
 
 
@@ -1080,6 +1084,10 @@ CRAFTED = {
     "many offsets naming a long run of white space": b"%PDF-1.7\n"
     + b" " * 1_000_000
     + b"startxref 9\n" * 20_000,
+    "a linearization dictionary over many comment lines": b"%PDF-1.7\n5 0 obj\n"
+    + b"<< /Linearized 1 >>\nendobj\n"
+    + b"%1\n" * 100_000
+    + b"startxref\n0\n%%EOF\n",
 }
 
 
@@ -1092,11 +1100,16 @@ def test_a_crafted_file_is_read_once(name):
     assert time.perf_counter() - started < 5
 
 
-def test_a_crafted_line_after_the_last_revision_is_read_once():
-    # Numbers and comments on one line, each comment running to its end: an
-    # object header looked for from every number, its comments read to the
-    # end of the line each time, would take many seconds. None is there.
-    data = cases.plain_page().data + b"1 %1 " * 200_000 + b"\n"
+@pytest.mark.parametrize(
+    "tail",
+    [b"1 %1 " * 200_000 + b"\n", b"%1\n" * 100_000],
+    ids=["numbers and comments on one line", "comment lines each holding a number"],
+)
+def test_crafted_text_after_the_last_revision_is_read_once(tail):
+    # An object header looked for from every number, its gaps read through
+    # every comment that follows each time, would take many seconds. None is
+    # there.
+    data = cases.plain_page().data + tail
     started = time.perf_counter()
     assert pdfacts.recover(data).page_count == 1
     assert time.perf_counter() - started < 5

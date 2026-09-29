@@ -35,12 +35,15 @@ _HEADER = re.compile(rb"%PDF-[0-9]+\.[0-9]+")
 # its startxrefs are laid out; possessive, so that a long run costs no memory.
 _STARTXREF = re.compile(rb"startxref(?:" + _SPACE + rb"|%[^\r\n]*)++")
 # White space and comments between the numbers and the keyword of an object
-# header, and a plus sign on a number, which QPDF reads there (measured,
-# review, round 9). A comment there has to end at its end of line within 64
-# bytes: an object header is looked for from every number, and a crafted
-# line of numbers and comments is not read to its end from each.
-_HEADER_GAP = rb"(?:" + _SPACE + rb"|%[^\r\n]{0,64}[\r\n])++"
-_NUMBER = rb"\+?[0-9]+"
+# header, and a sign on a number, which QPDF reads there (measured, reviews,
+# rounds 9 and 11). An object header is looked for from every number, so what
+# one gap may hold is bounded, and a crafted run of numbers and comments is
+# not read to its end from each: at most eight runs of white space and
+# comments, a comment ending at its end of line within 64 bytes. A header
+# with more, or a longer comment, is not seen; no writer is known to write
+# one.
+_HEADER_GAP = rb"(?:" + _SPACE + rb"++|%[^\r\n]{0,64}[\r\n]){1,8}+"
+_NUMBER = rb"[+-]?[0-9]+"
 # The offset after startxref, in the forms QPDF reads through (measured): white
 # space or comments before it, as above, a plus sign on it, a delimiter or the
 # end of the file after it. It passes over a startxref without an offset, one
@@ -64,12 +67,20 @@ _REACH = 64
 _STREAM_BOUNDARY = re.compile(rb">>" + _SPACE + rb"*stream(?=[\r\n])|endstream")
 # "N G obj", where an object begins, in the forms QPDF reads.
 _OBJECT_HEADER = re.compile(
-    rb"(?<![0-9+])" + _NUMBER + _HEADER_GAP + _NUMBER + _HEADER_GAP + rb"obj(?![A-Za-z])"
+    rb"(?<![0-9+\-])" + _NUMBER + _HEADER_GAP + _NUMBER + _HEADER_GAP + rb"obj(?![A-Za-z])"
 )
-# What a revision is written of: objects, a cross-reference table, a trailer.
-# Words alone, such as obj or stream in a web page appended to a file, are
-# none (review, round 10).
-_REVISION_PART = re.compile(_OBJECT_HEADER.pattern + rb"|(?<![A-Za-z])(?:xref|trailer)(?![A-Za-z])")
+# What a revision is written of: objects, a cross-reference table whose first
+# numbers follow xref, a trailer whose dictionary follows it, either cut short
+# at the end. Words alone, such as obj, stream or trailer in a web page
+# appended to a file, are none (reviews, rounds 10 and 11).
+_REVISION_PART = re.compile(
+    _OBJECT_HEADER.pattern
+    + rb"|(?<![A-Za-z])xref(?="
+    + _SPACE
+    + rb"*+(?:[0-9]|\Z))|(?<![A-Za-z])trailer(?="
+    + _SPACE
+    + rb"*+(?:<<|\Z))"
+)
 
 
 @dataclass(frozen=True)
