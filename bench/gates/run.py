@@ -15,6 +15,7 @@ run.py does not compare the receipts; compare.py does.
 
 from __future__ import annotations
 
+import argparse
 import io
 import os
 import platform
@@ -143,14 +144,21 @@ def run_host(snapshot: bytes, *, commit: str, corpus: Path, out: Path) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # No options to give: the parser only answers --help and refuses the rest,
+    # so a stray argument cannot start a full run.
+    argparse.ArgumentParser(description=__doc__.splitlines()[0]).parse_args(argv)
     state = tree_state(ROOT)
-    print(f"gate on {state.describe()}")
+    print(f"gate on {state.describe()}", flush=True)
     if state.changes:
         for change in state.changes:
-            print(change)
+            print(change, flush=True)
         return 2
     if not verify_corpus():
-        print("the corpus is incomplete; run bench/corpus/fetch.py first", file=sys.stderr)
+        print(
+            "the corpus is incomplete; run bench/corpus/fetch.py first",
+            file=sys.stderr,
+            flush=True,
+        )
         return 2
     snapshot = tree_archive(ROOT)
     OUT.mkdir(parents=True, exist_ok=True)
@@ -179,8 +187,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         status = platform_run()
         seconds = round(time.perf_counter() - started, 1)
         failures += status != 0
-        print(f"{'passed' if status == 0 else 'FAILED'} {name} in {seconds} s; receipt {receipt}")
-    print(state.describe())
+        print(
+            f"{'passed' if status == 0 else 'FAILED'} {name} in {seconds} s; receipt {receipt}",
+            flush=True,
+        )
+    print(state.describe(), flush=True)
     return 0 if failures == 0 else 1
 
 
