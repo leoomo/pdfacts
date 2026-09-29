@@ -304,21 +304,21 @@ The digest is a tool under `bench/`. It is not part of the public interface.
 It serves two purposes: comparing platforms, and noticing what an engine
 upgrade changes.
 
-Whether values have to be rounded before hashing is not known yet.
+Exact values are hashed, and platforms are compared by hash. A float is
+written as the shortest text that reads back to the same number, negative zero
+as zero; nothing is rounded. `bench/digest.py` states the encoding.
 
 | Measurement | Result |
 | --- | --- |
 | PDFium, unrounded values, Linux arm64 against Linux x86_64 | glyph, path and widget digests identical for all 104 forms |
-| PDFium, unrounded values, macOS against Linux | not measured |
+| PDFium, unrounded glyph values and page geometry, host fonts ignored, macOS arm64 against Linux arm64 and Linux x86_64 | identical for all 104 forms (M1 gate, 2026-09-29) |
 | PDFium, values rounded to three decimals, host fonts ignored, macOS against Linux | identical for all 104 forms |
 | the reference engine, word coordinates rounded to three decimals, macOS against Linux | identical for 83 of 104 forms |
 
 The last row shows that rounding does not make nearly equal values hash
 equally: two values on either side of a rounding boundary still differ.
 
-The missing measurement is part of the M1 gate, and its result decides:
-
-| Result | Digest |
-| --- | --- |
-| unrounded digests are identical on all three platforms | exact values are hashed |
-| they differ | platforms are compared fact by fact with a tolerance, not by hash |
+The second row is the measurement of the M1 gate. This section had laid down
+beforehand what it would decide: unrounded digests identical on all three
+platforms mean that exact values are hashed; had they differed, platforms would
+be compared fact by fact with a tolerance, not by hash.
