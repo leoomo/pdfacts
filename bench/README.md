@@ -72,7 +72,7 @@ installed the font policy. What is there:
 | Script | What it does |
 | --- | --- |
 | `digest.py` | SHA-256 over int, float and str values; the module states the encoding |
-| `gates/m1.py` | reads the corpus and writes one receipt: per file a geometry digest, a glyph digest exact and rounded to three decimals, counts, warnings |
+| `gates/m1.py` | reads the corpus and writes one receipt: per file a geometry digest, a glyph digest, counts, warnings |
 | `gates/compare.py` | compares two or more receipts, prints one table per file and column: identical, differs, missing, error |
 
 Run the gate on one machine, from the repository root, with the corpus in

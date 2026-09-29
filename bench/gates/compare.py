@@ -18,12 +18,11 @@ FILE_KEYS = (
     "glyph_count",
     "geometry",
     "glyphs",
-    "glyphs_rounded3",
     "warning_count",
     "cross_check_failed",
 )
 # The digest key in a receipt, and the column it fills in the table.
-COLUMNS = (("geometry", "geometry"), ("glyphs", "glyphs"), ("glyphs_rounded3", "glyphs, rounded"))
+COLUMNS = (("geometry", "geometry"), ("glyphs", "glyphs"))
 
 
 def refuse(path: str, reason: str) -> int:
@@ -88,7 +87,7 @@ def read_report(path: str, receipt: dict) -> bool:
         if not isinstance(failed, list) or any(type(index) is not int for index in failed):
             refuse(path, f"not a receipt: {name}: cross_check_failed is not a list of ints")
             return False
-        for key in ("geometry", "glyphs", "glyphs_rounded3"):
+        for key in ("geometry", "glyphs"):
             if not isinstance(entry[key], str):
                 refuse(path, f"not a receipt: {name}: {key} is not a string")
                 return False
