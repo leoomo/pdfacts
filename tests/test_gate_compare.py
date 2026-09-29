@@ -82,6 +82,9 @@ def row(cells) -> str:
 def test_identical_receipts(tmp_path, capsys):
     status, captured = run(tmp_path, capsys, receipt(), receipt())
     assert status == 0
+    lines = captured.out.splitlines()
+    assert "| file | geometry | glyphs |" in lines
+    assert "| --- | --- | --- |" in lines
     for column in ("geometry", "glyphs"):
         assert f"{column}: identical in 2 of 2 files" in captured.out
 

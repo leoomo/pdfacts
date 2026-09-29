@@ -159,8 +159,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     for path, receipt in receipts:
         print_block(path, receipt)
-    print("| file | geometry | glyphs | glyphs, rounded |")
-    print("| --- | --- | --- | --- |")
+    header = ["file", *(label for _, label in COLUMNS)]
+    print("| " + " | ".join(header) + " |")
+    print("| " + " | ".join(["---"] * len(header)) + " |")
     identical = {label: 0 for _, label in COLUMNS}
     for name in names:
         if any(name in receipt["errors"] for _, receipt in receipts):
