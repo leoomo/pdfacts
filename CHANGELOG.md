@@ -134,6 +134,11 @@ may break callers.
   dictionary and its trailer is a known gap: its result is unencrypted, with
   its strings and streams still encrypted.
 - The two engines are checked against each other at run time. A value that
+- On open, every object stream the cross-reference names has to be
+  readable, and its header has to name every object once, never object 0,
+  at the index the cross-reference gives; otherwise every value from QPDF
+  is unknown for the document, with the reason, and a set `max_objects`
+  raises `LimitUncheckedError`.
   depends on a failed check is unknown.
 - Limits: the library checks size, page count, object count, items per page
   and a deadline between pages. Time and memory are the caller's
