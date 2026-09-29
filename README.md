@@ -3,7 +3,7 @@
 Structured, verifiable facts from PDF files: text, paths, images, annotations
 and forms, each with explicit geometry.
 
-> **Status: private, pre-alpha (milestone M1).** `pdfacts.open()` reads a
+> **Status: private, pre-alpha (milestone M1 done).** `pdfacts.open()` reads a
 > document and the geometry and object numbers of its pages, renders a page
 > or a region of it to raw bytes, and `pdfacts.recover()` rebuilds a damaged
 > file; nothing else described below exists yet. See [ROADMAP.md](ROADMAP.md)
