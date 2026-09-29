@@ -71,24 +71,23 @@ def geometry_digests(data: bytes) -> tuple[str, int, list[int], int]:
     return digest(values), page_count, cross_check_failed, warning_count
 
 
-def glyph_digests(data: bytes) -> tuple[str, str, int]:
-    """The glyph digests of a file (exact, and rounded to three decimals) and the count.
+def glyph_digests(data: bytes) -> tuple[str, int]:
+    """The glyph digest of a file and the number of kept glyphs.
 
     Per kept glyph, in the order of the text page: character code, origin, tight
     box, loose box, font size. The digest takes both boxes as left, bottom,
     right, top, although PDFium fills them in another order (FS_RECTF) and
-    hands the tight box out as left, right, bottom, top.
+    hands the tight box out as left, right, bottom, top. Values are hashed
+    exactly, nothing is rounded (decision 8 of issue #14).
     """
     doubles = [ctypes.c_double() for _ in range(6)]
     rect = c.FS_RECTF()
     exact = Digest()
-    rounded = Digest()
     kept_total = 0
     document = pypdfium2.PdfDocument(data)
     try:
         page_count = len(document)
         exact.update(page_count)
-        rounded.update(page_count)
         for index in range(page_count):
             page = document[index]
             try:
@@ -139,10 +138,8 @@ def glyph_digests(data: bytes) -> tuple[str, str, int]:
                             )
                         )
                     exact.update(index, len(kept))
-                    rounded.update(index, len(kept))
                     for glyph in kept:
                         exact.update(*glyph)
-                        rounded.update(glyph[0], *(round(value, 3) for value in glyph[1:]))
                     kept_total += len(kept)
                 finally:
                     text.close()
@@ -150,19 +147,18 @@ def glyph_digests(data: bytes) -> tuple[str, str, int]:
                 page.close()
     finally:
         document.close()
-    return exact.hexdigest(), rounded.hexdigest(), kept_total
+    return exact.hexdigest(), kept_total
 
 
 def read_file(data: bytes) -> dict:
     """The receipt entry of one file: geometry through pdfacts, then glyphs through PDFium."""
     geometry, page_count, cross_check_failed, warning_count = geometry_digests(data)
-    glyphs, glyphs_rounded3, glyph_count = glyph_digests(data)
+    glyphs, glyph_count = glyph_digests(data)
     return {
         "cross_check_failed": cross_check_failed,
         "geometry": geometry,
         "glyph_count": glyph_count,
         "glyphs": glyphs,
-        "glyphs_rounded3": glyphs_rounded3,
         "page_count": page_count,
         "warning_count": warning_count,
     }
