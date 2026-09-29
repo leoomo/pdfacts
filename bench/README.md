@@ -65,9 +65,47 @@ The output of one library is never the expected value for another.
 
 ## Gate scripts and the digest tool
 
-Not written yet. They arrive with milestone M1: one script per gate, and a
-digest of the facts of a file that is used to compare platforms and to see
-what an engine upgrade changes.
+The M1 gate reads every file of the corpus twice: page geometry through
+`pdfacts.open`, and glyph data through PDFium itself, after the runtime
+installed the font policy. What is there:
+
+| Script | What it does |
+| --- | --- |
+| `digest.py` | SHA-256 over int, float and str values; the module states the encoding |
+| `gates/m1.py` | reads the corpus and writes one receipt: per file a geometry digest, a glyph digest exact and rounded to three decimals, counts, warnings |
+| `gates/compare.py` | compares two or more receipts, prints one table per file and column: identical, differs, missing, error |
+
+Run the gate on one machine, from the repository root, with the corpus in
+place (`bench/corpus/fetch.py --verify-only` reports `104 files: ok 104`):
+
+```bash
+uv run python bench/gates/m1.py --commit "$(git rev-parse HEAD)" --out bench/out/m1-manual.json
+```
+
+`--commit` takes the commit of the working tree, 40 lowercase hex digits.
+`--only ID ...` reads part of the corpus and writes `"partial": true` into
+the receipt; `--corpus DIR` reads the files from another folder. A file that
+is missing, or whose SHA-256 is not the one in the manifest, ends the run
+with status 2 and no receipt. Status 1 means the receipt was written and a
+file is under `errors`.
+
+Compare receipts with:
+
+```bash
+uv run python bench/gates/compare.py bench/out/m1-darwin-arm64.json bench/out/m1-linux-arm64.json
+```
+
+It refuses a receipt that is partial, that names other engines or another
+commit, or where no receipt names any file. It exits 0 only when every file
+is identical in every column.
+
+Receipts go to `bench/out/`, which git ignores; they are never committed. A
+receipt holds digests, counts and versions, never text of a document and
+never a warning text.
+
+The run on three platforms (macOS natively, Linux arm64 and Linux x86_64 in
+the containers of `tools/checks.py`) arrives with the second pull request of
+issue #14.
 
 ## Comparison with other libraries
 
