@@ -163,8 +163,9 @@ def test_different_engines(tmp_path, capsys, key, value):
     assert key in captured.err
 
 
-def test_a_partial_receipt(tmp_path, capsys):
-    status, _ = run(tmp_path, capsys, receipt(), receipt(partial=True))
+@pytest.mark.parametrize("partial", [True, 1, "yes", None])
+def test_a_partial_receipt(tmp_path, capsys, partial):
+    status, _ = run(tmp_path, capsys, receipt(), receipt(partial=partial))
     assert status == 2
 
 
@@ -198,10 +199,46 @@ def _without_a_file_digest(data):
     return data
 
 
+def _without_seconds(data):
+    del data["seconds"]
+    return data
+
+
+def _without_platform(data):
+    del data["environment"]["platform"]
+    return data
+
+
+def _page_count_as_text(data):
+    data["files"]["a.pdf"]["page_count"] = "2"
+    return data
+
+
+def _cross_check_failed_not_a_list(data):
+    data["files"]["a.pdf"]["cross_check_failed"] = 2
+    return data
+
+
 @pytest.mark.parametrize(
     "mangle",
-    [_as_a_list, _without_files, _without_a_file_digest],
-    ids=["a json list", "without files", "entry without glyphs"],
+    [
+        _as_a_list,
+        _without_files,
+        _without_a_file_digest,
+        _without_seconds,
+        _without_platform,
+        _page_count_as_text,
+        _cross_check_failed_not_a_list,
+    ],
+    ids=[
+        "a json list",
+        "without files",
+        "entry without glyphs",
+        "without seconds",
+        "without platform",
+        "page_count as text",
+        "cross_check_failed not a list",
+    ],
 )
 def test_not_a_receipt(tmp_path, capsys, mangle):
     status, _ = run(tmp_path, capsys, receipt(), mangle(receipt()))
