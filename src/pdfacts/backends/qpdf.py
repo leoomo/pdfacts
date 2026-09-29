@@ -309,7 +309,6 @@ class QpdfDocument:
                 return PageAnnotations((), annots is not None, ())
             entries: list[AnnotationEntry] = []
             widgets: list[WidgetEntry] = []
-            converted: dict[tuple[int, int], WidgetEntry] = {}
             for position, item in enumerate(annots):
                 dictionary = isinstance(item, pikepdf.Dictionary)
                 item_objgen = item.objgen if dictionary and item.is_indirect else None
@@ -327,13 +326,15 @@ class QpdfDocument:
                 entries.append(entry)
                 if subtype != b"Widget":
                     continue
-                if item_objgen is not None and item_objgen in converted:
-                    # Listed twice: converted once, with its own annotation.
-                    widgets.append(replace(converted[item_objgen], annotation=entry))
+                kept = self._kept.widgets.get(item_objgen) if item_objgen else None
+                if kept is not None:
+                    # Listed again, on this page or another: converted once per
+                    # document, with its own annotation.
+                    widgets.append(replace(kept, annotation=entry))
                     continue
                 one = _widget_entry(item, entry, self._kept)
                 if item_objgen is not None:
-                    converted[item_objgen] = one
+                    self._kept.widgets[item_objgen] = one
                 widgets.append(one)
             return PageAnnotations(tuple(entries), False, tuple(widgets))
 
@@ -806,6 +807,7 @@ class _Kept:
         self.ap_n_states: dict[tuple[int, int], tuple[bytes, ...]] = {}
         self.mk: dict[tuple[int, int], dict[bytes, Written]] = {}
         self.bs: dict[tuple[int, int], dict[bytes, Written]] = {}
+        self.widgets: dict[tuple[int, int], WidgetEntry] = {}
         self.tree: FieldTree | None = None
         self.tree_walked = False
 
@@ -849,7 +851,7 @@ def _converted(value: object, depth: int, kept: _Kept) -> Written:
 
 def _name_bytes(name: pikepdf.Name) -> bytes:
     """The bytes of a name: unparse() without its slash, #xx resolved."""
-    syntax = name.unparse()
+    syntax = name.unparse(resolved=True)
     out = bytearray()
     at = 1
     while at < len(syntax):
@@ -1052,6 +1054,9 @@ class _TreeWalk:
         self.arrays_active: set[tuple[int, int]] = set()
         self.array_nodes: dict[tuple[int, int], list[int]] = {}
         self.array_marked: set[tuple[int, int]] = set()
+        # Nodes whose /Kids is an array still being walked: their kids are that
+        # array's, filled in when its walk ends.
+        self.array_waiting: dict[tuple[int, int], list[int]] = {}
         self.cut = False
 
 
@@ -1114,16 +1119,24 @@ def _walk_kids(
                 walk.reached[held] = True
         return walk.arrays_done[key]
     if key in walk.arrays_active:
-        # A loop through the array: it is walked again, and the nodes it holds
-        # are met again, which ends the walk.
-        return _kids_entries(array, (key, "kids"), node_index, level, walk)
+        # A loop through the array: it is not walked again. The node gets its
+        # kids when the walk of the array ends, and they count as met again.
+        walk.array_waiting.setdefault(key, []).append(node_index)
+        return ()
     walk.arrays_active.add(key)
     try:
-        kids = _kids_entries(array, (key, "kids"), node_index, level, walk)
+        kids = _kids_entries(array, key, node_index, level, walk)
     finally:
         walk.arrays_active.discard(key)
     walk.arrays_done[key] = kids
     walk.array_nodes[key] = [index for index in kids if index is not None]
+    waiting = walk.array_waiting.pop(key, [])
+    for node in waiting:
+        walk.kids[node] = kids
+    if waiting:
+        walk.array_marked.add(key)
+        for held in walk.array_nodes[key]:
+            walk.reached[held] = True
     return kids
 
 

@@ -1455,3 +1455,104 @@ def test_mk_and_bs_sharing_one_object():
     assert [one.data for one in entries[b"MK/BC"].data] == [1, 0, 0]
     assert entries[b"BS/W"] == Written("integer", 2)
     assert entries[b"BS/S"] == Written("name", b"D")
+
+
+# --- the review of #46 --------------------------------------------------------------------
+
+
+def test_indirect_names_are_resolved():
+    data = annots_file(
+        b"[6 0 R 7 0 R]",
+        {
+            6: widget(b"/AS 21 0 R /BS << /S 21 0 R >> /Parent 8 0 R"),
+            7: b"<< /Type /Annot /Subtype 30 0 R >>",
+            8: b"<< /T (a) /FT 21 0 R /Kids [6 0 R] >>",
+            21: b"/On",
+            30: b"/Widget",
+        },
+    )
+    page = annotations_of(data)
+    assert [entry.subtype for entry in page.entries] == [b"Widget", b"Widget"]
+    assert len(page.widgets) == 2
+    first = page.widgets[0]
+    assert first.entries[b"AS"] == Written("name", b"On")
+    assert first.entries[b"BS/S"] == Written("name", b"On")
+    assert first.chain[1].entries[b"FT"] == Written("name", b"On")
+
+
+def test_linear_on_two_kids_arrays_that_hold_each_other(monkeypatch):
+    calls = counted_module_function(monkeypatch, "_tree_entry")
+    size = 200
+    objects = {
+        10: b"<< /Kids 20 0 R >>",
+        20: b"[" + b" ".join(b"<< /Kids 21 0 R >>" for _ in range(size)) + b"]",
+        21: b"[" + b" ".join(b"<< /Kids 20 0 R >>" for _ in range(size)) + b"]",
+    }
+    tree = field_tree_of(acroform_file(b"[10 0 R]", objects))
+    assert len(calls) == 1 + 2 * size
+    in_20 = tree.nodes[0].kids
+    in_21 = tree.nodes[in_20[0]].kids
+    assert all(tree.nodes[index].kids == in_21 for index in in_20)
+    assert all(tree.nodes[index].kids == in_20 for index in in_21)
+    assert all(tree.nodes[index].reached_twice for index in in_20)
+
+
+def test_a_widget_on_many_pages_is_converted_once(monkeypatch):
+    calls = counted_module_function(monkeypatch, "_widget_entry")
+    pages = 50
+    page_of = (
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Resources << >> /Annots [6 0 R] >>"
+    )
+    objects = {
+        1: CATALOG,
+        2: b"<< /Type /Pages /Kids [%s] /Count %d >>"
+        % (b" ".join(b"%d 0 R" % (100 + i) for i in range(pages)), pages),
+        6: widget(b"/Rect [0 0 1 1]"),
+        **{100 + i: page_of for i in range(pages)},
+    }
+    document_ = opened(build(objects, 1))
+    try:
+        widgets = [document_.annotations(i).widgets[0] for i in range(pages)]
+    finally:
+        document_.close()
+    assert len(calls) == 1
+    assert all(one.annotation.object_number == 6 for one in widgets)
+
+
+def test_the_fields_array_used_as_a_kids_array_is_one_node():
+    data = acroform_file(b"20 0 R", {20: b"[<< /T (d) /Kids 20 0 R >>]"})
+    tree = field_tree_of(data)
+    assert len(tree.nodes) == 1
+    assert tree.roots == (0,)
+    assert tree.nodes[0].kids == (0,)
+    assert tree.nodes[0].reached_twice is True
+
+
+def test_subtype_widget_of_a_field_entry():
+    data = annots_file(b"[6 0 R]", {6: widget(b"/Parent 8 0 R"), 8: b"<< /T (a) /Kids [6 0 R] >>"})
+    (one,) = annotations_of(data).widgets
+    assert [entry.subtype_widget for entry in one.chain] == [True, False]
+
+
+@pytest.mark.parametrize(
+    "parent", [b"/Parent << /T (a) /Kids [6 0 R] >>", b"/Parent 8 0 R"], ids=["direct", "no kids"]
+)
+def test_parent_kids_is_none_for_a_direct_parent_or_one_without_kids(parent):
+    data = annots_file(b"[6 0 R]", {6: widget(parent), 8: b"<< /T (a) >>"})
+    (one,) = annotations_of(data).widgets
+    assert one.parent_kids is None
+
+
+def test_a_direct_kids_array_is_read_once_per_parent(monkeypatch):
+    calls = counted_module_function(monkeypatch, "_kids")
+    data = annots_file(
+        b"[6 0 R 7 0 R]",
+        {
+            6: widget(b"/Parent 8 0 R"),
+            7: widget(b"/Parent 8 0 R"),
+            8: b"<< /T (a) /Kids [6 0 R 7 0 R] >>",
+        },
+    )
+    first, second = annotations_of(data).widgets
+    assert len(calls) == 1
+    assert first.parent_kids is second.parent_kids
