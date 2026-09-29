@@ -21,7 +21,7 @@ from types import TracebackType
 
 from pdfacts.backends.pdfium import PdfiumDocument
 from pdfacts.backends.protocols import Box, EngineFailure, FailureKind, PageObject, RawBitmap
-from pdfacts.backends.qpdf import QpdfDocument
+from pdfacts.backends.qpdf import QpdfDocument, revision_part_follows
 from pdfacts.core import runtime
 from pdfacts.core.bitmap import Bitmap, Colour, checked_scale
 from pdfacts.core.errors import (
@@ -415,6 +415,12 @@ def open(
         raise DamagedFileError(
             detail="it does not end with %%EOF and white space; it may be cut short "
             "or have bytes appended"
+        )
+    if revision_part_follows(data):
+        raise DamagedFileError(
+            detail="part of a revision follows the end of its last whole revision: its last "
+            "startxref may be unreadable or its last update unfinished, and the engines would "
+            "then read the revision before without a word"
         )
 
     runtime.start()

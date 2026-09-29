@@ -10,9 +10,11 @@ import contextlib
 import ctypes
 import gc
 import json
+import re
 import subprocess
 import sys
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 import pypdfium2.raw
@@ -35,7 +37,7 @@ from pdfacts.backends.protocols import EngineFailure, FailureKind
 from pdfacts.core import document as document_module
 from pdfacts.core import runtime
 from pdfium_handles import watch
-from synthetic import cases
+from synthetic import builder, cases
 
 # PDFium accepts at most this many bytes before the header (measured).
 JUNK_ACCEPTED = 1024
@@ -114,6 +116,130 @@ def test_white_space_after_the_end_marker_is_fine():
 
 def test_a_valid_incremental_update_opens():
     assert pdfacts.open(cases.incremental_update().data).page_count == 1
+
+
+def last_startxref(data: bytes, replace: Callable[[bytes, bytes, bytes], bytes]) -> bytes:
+    """`data` with its last "startxref, offset, %%EOF" rewritten by `replace`.
+
+    `replace` gets the white space before the offset, the offset and what
+    follows it, and returns the new text from startxref to the end.
+    """
+    at = data.rfind(b"startxref")
+    found = re.fullmatch(rb"startxref(\s+)(\d+)(\s+%%EOF\s*)", data[at:])
+    assert found, data[at:]
+    return data[:at] + replace(*found.groups())
+
+
+def one_page() -> bytes:
+    return builder.document([builder.PageSpec(b"/MediaBox [0 0 400 300]")])
+
+
+@pytest.mark.parametrize(
+    "replace",
+    [
+        pytest.param(
+            lambda space, offset, end: b"startxref" + offset + end, id="glued to its offset"
+        ),
+        pytest.param(lambda space, offset, end: b"startxref" + end, id="without an offset"),
+    ],
+)
+def test_a_last_startxref_that_the_engines_pass_over_is_damaged(replace):
+    data = last_startxref(cases.incremental_update().data, replace)
+    with pytest.raises(DamagedFileError):
+        pdfacts.open(data)
+
+
+def test_a_last_startxref_with_other_characters_after_its_offset_stays_damaged():
+    data = last_startxref(
+        cases.incremental_update().data,
+        lambda space, offset, end: b"startxref" + space + offset + b"abc" + end,
+    )
+    with pytest.raises(DamagedFileError):
+        pdfacts.open(data)
+
+
+@pytest.mark.parametrize(
+    "replace",
+    [
+        pytest.param(lambda space, offset, end: b"startxref % c\n" + offset + end, id="a comment"),
+        pytest.param(
+            lambda space, offset, end: b"startxref" + space + b"+" + offset + end,
+            id="a plus sign",
+        ),
+    ],
+)
+def test_a_last_startxref_that_qpdf_reads_through_still_opens(replace):
+    data = last_startxref(cases.incremental_update().data, replace)
+    with pdfacts.open(data) as document:
+        box = document.pages[0].geometry.visible_box
+    assert (box.x0, box.y0, box.x1, box.y1) == cases.UPDATED_MEDIA_BOX
+
+
+@pytest.mark.parametrize(
+    "part",
+    [b"trailer\n<< >>\n%%EOF\n", b"xref\n0 1\n%%EOF\n", b"5 0 obj\n<< >>\nendobj\n%%EOF\n"],
+    ids=["a trailer", "a cross-reference section", "an object"],
+)
+def test_an_unfinished_update_after_the_last_revision_is_damaged(part):
+    with pytest.raises(DamagedFileError):
+        pdfacts.open(one_page() + part)
+
+
+def test_words_alone_after_the_last_revision_are_no_revision():
+    assert pdfacts.open(one_page() + b"obj stream trailer\n%%EOF\n").page_count == 1
+
+
+def test_a_comment_that_looks_like_an_object_after_the_last_revision_is_damaged():
+    with pytest.raises(DamagedFileError):
+        pdfacts.open(one_page() + b"% 5 0 obj\n%%EOF\n")
+
+
+def test_an_incremental_update_opens_with_the_page_of_the_update():
+    with pdfacts.open(cases.incremental_update().data) as document:
+        box = document.pages[0].geometry.visible_box
+    assert (box.x0, box.y0, box.x1, box.y1) == cases.UPDATED_MEDIA_BOX
+
+
+def test_a_linearized_file_still_opens():
+    assert pdfacts.open(cases.linearized().data).page_count == 1
+
+
+def test_part_of_a_revision_after_the_last_is_refused_before_any_engine(monkeypatch):
+    def must_not_run(*args, **kwargs):
+        raise AssertionError("an engine was called")
+
+    monkeypatch.setattr(pdfium.PdfiumDocument, "open", must_not_run)
+    monkeypatch.setattr(runtime, "start", must_not_run)
+    glued = last_startxref(
+        cases.incremental_update().data, lambda space, offset, end: b"startxref" + offset + end
+    )
+    with pytest.raises(DamagedFileError) as raised:
+        pdfacts.open(glued)
+    assert "last whole revision" in raised.value.detail
+
+
+@pytest.mark.parametrize(
+    "replace",
+    [
+        pytest.param(
+            lambda space, offset, end: b"startxref" + offset + end, id="glued to its offset"
+        ),
+        pytest.param(lambda space, offset, end: b"startxref" + end, id="without an offset"),
+    ],
+)
+def test_a_file_without_a_whole_revision_is_left_to_the_engines(replace):
+    data = last_startxref(one_page(), replace)
+    with pytest.raises(DamagedFileError) as raised:
+        pdfacts.open(data)
+    assert "last whole revision" not in raised.value.detail
+
+
+def test_a_linearized_file_with_two_objects_before_its_first_page_table_is_damaged():
+    # A known gap (issue #32, decision 4): the first-page trailer is found
+    # only with at most one object before the first-page table.
+    with pytest.raises(DamagedFileError) as raised:
+        pdfacts.open(cases.linearized(first_page_offset=True, between=2).data)
+    assert "last whole revision" in raised.value.detail
 
 
 @pytest.mark.parametrize("name", list(cases.REBUILT))
