@@ -38,3 +38,63 @@ class PageRef:
                 raise TypeError(f"{name} must be an int or Unknown, not {type(value).__name__}")
             if value < lowest:
                 raise ValueError(f"{name} must be at least {lowest}, not {value}")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AnnotationRef:
+    """Which annotation: its page and place in /Annots, and its object."""
+
+    page_index: int  # from 0
+    annotation_index: int  # position in the page's /Annots, from 0
+    kind: str  # the /Subtype as text, not empty
+    # From 1; None for an annotation written directly into /Annots.
+    object_number: int | None | Unknown
+    # From 0; None exactly when object_number is None.
+    generation: int | None | Unknown
+
+    def __post_init__(self) -> None:
+        for name in ("page_index", "annotation_index"):
+            value = getattr(self, name)
+            if not _is_int(value):
+                raise TypeError(f"{name} must be an int, not {type(value).__name__}")
+            if value < 0:
+                raise ValueError(f"{name} starts at 0, not {value}")
+        if type(self.kind) is not str:
+            raise TypeError(f"kind must be a str, not {type(self.kind).__name__}")
+        if not self.kind:
+            raise ValueError("kind is the /Subtype as text, not empty")
+        if (self.object_number is None) != (self.generation is None):
+            raise ValueError("object_number and generation are both None or neither")
+        for name, lowest in (("object_number", 1), ("generation", 0)):
+            value = getattr(self, name)
+            if value is None or isinstance(value, Unknown):
+                continue
+            if not _is_int(value):
+                raise TypeError(
+                    f"{name} must be an int, None or Unknown, not {type(value).__name__}"
+                )
+            if value < lowest:
+                raise ValueError(f"{name} must be at least {lowest}, not {value}")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class FieldRef:
+    """Which field: its object in the file when that is known."""
+
+    # None for a field written directly into its parent's /Kids.
+    object_number: int | None | Unknown
+    generation: int | None | Unknown
+
+    def __post_init__(self) -> None:
+        if (self.object_number is None) != (self.generation is None):
+            raise ValueError("object_number and generation are both None or neither")
+        for name, lowest in (("object_number", 1), ("generation", 0)):
+            value = getattr(self, name)
+            if value is None or isinstance(value, Unknown):
+                continue
+            if not _is_int(value):
+                raise TypeError(
+                    f"{name} must be an int, None or Unknown, not {type(value).__name__}"
+                )
+            if value < lowest:
+                raise ValueError(f"{name} must be at least {lowest}, not {value}")
