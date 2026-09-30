@@ -21,10 +21,10 @@ from pdfacts.core.errors import (
     RecoveryFailedError,
     UnsupportedError,
 )
-from pdfacts.core.geometry import Matrix, PageGeometry, Point, Rect
+from pdfacts.core.geometry import Matrix, PageGeometry, Point, Quad, Rect
 from pdfacts.core.limits import Limits
 from pdfacts.core.recovery import Recovery, recover
-from pdfacts.core.refs import AnnotationRef, FieldRef, PageRef
+from pdfacts.core.refs import AnnotationRef, FieldRef, GraphicRef, PageRef
 from pdfacts.core.runtime import FontPolicy, configure
 from pdfacts.core.strings import Name, NameEncoding
 from pdfacts.core.values import Unknown, UnknownReason
@@ -37,6 +37,19 @@ from pdfacts.forms.model import (
     Widget,
 )
 from pdfacts.forms.reader import fields, widgets
+from pdfacts.graphics.images import ColourSpace, Image
+from pdfacts.graphics.paths import (
+    Dash,
+    DisplayColour,
+    FillRule,
+    LineCap,
+    LineJoin,
+    Path,
+    Segment,
+    SegmentKind,
+    ShapeKind,
+    Subpath,
+)
 
 __version__ = "0.0.1"
 
@@ -49,9 +62,12 @@ __all__ = [
     "ChoiceOption",
     "ClosedError",
     "Colour",
+    "ColourSpace",
     "ConfigurationError",
     "DamagedFileError",
+    "Dash",
     "DeviceColour",
+    "DisplayColour",
     "Document",
     "EmptyInputError",
     "EngineError",
@@ -59,12 +75,17 @@ __all__ = [
     "Field",
     "FieldRef",
     "FieldType",
+    "FillRule",
     "FontPolicy",
+    "GraphicRef",
+    "Image",
     "InputError",
     "LimitError",
     "LimitExceededError",
     "LimitUncheckedError",
     "Limits",
+    "LineCap",
+    "LineJoin",
     "Matrix",
     "Name",
     "NameEncoding",
@@ -73,11 +94,17 @@ __all__ = [
     "PageGeometry",
     "PageRef",
     "PasswordRequiredError",
+    "Path",
     "PdfactsError",
     "Point",
+    "Quad",
     "Recovery",
     "RecoveryFailedError",
     "Rect",
+    "Segment",
+    "SegmentKind",
+    "ShapeKind",
+    "Subpath",
     "Unknown",
     "UnknownReason",
     "UnsupportedError",
