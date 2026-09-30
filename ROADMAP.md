@@ -11,7 +11,7 @@ with form fields, later for documents without.
 | --- | --- | --- | --- |
 | 1 | M0 | project skeleton, pinned engines, corpus manifest | done 2026-09-27 |
 | 2 | M1 | documents, geometry, determinism, test and gate tooling | done 2026-09-29 |
-| 3 | M2 | forms: fields and widgets | planned |
+| 3 | M2 | forms: fields and widgets | done 2026-09-30 |
 | 4 | M3 | paths and images | planned |
 | 5 | M4a | text, first level | planned |
 | 6 | M5a | inspection, repair and decryption | planned |
@@ -108,6 +108,8 @@ Gate
   every widget in the corpus
 - options and states of radio buttons and check boxes equal the file content
 - object references are stable across repeated reads
+
+Recorded results are in [docs/capabilities.md](docs/capabilities.md).
 
 ## M3 Paths and images
 

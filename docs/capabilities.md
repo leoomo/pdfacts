@@ -97,8 +97,8 @@ dictionaries with pikepdf, independent of pdfacts, and the terminal fields
 through `pdfacts.fields`, compared with the referee's count. The referee was
 written clean-room, from the texts of issues #36, #38, #39 and #40,
 `docs/conventions.md` and `tests/synthetic`, by an author who had not read the
-source of pdfacts. pypdfium2
-5.13.0, PDFium 153.0.7999.0, pikepdf 10.14.0, QPDF 12.4.1.
+source of pdfacts. pypdfium2 5.13.0, PDFium 153.0.7999.0, pikepdf 10.14.0,
+QPDF 12.4.1.
 
 ```
 104 files, 7934 widgets compared, 0 differences
@@ -110,6 +110,18 @@ unknown: value invalid-in-file 61 (checkbox 54, pushbutton 7)
 stable: 104 of 104 files
 fields: 6960 in 75 files, equal to the referee's count in 104 of 104 files, 0 differing from a widget's field
 ```
+
+| Part of the gate in `ROADMAP.md` | Shown by |
+| --- | --- |
+| widget rectangle, name, type, flags and label equal the file content for every widget in the corpus | the run above, "equal per fact": `rect`, `name`, `type`, `annotation_flags`, `field_flags` and `label` equal the referee's for 7934 of 7934 widgets |
+| options and states of radio buttons and check boxes equal the file content | the run above, "buttons": `states`, `state` and `export_value`, the entry of `/Opt` for the widget, equal for 2845 of 2845 radio buttons and check boxes; the options of the 5 choice fields equal as well |
+| object references are stable across repeated reads | the run above, "stable": both reads of `widgets()` and of `fields()` equal in 104 of 104 files; `object` and `field_ref` equal the referee's for 7934 of 7934 widgets |
+
+The code of M2 last changed on `2cb16f1`, the commit the gate ran on; the
+merge of #53, `ee420b1`, adds only the record of that run and has the tree of
+`fa685c5`. `python3 tools/checks.py --all` passed on `fa685c5`: 1592 tests on
+macOS arm64, and 1591 on Linux arm64 and on Linux x86_64, where one test that
+needs macOS is skipped.
 
 ## What the engines provide
 
