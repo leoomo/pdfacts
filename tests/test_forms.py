@@ -334,7 +334,8 @@ def test_b10_a1_plus_f4_the_check_fails(file, change, detail, monkeypatch):
 
 
 def test_b10_flags_one_without_f(monkeypatch):
-    with pdfacts.open(a1_file()) as document:
+    data = forms_file({6: widget(b"/T (a) /FT /Tx /V (x) /TU (L)")}, fields=b"[6 0 R]")
+    with pdfacts.open(data) as document:
         document.pages[0]
         with_views(monkeypatch, document, 0, lambda view: dataclasses.replace(view, flags=1))
         (widget_,) = pdfacts.widgets(document, 0)
