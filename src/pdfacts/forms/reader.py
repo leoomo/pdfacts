@@ -26,8 +26,6 @@ from pdfacts.forms.model import (
 _INVALID = UnknownReason.INVALID
 _UNREADABLE = UnknownReason.UNREADABLE
 
-_KIND = {"text": FieldType.TEXT, "Btn": None, "Ch": None, "Sig": FieldType.SIGNATURE}
-
 
 def _invalid(detail: str) -> Unknown:
     return Unknown(_INVALID, detail)
@@ -247,10 +245,6 @@ def _link_holds(
     return True
 
 
-def _is_field_node(nodes: _NodeTable, index: int | None) -> bool:
-    return index is not None and nodes.fields[index]
-
-
 def _field_ref(entry: FieldEntry) -> FieldRef:
     return FieldRef(
         object_number=entry.object_number,
@@ -305,7 +299,7 @@ def _field_facts(
             flags = _invalid("the /Ff of the field is not a 32-bit integer")
         break
 
-    # type.
+    # Type: unknown flags make it invalid whatever /FT says.
     type_: object = _invalid("the field has no usable /FT")
     type_written = None
     for one in chain:
@@ -314,40 +308,32 @@ def _field_facts(
             continue
         type_written = written
         break
-    if type_written is not None and type_written.kind == "name":
+    if isinstance(flags, Unknown):
+        type_ = _invalid("the field flags are unknown")
+    elif type_written is not None and type_written.kind == "name":
         name = type_written.data
         if name == b"Tx":
             type_ = FieldType.TEXT
         elif name == b"Sig":
             type_ = FieldType.SIGNATURE
         elif name in (b"Btn", b"Ch"):
-            bit = None
-            if isinstance(flags, int):
-                bit = flags
             if name == b"Btn":
-                if bit is None:
-                    type_ = _invalid("the field flags are unknown")
-                elif bit & 65536 and bit & 32768:
+                if flags & 65536 and flags & 32768:
                     type_ = _invalid("the radio and pushbutton bits are both set")
-                elif bit & 65536:
+                elif flags & 65536:
                     type_ = FieldType.PUSHBUTTON
-                elif bit & 32768:
+                elif flags & 32768:
                     type_ = FieldType.RADIO
                 else:
                     type_ = FieldType.CHECKBOX
+            elif flags & 131072:
+                type_ = FieldType.COMBO_BOX
             else:
-                if bit is None:
-                    type_ = _invalid("the field flags are unknown")
-                elif bit & 131072:
-                    type_ = FieldType.COMBO_BOX
-                else:
-                    type_ = FieldType.LIST_BOX
+                type_ = FieldType.LIST_BOX
         else:
             type_ = _invalid("the /FT of the field is not one of the known names")
     elif type_written is not None:
         type_ = _invalid("the /FT of the field is not a name")
-    elif node_index is not None and nodes.invalid[node_index]:
-        type_ = _invalid("the field tree is not valid here")
     facts["type"] = type_
     facts["field_flags"] = flags
 
@@ -361,8 +347,8 @@ def _field_facts(
         facts["label"] = _invalid("the /TU of the field is not a string")
 
     # value and default value.
-    facts["value"] = _value(chain, b"V", type_, FieldType if isinstance(type_, FieldType) else None)
-    facts["default_value"] = _value(chain, b"DV", type_, None)
+    facts["value"] = _value(chain, b"V", type_)
+    facts["default_value"] = _value(chain, b"DV", type_)
 
     # options.
     opt = head.entries.get(b"Opt")
@@ -377,7 +363,7 @@ def _field_facts(
     return facts
 
 
-def _value(chain, key: bytes, type_, _) -> object:
+def _value(chain, key: bytes, type_) -> object:
     """D5's value rule for one of /V and /DV."""
     written = None
     for one in chain:
@@ -387,9 +373,7 @@ def _value(chain, key: bytes, type_, _) -> object:
     if written is None:
         return None
     if not isinstance(type_, FieldType):
-        if isinstance(type_, Unknown):
-            return type_
-        return _invalid("the type of the field is unknown")
+        return type_
     kind = written.kind
     if type_ is FieldType.TEXT:
         if kind == "string":

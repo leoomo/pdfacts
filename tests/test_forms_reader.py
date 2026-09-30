@@ -223,8 +223,9 @@ def test_a7_inherited_from_two_levels_up():
         (b"/T (a) /FT /Xy", "invalid"),
         (b"/T (a)", "invalid"),
         (b"/T (a) /Ff 2.0", "flags and type invalid"),
+        (b"/T (a) /FT /Tx /Ff 2.0", "flags and type invalid"),
     ],
-    ids=["both bits", "list box", "signature", "xy", "no ft", "ff real"],
+    ids=["both bits", "list box", "signature", "xy", "no ft", "ff real", "tx with real ff"],
 )
 def test_a8_types(entries, check):
     data = forms_file({6: widget(entries)}, fields=b"[6 0 R]")
@@ -282,10 +283,10 @@ def test_a10_default_values():
             (ChoiceOption("a", "a"), ChoiceOption("e", "Display")),
         ),
         (b"/FT /Ch /Opt [(a) 5]", "invalid"),
-        (b"/FT /Btn /Opt [(a)]", None),
+        (b"/FT /Tx /Opt [(a)]", None),
         (b"/FT /Xy /Opt [(a)]", "invalid"),
     ],
-    ids=["pairs", "second not a string", "a button", "unknown type"],
+    ids=["pairs", "second not a string", "a text field", "unknown type"],
 )
 def test_a11_options(entries, expected):
     data = forms_file({6: widget(b"/T (f) " + entries)}, fields=b"[6 0 R]")
@@ -334,6 +335,7 @@ def test_a12_2_a_non_widget_kid():
     )
     six, seven = widgets_of(data)
     assert isinstance(six.field, Unknown) and invalid(six.field)
+    assert invalid(six.export_value)
     assert isinstance(seven.field, Unknown) and invalid(seven.field)
 
 
@@ -348,6 +350,7 @@ def test_a12_3_the_widget_listed_twice_in_kids():
     )
     six, seven = widgets_of(data)
     assert isinstance(six.field, Unknown) and invalid(six.field)
+    assert invalid(six.export_value)
     assert seven.field.ref.object_number == 8
     assert invalid(seven.field.name)
     assert invalid(seven.export_value)
@@ -391,6 +394,7 @@ def test_a12_6_a_text_field_that_does_not_list_the_widget():
     )
     six, _ = widgets_of(data)
     assert isinstance(six.field, Unknown) and invalid(six.field)
+    assert invalid(six.export_value)
 
 
 def test_a12_7_an_unknown_type():
@@ -661,7 +665,15 @@ def test_a21_fields():
     fields = fields_of(data)
     assert [field.name for field in fields] == ["p.a", "p.b", "r"]
 
-    data = forms_file({11: b"<< /T (r) >>"}, fields=b"[11 0 R null]")
+    data = forms_file(
+        {
+            8: b"<< /T (p) /FT /Btn /Kids [9 0 R 10 0 R] >>",
+            9: b"<< /T (a) /Parent 8 0 R >>",
+            10: b"<< /T (b) /Parent 8 0 R >>",
+            11: b"<< /T (r) >>",
+        },
+        fields=b"[8 0 R 11 0 R null]",
+    )
     fields = fields_of(data)
     assert invalid(fields)
 
