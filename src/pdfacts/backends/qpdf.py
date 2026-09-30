@@ -50,6 +50,12 @@ _HEADER = re.compile(rb"%PDF-[0-9]+\.[0-9]+")
 # and never inside the run of another, so that the file is read once however
 # its startxrefs are laid out; possessive, so that a long run costs no memory.
 _STARTXREF = re.compile(rb"startxref(?:" + _SPACE + rb"|%[^\r\n]*)++")
+# The word startxref wherever it stands, also in the comment that follows
+# another one. PDFium looks for it in the last 4096 bytes, QPDF in the last
+# 1054 (_STARTXREF_SEARCH); one further from the end neither engine reads
+# (measured).
+_STARTXREF_WORD = re.compile(rb"startxref")
+_STARTXREF_WINDOW = 4096 + len(b"startxref")
 # White space and comments between the numbers and the keyword of an object
 # header, and a sign on a number, which QPDF reads there (measured, reviews,
 # rounds 9 and 11). An object header is looked for from every number, so what
@@ -436,15 +442,57 @@ class QpdfDocument:
 def revision_part_follows(data: bytes) -> bool:
     """Whether part of a revision follows the end of the last whole revision.
 
-    The end is where QPDF reads the file to (_revision_ends); part of a
-    revision is what _REVISION_PART finds after it. False when the file has
-    no whole revision.
+    The end is where QPDF reads the file to (_revisions). Part of a revision
+    is what _REVISION_PART finds after it, or a startxref that sends the
+    engines to another section (_startxref_elsewhere). False when the file
+    has no whole revision.
     """
-    return _part_follows(data, _revision_ends(data))
+    revisions = _revisions(data)
+    ends = [end for end, _ in revisions]
+    return _part_follows(data, ends) or _startxref_elsewhere(data, revisions)
 
 
 def _part_follows(data: bytes, ends: list[int]) -> bool:
     return bool(ends) and _REVISION_PART.search(data, ends[-1]) is not None
+
+
+def _startxref_elsewhere(data: bytes, revisions: list[tuple[int, int]]) -> bool:
+    """Whether the last readable startxref after the last whole revision names another section.
+
+    Both engines read the last startxref whose offset they can read, one in a
+    comment too. One glued to its offset is none to them, and one without an
+    offset makes PDFium rebuild the file, unless it begins in the last 16
+    bytes, where PDFium does not see it (measured, issue #44). Naming the
+    section of the last whole revision again, that startxref is harmless;
+    naming another, it sends the engines there: to an earlier revision,
+    without a word. One that names no section is left to the engines, which
+    rebuild the file.
+    """
+    if not revisions:
+        return False
+    end, section = revisions[-1]
+    heading = _HEADER.search(data, 0, 1024 + len(b"%PDF-9.9"))
+    header = heading.start() if heading else 0
+    named = None
+    for word in _STARTXREF_WORD.finditer(data, max(end, len(data) - _STARTXREF_WINDOW)):
+        found = _STARTXREF.match(data, word.start())
+        offset = None if found is None else _readable_offset(data, found.end())
+        if offset is not None:
+            named = header + offset
+    if named is None or named >= len(data):
+        return False
+    theirs = _SECTION.match(data, named, named + _REACH)
+    ours = _SECTION.match(data, section, section + _REACH)
+    return theirs is not None and theirs.end() != ours.end()
+
+
+def _readable_offset(data: bytes, at: int) -> int | None:
+    """The offset QPDF reads after a startxref that ends at `at`, or None."""
+    match = _OFFSET.match(data, at)
+    if match is None:
+        return None
+    digits = match.group(1).lstrip(b"0") or b"0"
+    return None if len(digits) > _OFFSET_DIGITS else int(digits)
 
 
 def rewrite_recovered(data: bytes, password: str | None) -> RecoveredBytes:
@@ -544,7 +592,12 @@ def _unfinished() -> EngineFailure:
 
 
 def _revision_ends(data: bytes) -> list[int]:
-    """Where the offsets after the startxrefs of whole revisions end, in order.
+    """Where the offsets after the startxrefs of whole revisions end, in order (_revisions)."""
+    return [end for end, _ in _revisions(data)]
+
+
+def _revisions(data: bytes) -> list[tuple[int, int]]:
+    """Each whole revision, in order: where its startxref's offset ends, where its section begins.
 
     A startxref ends a revision where QPDF reads through it, it lies outside
     the data of a stream (between the dictionary's stream and an endstream
@@ -562,7 +615,7 @@ def _revision_ends(data: bytes) -> list[int]:
     boundaries = _STREAM_BOUNDARY.finditer(data)
     before = None
     after = next(boundaries, None)
-    ends: list[int] = []
+    revisions: list[tuple[int, int]] = []
     previous = None
     for found in _STARTXREF.finditer(data):
         while after is not None and after.start() < found.start():
@@ -585,9 +638,9 @@ def _revision_ends(data: bytes) -> list[int]:
             continue
         if previous is not None and section <= previous:
             continue
-        ends.append(match.end())
+        revisions.append((match.end(), section))
         previous = found.start()
-    return ends
+    return revisions
 
 
 def _first_page_trailer(data: bytes, header: int) -> int | None:

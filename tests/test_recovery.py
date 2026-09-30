@@ -1162,3 +1162,12 @@ def test_metadata_that_is_no_stream_is_written_as_it_is():
     with reopened(pdfacts.recover(data).data) as pdf:
         assert not isinstance(pdf.Root.Metadata, pikepdf.Stream)
         assert pdf.Root.Metadata.Subtype == "/XML"
+
+
+def test_a_file_whose_last_startxref_names_an_earlier_table_is_recovered_as_its_update():
+    case = cases.incremental_update()
+    (first,) = re.findall(rb"startxref\n([0-9]+)\n", case.source.data)
+    result = pdfacts.recover(case.data + b"startxref\n%s\n%%%%EOF\n" % first)
+    with pdfacts.open(result.data) as document:
+        box = document.pages[0].geometry.visible_box
+    assert (box.x0, box.y0, box.x1, box.y1) == cases.UPDATED_MEDIA_BOX

@@ -320,14 +320,22 @@ These count as files the engine cannot load:
 | the file does not end with `%%EOF` and white space: there is no `%%EOF`, or anything but white space follows the last one | a file cut short can end in an earlier revision's cross-reference table, which the engines then read without a word; so can a file with bytes appended |
 | PDFium can read the file only by rebuilding its cross-reference table | that is a repair |
 | PDFium finds no page, or no page dictionary for one of the pages it counts | an empty page tree, a missing one and one that names no object look the same to PDFium; the count comes from `/Count` and can promise pages that are not there |
-| part of a revision, an object, a cross-reference section or a trailer, follows the end of the last whole revision where QPDF reads the file to: the last `startxref` cannot be read, or the last update is unfinished. A comment that holds what looks like an object counts too | the engines read the revision before without a word (#32) |
+| part of a revision, an object, a cross-reference section or a trailer, follows the end of the last whole revision where QPDF reads the file to: the last `startxref` cannot be read, or the last update is unfinished. A comment that holds what looks like one of them counts too | the engines read the revision before without a word (#32) |
+| after the end of the last whole revision, the last `startxref` whose offset can be read names another section than that revision's, one in a comment too: an earlier revision's table, another table, or an object | the engines follow it there instead of to the last revision's section, and where that is an earlier revision's table they read that revision without a word (#44) |
 
 A known gap (measured): the test does not know comments, and it finds the
 first-page trailer of a linearized file only where at most one object lies
 between the linearization dictionary and the first-page cross-reference
-section. So a comment holding what looks like an object after the last
-revision, and a linearized file with two or more objects in that place,
-count as damaged. No corpus file has either, and QPDF writes neither.
+section. So a comment holding what looks like an object, a cross-reference
+section or a trailer after the last revision, and a linearized file with two
+or more objects in that place, count as damaged. No corpus file has either,
+and QPDF writes neither. A `startxref` in a comment counts, since both
+engines read one. In crafted layouts the engines disagree and the test
+passes the file: PDFium also reads an offset followed by a point, a plus or
+a minus sign, such as `392.0`, and one that names more than 64 bytes of
+white space before a table; and where a `startxref` stands in the comment
+between another `startxref` and its offset, the engines read different
+ones. There `open()` warns.
 
 A page counts as damaged when it is read, and reading it raises
 `DamagedFileError` while the other pages are read as usual, when PDFium's
@@ -352,11 +360,11 @@ unknown.
 
 Measured: every one of the 104 intact corpus files ends with `%%EOF` and white
 space, has a cross-reference table PDFium accepts as written, and has a page
-dictionary for every page. None of them has part of a revision after its last
-whole revision. A linearized corpus form cut at 60 % opened in
-PDFium, which rebuilt its table. PDFium looks for `startxref` in the last 4096
-bytes, so more than about 4 KB of white space after `%%EOF` makes it rebuild
-the table, and the file counts as damaged.
+dictionary for every page. None of them has part of a revision, or a
+`startxref`, after its last whole revision. A linearized corpus form cut at
+60 % opened in PDFium, which rebuilt its table. PDFium looks for `startxref` in
+the last 4096 bytes, so more than about 4 KB of white space after `%%EOF` makes
+it rebuild the table, and the file counts as damaged.
 
 ## Limits
 
