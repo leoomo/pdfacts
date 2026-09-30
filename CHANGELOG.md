@@ -81,8 +81,13 @@ may break callers.
   warnings into errors.
 - Fact types for forms: `Annotation`, `Widget`, `Field`, `FieldType`,
   `ChoiceOption`, `DeviceColour`, `BorderStyle`, the references
-  `AnnotationRef` and `FieldRef`, and `Name` with `NameEncoding`. Nothing
-  returns them yet.
+  `AnnotationRef` and `FieldRef`, and `Name` with `NameEncoding`.
+- `widgets(document, page_index)` and `fields(document)`: the widgets of one
+  page and the terminal fields of a document, every value from QPDF and each
+  widget checked against what PDFium reads in its own dictionary.
+- `Limits.max_items_per_page`: entries of a page's /Annots, checked before
+  any is read.
+- The capability `FORMS`.
 
 ### Changed
 
@@ -167,12 +172,22 @@ may break callers.
 - Text strings are decoded as ISO 32000-2 says, UTF-16LE read as well,
   language escapes removed, and what does not decode given as U+FFFD. Names
   are returned as their bytes and as text, UTF-8 where valid, else Latin-1.
+- The "Fields and widgets" section of "Forms": `widgets()` and `fields()`,
+  every value from QPDF, each widget checked against what PDFium reads of its
+  own dictionary, the terminal field with its inheritance and link rules, and
+  the item limit and deadline of reading a page's annotations.
+- A widget's facts are unknown unless PDFium reads a widget at the same
+  index whose own dictionary agrees: rectangle, flags, /T, /AS, /Parent, /V,
+  /DV, /TU, /FT, with the page's annotation counts equal.
 
 ### Corrected
 
 - `docs/conventions.md` stated that unrounded values differ between platforms
   with one and the same engine. That was measured with the reference engine,
   not with PDFium. The section now lists what was measured and what was not.
+- "Object identity" said the page-to-object mapping held for all 7935
+  widgets in the corpus; the corpus has 7934 (7935 was the first
+  measurement, on 109 files, five of them test files).
 
 ## 0.0.1
 
