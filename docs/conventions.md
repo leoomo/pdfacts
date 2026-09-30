@@ -443,7 +443,12 @@ Names are looked up as PDFium looks them up: in a stream's own `/Resources`;
 without them, a form uses those of what draws it, an appearance and a soft
 mask group the page's, a pattern none; where the resources in use lack the
 kind of name (`/XObject`, `/Font`, ...), PDFium looks in the page's, except for
-a pattern. A page's resources are inherited through the page tree, and the
+a pattern. Where PDFium reads leniently, so does the count (measured,
+2026-10-01): a stream's dictionary wherever a dictionary is expected, and a
+`/Subtype` written as a string as well as a name. PDFium was measured to take
+a stream's dictionary at `/Resources`, at a group of names and at `/AP`, not
+at an `/ExtGState` or a font; taking it everywhere counts the same or more,
+never less. A page's resources are inherited through the page tree, and the
 parts of `/Contents` are read as one stream. The name an operator uses is
 taken next to it, as PDFium takes it. Where PDFium parses less, the count is an
 upper bound: it parses only the glyphs it shows and the one appearance it
@@ -451,8 +456,16 @@ selects.
 
 Where QPDF cannot count, because it cannot open the file, the check of object
 streams failed, the engines count different pages, the pages QPDF found are
-not the file's, or it cannot read one of the content streams, a set limit
-makes `open()` or the page fail with `LimitUncheckedError`. The count reads
+not the file's, it cannot read one of the content streams, its parser warns
+that it mis-read an object — any warning that names an object and its offset;
+a name with a `#00`, an integer beyond 64 bits, a wrong or missing `/Length`,
+a broken hex string (measured, 2026-10-01) — or the two engines read an
+object differently, the entry of an object stream whose body is a stream
+object, which QPDF reads as a dictionary and PDFium parses as a stream
+(measured, 2026-10-01), a set limit makes `open()` or the page fail with
+`LimitUncheckedError`. The warnings that name no object and no offset stay
+countable — the page-tree repairs of the walked view, the recoveries of a
+content stream — and the corpus gives none of the refusing ones at all. The count reads
 every entry of the page's `/Annots`, also where `max_items_per_page` would
 refuse the page's annotations. It may add QPDF's warnings about content
 streams to the document's warnings, and pikepdf warns of content that ends

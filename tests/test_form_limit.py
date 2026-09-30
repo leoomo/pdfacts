@@ -723,3 +723,257 @@ def test_names_are_looked_up_as_pdfium_looks_them_up(name):
             with pytest.raises(LimitExceededError) as raised:
                 document.pages[0]
         assert raised.value.found == count
+
+
+# --- 11: the count follows PDFium's lenient reading, and says what it cannot count ----
+#
+# Six constructions made the G1 counter read nothing where PDFium parsed an
+# expanding chain (measured 2026-10-01): a string /Subtype, a stream where
+# PDFium reads a dictionary, a name that breaks QPDF's parser, an integer
+# beyond 64 bits, a wrong /Length, and object-stream entries whose bodies are
+# stream objects. The counter now reads as PDFium reads, and a page whose
+# objects the two engines read differently is refused with LimitUncheckedError.
+
+
+def counted(data: bytes, count: int) -> None:
+    """The count is `count`: it opens at the count and refuses one below it."""
+    with pdfacts.open(data, limits=Limits(max_forms_per_page=count)) as document:
+        document.pages[0]
+    with pdfacts.open(data, limits=Limits(max_forms_per_page=count - 1)) as document:
+        with pytest.raises(LimitExceededError) as raised:
+            document.pages[0]
+    assert raised.value.found == count
+
+
+def unchecked(data: bytes) -> None:
+    with pdfacts.open(data, limits=Limits(max_forms_per_page=10)) as document:
+        with pytest.raises(LimitUncheckedError) as raised:
+            document.pages[0]
+    assert raised.value.reason.reason is UnknownReason.UNREADABLE
+
+
+def test_a_form_whose_subtype_is_a_string_counts():
+    data = page_file(
+        b"/Fx Do /Fx Do",
+        b"<< /XObject << /Fx 10 0 R /Fx2 11 0 R >> >>",
+        {
+            10: stream(b"/Fx2 Do /Fx2 Do", b"/Type /XObject /Subtype (Form) /BBox [0 0 9 9]"),
+            **chain(11, 5, twice=True),
+        },
+    )
+    counted(data, 2 * (1 + 2 * (2**5 - 1)))
+
+
+def test_a_form_s_resources_as_a_stream_are_read_as_a_dictionary():
+    data = page_file(
+        b"/Fx Do",
+        b"<< /XObject << /Fx 10 0 R >> >>",
+        {
+            10: stream(
+                b"/Fx Do /Fx Do", b"/Type /XObject /Subtype /Form /BBox [0 0 9 9] /Resources 30 0 R"
+            ),
+            30: stream(b"", b"/XObject << /Fx 11 0 R >>"),
+            **chain(11, 5, twice=True),
+        },
+    )
+    counted(data, 1 + 2 * (2**5 - 1))
+
+
+def test_an_xobject_group_as_a_stream_is_read_as_a_dictionary():
+    data = page_file(
+        b"/Fx Do",
+        b"<< /XObject 31 0 R >>",
+        {31: stream(b"", b"/Fx 10 0 R"), **chain(10, 6, twice=True)},
+    )
+    counted(data, 2**6 - 1)
+
+
+def test_the_page_s_resources_as_a_stream_are_read_as_a_dictionary():
+    data = build(
+        {
+            1: b"<< /Type /Catalog /Pages 2 0 R >>",
+            2: b"<< /Type /Pages /Kids [4 0 R] /Count 1 >>",
+            4: b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Contents 5 0 R"
+            b" /Resources 31 0 R >>",
+            5: stream(b"/Fx Do"),
+            31: stream(b"", b"/XObject << /Fx 10 0 R >>"),
+            **chain(10, 6, twice=True),
+        },
+        1,
+    )
+    counted(data, 2**6 - 1)
+
+
+def test_a_name_that_breaks_qpdf_s_parser_leaves_the_page_unchecked():
+    unchecked(
+        page_file(b"/Fx#00 Do", b"<< /XObject << /Fx#00 10 0 R >> >>", chain(10, 6, twice=True))
+    )
+
+
+def test_an_integer_beyond_64_bits_leaves_the_page_unchecked():
+    unchecked(
+        page_file(
+            b"/Fx Do",
+            b"<< /XObject << /Fx 10 0 R >> >>",
+            {
+                10: stream(
+                    b"/Fx Do /Fx Do",
+                    b"/Type /XObject /Subtype /Form /BBox [0 0 9 9]"
+                    b" /Big 99999999999999999999999999999999999"
+                    b" /Resources << /XObject << /Fx 11 0 R >> >>",
+                ),
+                **chain(11, 5, twice=True),
+            },
+        )
+    )
+
+
+def test_a_wrong_length_on_the_content_leaves_the_page_unchecked():
+    unchecked(
+        build(
+            {
+                1: b"<< /Type /Catalog /Pages 2 0 R >>",
+                2: b"<< /Type /Pages /Kids [4 0 R] /Count 1 >>",
+                4: b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Contents 5 0 R"
+                b" /Resources << /XObject << /Fx 10 0 R >> >> >>",
+                5: b"<< /Length 2 >>\nstream\n0 0\nstream\n/Fx Do /Fx Do\nendstream",
+                **chain(10, 6, twice=True),
+            },
+            1,
+        )
+    )
+
+
+def _object_stream_chain(
+    page_content: bytes,
+    page_resources: bytes,
+    extra: dict[int, bytes],
+    first_entries: bytes,
+    n: int,
+    *,
+    annots: bytes = b"",
+) -> bytes:
+    """A file whose xref says objects 10..10+n-1 are compressed in an object
+    stream whose entries hold what look like stream-object bodies; PDFium
+    parses them as streams (measured, 2026-10-01), QPDF reads dictionaries."""
+    bodies = b""
+    heads = []
+    for i in range(n):
+        heads.append((10 + i, len(bodies)))
+        if i == n - 1:
+            line = b"0 0 m 1 1 l S\n"
+            bodies += (
+                b"<< /Length %d /Type /XObject /Subtype /Form /BBox [0 0 9 9] >>\nstream\n%s"
+                b" endstream\n" % (len(line), line)
+            )
+        else:
+            content = b"/Fx Do /Fx Do\n"
+            entries = (
+                first_entries
+                if i == 0
+                else b"/Type /XObject /Subtype /Form /BBox [0 0 9 9]"
+                b" /Resources << /XObject << /Fx %d 0 R >> >>" % (11 + i)
+            )
+            bodies += b"<< /Length %d %s >>\nstream\n%s endstream\n" % (
+                len(content),
+                entries,
+                content,
+            )
+    head = b" ".join(b"%d %d" % (number, offset) for number, offset in heads) + b" "
+    data = head + bodies
+    out = bytearray(b"%PDF-1.7\n")
+    where = {}
+    physical = {
+        1: b"<< /Type /Catalog /Pages 2 0 R >>",
+        2: b"<< /Type /Pages /Kids [4 0 R] /Count 1 >>",
+        3: stream(page_content),
+        4: b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Contents 3 0 R /Resources "
+        + page_resources
+        + (b" /Annots " + annots + b" " if annots else b"")
+        + b" >>",
+        **extra,
+    }
+    for number in sorted(physical):
+        where[number] = len(out)
+        out += b"%d 0 obj\n%s\nendobj\n" % (number, physical[number])
+    where[8] = len(out)
+    out += (
+        b"8 0 obj\n<< /Type /ObjStm /N %d /First %d /Length %d >>\nstream\n%sendstream\nendobj\n"
+        % (len(heads), len(head), len(data), data)
+    )
+    import struct as _struct
+
+    size = max([*where, 9, *range(10, 10 + n)]) + 1
+    at = len(out)
+    rows = b""
+    for number in range(size):
+        if number in where:
+            rows += _struct.pack(">BIH", 1, where[number], 0)
+        elif number == 9:
+            rows += _struct.pack(">BIH", 1, at, 0)
+        elif 10 <= number < 10 + n:
+            rows += _struct.pack(">BIH", 2, 8, number - 10)
+        else:
+            rows += _struct.pack(">BIH", 0, 0, 65535 if number == 0 else 0)
+    out += b"9 0 obj\n<< /Type /XRef /Size %d /W [1 4 2] /Root 1 0 R /Length %d >>\nstream\n" % (
+        size,
+        len(rows),
+    )
+    out += rows + b"\nendstream\nendobj\nstartxref\n%d\n%%%%EOF\n" % at
+    return bytes(out)
+
+
+OBJSTM_FORM = (
+    b"/Type /XObject /Subtype /Form /BBox [0 0 9 9] /Resources << /XObject << /Fx 11 0 R >> >>"
+)
+
+
+def test_a_form_chain_in_an_object_stream_leaves_the_page_unchecked():
+    unchecked(
+        _object_stream_chain(
+            b"/Fx Do /Fx Do\n", b"<< /XObject << /Fx 10 0 R >> >>", {}, OBJSTM_FORM, 6
+        )
+    )
+
+
+def test_a_pattern_chain_in_an_object_stream_leaves_the_page_unchecked():
+    unchecked(
+        _object_stream_chain(
+            b"/Pattern cs /P1 scn 0 0 9 9 re f\n",
+            b"<< /Pattern << /P1 10 0 R >> >>",
+            {},
+            b"/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 9 9]"
+            b" /XStep 9 /YStep 9 /Resources << /XObject << /Fx 11 0 R >> >>",
+            6,
+        )
+    )
+
+
+def test_an_appearance_written_into_an_object_stream_leaves_the_page_unchecked():
+    unchecked(
+        _object_stream_chain(
+            b"",
+            b"<< >>",
+            {60: b"<< /Type /Annot /Subtype /Square /Rect [0 0 100 100] /AP << /N 10 0 R >> >>"},
+            b"/Type /XObject /Subtype /Form /BBox [0 0 9 9]",
+            1,
+            annots=b"[60 0 R]",
+        )
+    )
+
+
+def test_an_ap_written_as_a_stream_is_read_by_its_dictionary():
+    # Measured: PDFium takes the stream's dictionary at /AP and parses the
+    # appearance it names (2026-10-01; the review of #62 measured the same).
+    data = page_file(
+        b"",
+        b"<< >>",
+        {
+            10: form(b"/Fx Do", b"<< /XObject << /Fx 11 0 R >> >>"),
+            11: LINE,
+            60: b"<< /Type /Annot /Subtype /Square /Rect [0 0 100 100] /AP 33 0 R >>",
+            33: stream(b"", b"/N 10 0 R"),
+        },
+        annots=b"[60 0 R]",
+    )
+    counted(data, 2)
