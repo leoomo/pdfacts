@@ -111,8 +111,9 @@ Linux x86_64, compared at 0.001 pt.
 
 An annotation is identified by page index and its index in the page's
 annotation array. The object number comes from QPDF at the same index. PDFium
-does not expose object numbers. The mapping held for all 7935 widgets in the
-corpus.
+does not expose object numbers. The mapping held for all 7934 widgets of the
+104 corpus files (7935 on the 109 files of the first measurement, five of
+them test files).
 
 The corpus contains no damaged files, and on a damaged file the two engines may
 recover different page trees or annotation lists. Therefore the mapping is
@@ -122,7 +123,7 @@ checked at run time:
 | --- | --- |
 | on open | both engines report the same number of pages |
 | on open | every object stream the cross-reference names can be read, and its header names every object once, never object 0, at the index the cross-reference gives. QPDF keeps the last of two objects with one number and finds an object by the number in the header; PDFium takes what sits at the index. Where this does not hold, every value from QPDF is unknown for the document |
-| before a value from QPDF is used for a page or an annotation | the object at the same position is the same in both engines. For a page, PDFium not exposing object numbers, that means the same visible box, within 0.001, and the same rotation. QPDF's visible box is its media box, US letter where it has none it can use, intersected with its crop box, corners in order; its rotation is taken modulo 360, and a value that is not a multiple of 90 counts as 0 |
+| before a value from QPDF is used for a page or an annotation | the object at the same position is the same in both engines. For a page, PDFium not exposing object numbers, that means the same visible box, within 0.001, and the same rotation. QPDF's visible box is its media box, US letter where it has none it can use, intersected with its crop box, corners in order; its rotation is taken modulo 360, and a value that is not a multiple of 90 counts as 0. For an annotation: PDFium reads a widget at the same index, and the widget's own dictionary agrees: rectangle, flags, /T, /AS, /Parent, /V, /DV, /TU, /FT; the page's annotation counts are equal |
 
 When a check fails, the values that depend on it are unknown and the reason is
 stated. Facts read through PDFium are returned as usual.
@@ -167,6 +168,50 @@ as text: UTF-8 where the bytes are valid UTF-8, Latin-1 otherwise, with
 the encoding stated. Reason: 59 appearance states in the corpus are
 Latin-1 bytes and no valid UTF-8; PDFium decodes every name as a text
 string, which garbles UTF-8; filling a form writes the exact bytes back.
+
+### Fields and widgets
+
+`pdfacts.widgets(document, page_index)` returns the widgets of one page,
+`pdfacts.fields(document)` the terminal fields of the document, depth first
+from `/AcroForm /Fields`. Every value comes from QPDF: the file content, read
+through its raw objects. PDFium is asked one thing per widget: whether it
+reads a widget at the same index of the page's `/Annots` whose own
+dictionary agrees — rectangle, annotation flags, `/T`, `/AS`, `/Parent`,
+`/V`, `/DV`, `/TU`, `/FT`, and the page's annotation counts are equal. Where
+the check fails, every fact of the widget is unknown with the reason
+`engines-disagree`, and the detail names the attribute that differs; where a
+widget appears on one side only, the same unknown says so. Where neither the
+rectangle nor the own `/T` could be compared, nothing identifies the widget
+and the check fails. PDFium holds rectangles as 32-bit floats, so corners are
+compared within 0.001 plus a millionth of the larger magnitude, and its flag
+field is signed, so flags are compared modulo 2^32. Texts are compared after
+deleting U+0000, U+FFFD and lone surrogates, `/AS` only for names of at most
+85 bytes (PDFium keeps 255 bytes of a name's syntax). The cross-reference
+itself is not checked; P7's object-stream check secures what PDFium cannot
+see, and the cross-reference remains a known gap (see "Object identity").
+
+The terminal field of a widget is its own dictionary when it has `/T` or no
+`/Parent`, else its `/Parent`. Inheritance of `/FT`, `/Ff`, `/V`, `/DV` and
+`/Opt` (for buttons) starts at the terminal field; `/Opt` of a choice field
+is not inherited. A widget's field is unknown as a whole when its `/Parent`
+chain loops or holds something that is not a dictionary, when the chain is
+longer than 33 dictionaries, when the terminal field's node in the field tree
+was not followed (the tree is deeper than 32 levels there), or when the link
+does not hold: the parent's `/Kids` must list the widget once, and every
+entry of the `/Kids` must be a widget dictionary. Names are the non-empty
+partial names joined with `.`; a partial name holding `.` makes the name
+unknown. Unknown field flags make the type unknown. A pushbutton has no
+value; the value of a signature field is not read. Where the field tree node
+is structurally invalid, every fact of the field but its reference and
+`in_form` is unknown. `in_form` is true when the terminal field is a node of
+the tree, whatever else the tree holds; false when there is no `/AcroForm`;
+unknown when the tree is invalid or cut, or the terminal field has no object
+number. A `Field` returned by `fields()` equals the `field` of every widget
+of it whose check passed.
+
+Entries of a page's `/Annots` are counted before any is read, against the
+`max_items_per_page` limit; the deadline is checked when `widgets()` or
+`fields()` begins.
 
 ## Three answers
 
@@ -324,6 +369,10 @@ the caller's responsibility; a separate process per document is the
 recommended way.
 
 The numbers are passed in by the caller. The library has no built-in defaults.
+
+For annotations, the number of items is the length of the page's `/Annots`,
+checked before any entry is read; the deadline is also checked when
+`widgets()` or `fields()` begins.
 
 ## Rendering
 
