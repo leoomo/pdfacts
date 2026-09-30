@@ -81,8 +81,7 @@ may break callers.
   warnings into errors.
 - Fact types for forms: `Annotation`, `Widget`, `Field`, `FieldType`,
   `ChoiceOption`, `DeviceColour`, `BorderStyle`, the references
-  `AnnotationRef` and `FieldRef`, and `Name` with `NameEncoding`. Nothing
-  returns them yet.
+  `AnnotationRef` and `FieldRef`, and `Name` with `NameEncoding`.
 - `widgets(document, page_index)` and `fields(document)`: the widgets of one
   page and the terminal fields of a document, every value from QPDF and each
   widget checked against what PDFium reads in its own dictionary.
