@@ -654,13 +654,19 @@ def _check(entry: WidgetEntry, view: AnnotationView) -> str | None:
                 break
             numbers.append(float(item.data))
         if usable and view.rect is not None:
-            left, bottom, right, top = (
+            ours_ordered = (
+                min(numbers[0], numbers[2]),
+                min(numbers[1], numbers[3]),
+                max(numbers[0], numbers[2]),
+                max(numbers[1], numbers[3]),
+            )
+            theirs_ordered = (
                 min(view.rect[0], view.rect[2]),
                 min(view.rect[1], view.rect[3]),
                 max(view.rect[0], view.rect[2]),
                 max(view.rect[1], view.rect[3]),
             )
-            for ours, theirs in zip(numbers, (left, bottom, right, top), strict=True):
+            for ours, theirs in zip(ours_ordered, theirs_ordered, strict=True):
                 if abs(ours - theirs) > 0.001 + 1e-6 * max(abs(ours), abs(theirs)):
                     return "PDFium reads another rectangle for this annotation"
             compared = True
