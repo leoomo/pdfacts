@@ -1316,22 +1316,18 @@ _FORM_DEPTH = 40
 _PARSING_OPERATORS = "Do gs scn SCN Tf"
 
 
-# Warnings with which QPDF's parser says it mis-read an object, so that what
-# PDFium makes of the same bytes may be more (measured, 2026-10-01: a name
-# with a #00, an integer beyond 64 bits, a wrong /Length). QPDF's higher-level
-# repairs stay countable: the counter reads the unwalked view, which keeps
-# what the walked view repaired ("... overridding", "... repairing", the
-# stray-token recoveries of a content stream, a stream whose data ends early).
-_UNCOUNTABLE_WARNINGS = (
-    "treating object as null",
-    "expected endstream",
-    "not allowed in name token",
-    "expected dictionary key",
-)
+# A warning of QPDF's parser about one object: "(object 12 0, offset 345)".
+# Any such warning leaves the page uncountable: what PDFium makes of the same
+# bytes may be more (measured, 2026-10-01: a name with a #00, an integer
+# beyond 64 bits, a wrong or missing /Length, a broken hex string). The
+# page-tree repairs of the walked view name no offset, the recoveries of a
+# content stream name no object, and a stream cut short gives no such warning,
+# so those stay countable; the corpus gives none of them.
+_MISREAD = re.compile(r"\(object \d+ \d+, offset \d+\)")
 
 
 def _countable(message: str) -> bool:
-    return not any(part in message for part in _UNCOUNTABLE_WARNINGS)
+    return _MISREAD.search(message) is None
 
 
 class _CannotCount(Exception):
@@ -1353,8 +1349,9 @@ def _dict_of(value: object):
 def _subtype_is(value: object, name: bytes) -> bool:
     """Whether /Subtype names `name`, as PDFium reads it: a name or a string.
 
-    A name's bytes carry their slash; a string's do not, and PDFium accepts
-    either spelling (measured, 2026-10-01).
+    A name's bytes carry their slash; a string's do not. PDFium was measured
+    with `(Form)` only; the string with the slash is accepted too, which can
+    only count more, never less.
     """
     if isinstance(value, pikepdf.Name):
         return bytes(value) == b"/" + name
@@ -1600,14 +1597,15 @@ def _normal_appearances(annot: object, compressed: frozenset[int]) -> list[pikep
 
     /AP /N, or each stream of it when it is a dictionary: PDFium selects by
     /AS, else by the field's /V, else /Off (measured, issue G1), and counting
-    them all spares copying that choice. A compressed dictionary among the
-    states is what PDFium reads as a stream (measured, 2026-10-01) and makes
-    the page uncountable.
+    them all spares copying that choice. /AP written as a stream is read by
+    its dictionary, as PDFium reads it (measured, 2026-10-01). A compressed
+    dictionary among the states is what PDFium reads as a stream (measured,
+    2026-10-01) and makes the page uncountable.
     """
     if not isinstance(annot, pikepdf.Dictionary):
         return []
-    ap = annot.get("/AP")
-    normal = ap.get("/N") if isinstance(ap, pikepdf.Dictionary) else None
+    ap = _dict_of(annot.get("/AP"))
+    normal = ap.get("/N") if ap is not None else None
     if isinstance(normal, pikepdf.Stream):
         return [normal]
     if isinstance(normal, pikepdf.Dictionary):
