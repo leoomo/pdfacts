@@ -77,6 +77,29 @@ class Rect:
 
 
 @dataclass(frozen=True, slots=True)
+class Quad:
+    """Four corners, in the order the fact that holds them states."""
+
+    p1: Point
+    p2: Point
+    p3: Point
+    p4: Point
+
+    def __post_init__(self) -> None:
+        for name in ("p1", "p2", "p3", "p4"):
+            value = getattr(self, name)
+            if not isinstance(value, Point):
+                raise TypeError(f"{name} must be a Point, not {type(value).__name__}")
+
+    @property
+    def bounds(self) -> Rect:
+        """The smallest rectangle that holds the four corners."""
+        xs = [p.x for p in (self.p1, self.p2, self.p3, self.p4)]
+        ys = [p.y for p in (self.p1, self.p2, self.p3, self.p4)]
+        return Rect(min(xs), min(ys), max(xs), max(ys))
+
+
+@dataclass(frozen=True, slots=True)
 class Matrix:
     """A PDF matrix: x' = a*x + c*y + e, y' = b*x + d*y + f."""
 
