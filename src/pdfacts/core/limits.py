@@ -32,6 +32,12 @@ class Limits:
     max_render_pixels: int | None = None
     # Entries of a page's /Annots; checked before any is read.
     max_items_per_page: int | None = None
+    # Content streams PDFium parses for one page: each form each time it is
+    # drawn, patterns, soft masks and Type 3 glyphs once, the normal
+    # appearances of each annotation. Counted by QPDF before PDFium loads the
+    # page, since the parsing is one engine call that cannot be stopped. When
+    # QPDF cannot count them, the page is refused with LimitUncheckedError.
+    max_forms_per_page: int | None = None
 
     def __post_init__(self) -> None:
         for field in fields(self):

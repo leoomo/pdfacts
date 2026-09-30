@@ -396,6 +396,21 @@ class QpdfDocument:
                 user_unit_invalid=user_unit_invalid,
             )
 
+    def parsed_streams(self, index: int) -> int | None:
+        """The content streams PDFium parses for page `index` and its annotations.
+
+        Counted as PDFium parses them (_ParsedStreams), without parsing
+        anything for PDFium: each form each time it is drawn, down to
+        _FORM_DEPTH; a tiling pattern, a soft mask group and the glyph
+        procedures of a Type 3 font once, when first used; every stream of
+        each annotation's normal appearance. None when QPDF cannot read one of
+        the content streams. A FORMAT failure as page_object() gives one.
+        """
+        objgen = self._annotated_page(index)
+        with _translated():
+            page = self._unwalked.get_object(objgen)
+            return _ParsedStreams().page(page)
+
     def warnings(self) -> tuple[str, ...]:
         """The warnings QPDF gave so far, for example about a media box it added.
 
@@ -1251,6 +1266,237 @@ def _inherited(page: pikepdf.Dictionary, key: str) -> object:
             seen.add(node.objgen)
         node = node.get("/Parent")
     return None
+
+
+# PDFium parses a form XObject drawn at a nesting depth of 1 to 40 below the
+# content that draws it, and gives one drawn deeper as a form without objects.
+# An appearance starts its own 40 levels (measured, issue G1). A tiling
+# pattern, a soft mask group and a Type 3 glyph do not continue the levels of
+# where they are used (measured); they are counted from depth 0 as well, which
+# can only count more.
+_FORM_DEPTH = 40
+# The operators after which PDFium parses another content stream.
+_PARSING_OPERATORS = "Do gs scn SCN Tf"
+
+
+class _Context:
+    """Where a stream's names are looked up, as PDFium looks them up.
+
+    `resources` are the stream's own /Resources, or those it takes when it has
+    none; `fallback` is where PDFium looks when `resources` lack the kind of
+    name asked for (/XObject, /Font, ...): the page's, or none. Each carries a
+    key that names it, for the counts kept per context.
+    """
+
+    __slots__ = ("resources", "key", "fallback", "fallback_key")
+
+    def __init__(self, resources, key, fallback, fallback_key) -> None:
+        self.resources = resources
+        self.key = key
+        self.fallback = fallback
+        self.fallback_key = fallback_key
+
+    def drawing(self, stream: pikepdf.Stream) -> _Context:
+        """The context of a form drawn here: its own /Resources, else these."""
+        own = stream.get("/Resources")
+        if isinstance(own, pikepdf.Dictionary):
+            return _Context(own, ("own", stream.objgen), self.fallback, self.fallback_key)
+        return self
+
+    def lookup(self, kind: str, name: pikepdf.Name) -> tuple[object, tuple | None]:
+        """The object `name` stands for, and the key of the resources it is in."""
+        group = self.resources.get(kind) if isinstance(self.resources, pikepdf.Dictionary) else None
+        if isinstance(group, pikepdf.Dictionary):
+            return group.get(name), self.key
+        if self.fallback is not None and self.fallback_key != self.key:
+            group = (
+                self.fallback.get(kind) if isinstance(self.fallback, pikepdf.Dictionary) else None
+            )
+            if isinstance(group, pikepdf.Dictionary):
+                return group.get(name), self.fallback_key
+        return None, None
+
+
+class _ParsedStreams:
+    """What parsing a page makes PDFium parse, counted without parsing it.
+
+    Measured with PDFium 153.0.7999.0 (issue G1): a form is parsed each time it
+    is drawn; a tiling pattern and a soft mask group once, when first used,
+    however often they are used; a Type 3 font's glyph procedures once, and
+    only those shown (all of them are counted here: an upper bound); an
+    annotation's normal appearance once per annotation, also when two
+    annotations share it (every stream of /N is counted here, whichever one
+    PDFium selects: an upper bound). Names are looked up as PDFium looks them
+    up (_Context), and a stream is counted once per depth and per context.
+    """
+
+    def __init__(self) -> None:
+        # Where the parts of a page's /Contents are joined, apart from the
+        # document, which a count must not change.
+        self._scratch = pikepdf.new()
+        self._instructions: dict[tuple[int, int], list[tuple[str, pikepdf.Name]]] = {}
+        self._counted: dict[tuple, int] = {}
+        # Patterns, soft mask groups and Type 3 fonts already counted, and
+        # where each font was counted.
+        self._once: set = set()
+
+    def page(self, page: pikepdf.Dictionary) -> int | None:
+        """The count; None when QPDF cannot read one of the streams.
+
+        A stream QPDF decodes only in part, with a warning, is counted as far
+        as it decodes: PDFium draws the same part (measured, issue G1).
+        """
+        resources = _inherited(page, "/Resources")
+        top = _Context(resources, ("page",), resources, ("page",))
+        try:
+            total = self._content(self._page_content(page), None, top, 0)
+            annots = page.get("/Annots")
+            for annot in annots if isinstance(annots, pikepdf.Array) else ():
+                for appearance in _normal_appearances(annot):
+                    total += self._stream(appearance, top.drawing(appearance), 0)
+        except MemoryError:
+            raise
+        except Exception:
+            # pikepdf raises PdfError for a filter it does not know, TypeError
+            # for an operator inside an array or a dictionary (measured, issue
+            # G1), and any exception where a warning filter makes one of its
+            # warnings an error; none of them leaves a count.
+            return None
+        return total
+
+    def _page_content(self, page: pikepdf.Dictionary) -> pikepdf.Stream:
+        """The page's /Contents as one stream, parts joined as PDFium joins them."""
+        contents = page.get("/Contents")
+        if isinstance(contents, pikepdf.Stream):
+            return contents
+        parts = (
+            [part for part in contents if isinstance(part, pikepdf.Stream)]
+            if isinstance(contents, pikepdf.Array)
+            else []
+        )
+        return pikepdf.Stream(self._scratch, b"\n".join(part.read_bytes() for part in parts))
+
+    def _content(self, owner, key, context: _Context, depth: int) -> int:
+        """What parsing `owner` at `depth` makes PDFium parse besides it."""
+        total = 0
+        for operator, name in self._read(owner, key):
+            if operator == "Do":
+                drawn, _ = context.lookup("/XObject", name)
+                if isinstance(drawn, pikepdf.Stream) and drawn.get("/Subtype") == "/Form":
+                    total += self._stream(drawn, context.drawing(drawn), depth + 1)
+            elif operator == "gs":
+                state, _ = context.lookup("/ExtGState", name)
+                mask = state.get("/SMask") if isinstance(state, pikepdf.Dictionary) else None
+                group = mask.get("/G") if isinstance(mask, pikepdf.Dictionary) else None
+                if isinstance(group, pikepdf.Stream) and self._first(("mask", group.objgen)):
+                    # Its own /Resources, else the page's (measured, issue G1).
+                    page = _Context(
+                        context.fallback,
+                        context.fallback_key,
+                        context.fallback,
+                        context.fallback_key,
+                    )
+                    total += self._stream(group, page.drawing(group), 0)
+            elif operator in ("scn", "SCN"):
+                pattern, _ = context.lookup("/Pattern", name)
+                if (
+                    isinstance(pattern, pikepdf.Stream)
+                    and pattern.get("/PatternType") == 1
+                    and self._first(("pattern", pattern.objgen))
+                ):
+                    # Its own /Resources or none, and no fallback (measured).
+                    alone = _Context(None, ("none",), None, None)
+                    total += self._stream(pattern, alone.drawing(pattern), 0)
+            else:  # Tf
+                font, holder = context.lookup("/Font", name)
+                if isinstance(font, pikepdf.Dictionary) and font.get("/Subtype") == "/Type3":
+                    total += self._type3(
+                        font, (holder, name) if not font.is_indirect else font.objgen, context
+                    )
+        return total
+
+    def _first(self, key) -> bool:
+        """Whether `key` is met for the first time."""
+        if key in self._once:
+            return False
+        self._once.add(key)
+        return True
+
+    def _stream(self, stream: pikepdf.Stream, context: _Context, depth: int) -> int:
+        """1 for the stream, and what parsing it at `depth` in `context` makes PDFium parse."""
+        if depth > _FORM_DEPTH:
+            return 1
+        key = (stream.objgen, depth, context.key, context.fallback_key)
+        counted = self._counted.get(key)
+        if counted is None:
+            # A stream that draws itself does so one level deeper, under
+            # another key, so the recursion ends at _FORM_DEPTH.
+            counted = 1 + self._content(stream, stream.objgen, context, depth)
+            self._counted[key] = counted
+        return counted
+
+    def _type3(self, font: pikepdf.Dictionary, font_key, context: _Context) -> int:
+        """A Type 3 font's glyph procedures, each counted once.
+
+        With its own /Resources a glyph uses those, and the font is counted
+        once. Without them a glyph uses the resources of where the font was
+        selected before it is shown (measured, issue G1): the font is counted
+        once for each place it is selected, an upper bound.
+        """
+        own = font.get("/Resources")
+        if isinstance(own, pikepdf.Dictionary):
+            where = ("font", font_key)
+            glyphs = _Context(own, where, own, where)
+        else:
+            where = ("font", font_key, context.key)
+            glyphs = _Context(context.resources, context.key, context.resources, context.key)
+        if not self._first(where):
+            return 0
+        procs = font.get("/CharProcs")
+        total = 0
+        for proc in procs.values() if isinstance(procs, pikepdf.Dictionary) else ():
+            if isinstance(proc, pikepdf.Stream):
+                total += self._stream(proc, glyphs.drawing(proc), 0)
+        return total
+
+    def _read(self, owner, key) -> list[tuple[str, pikepdf.Name]]:
+        """The instructions of `owner` that make PDFium parse more, each stream read once."""
+        if key is not None and key in self._instructions:
+            return self._instructions[key]
+        found: list[tuple[str, pikepdf.Name]] = []
+        for operands, operator in pikepdf.parse_content_stream(owner, _PARSING_OPERATORS):
+            op = str(operator)
+            # PDFium takes operands counted from the operator: the name is the
+            # last operand of Do, gs and scn, the one before the size of Tf.
+            at = 2 if op == "Tf" else 1
+            if len(operands) < at:
+                continue
+            name = operands[-at]
+            if isinstance(name, pikepdf.Name):
+                found.append((op, name))
+        if key is not None:
+            self._instructions[key] = found
+        return found
+
+
+def _normal_appearances(annot: object) -> list[pikepdf.Stream]:
+    """Every stream PDFium may take as the annotation's normal appearance.
+
+    /AP /N, or each stream of it when it is a dictionary: PDFium selects by
+    /AS, else by the field's /V, else /Off (measured, issue G1), and counting
+    them all spares copying that choice.
+    """
+    if not isinstance(annot, pikepdf.Dictionary):
+        return []
+    ap = annot.get("/AP")
+    normal = ap.get("/N") if isinstance(ap, pikepdf.Dictionary) else None
+    if isinstance(normal, pikepdf.Stream):
+        return [normal]
+    if isinstance(normal, pikepdf.Dictionary):
+        # values(), not get() with each key: a key that is no UTF-8 comes with
+        # surrogate escapes, and get() refuses it (measured, issue G1).
+        return [state for state in normal.values() if isinstance(state, pikepdf.Stream)]
+    return []
 
 
 def _number(value: object) -> float | None:
