@@ -235,6 +235,8 @@ class QpdfDocument:
         self._warnings: list[str] = []
         # The same warnings as a set: a damaged file can give tens of thousands.
         self._known_warnings: set[str] = set()
+        # The numbers of the compressed objects, read once (parsed_streams).
+        self._compressed_objects: frozenset[int] | None = None
         self._closed = False
 
     @classmethod
@@ -403,13 +405,48 @@ class QpdfDocument:
         anything for PDFium: each form each time it is drawn, down to
         _FORM_DEPTH; a tiling pattern, a soft mask group and the glyph
         procedures of a Type 3 font once, when first used; every stream of
-        each annotation's normal appearance. None when QPDF cannot read one of
-        the content streams. A FORMAT failure as page_object() gives one.
+        each annotation's normal appearance. None when the count cannot be
+        had: a content stream QPDF cannot read, a warning of QPDF's parser
+        about an object it mis-read, or an object the two engines read
+        differently (measured, 2026-10-01: a stream-object body inside an
+        object stream, which QPDF reads as a dictionary and PDFium parses as
+        a stream). A FORMAT failure as page_object() gives one.
         """
         objgen = self._annotated_page(index)
         with _translated():
+            # Both views' warnings so far, collected and drained, so that the
+            # queue read after the count holds only what it raised.
+            self.warnings()
             page = self._unwalked.get_object(objgen)
-            return _ParsedStreams().page(page)
+            found = _ParsedStreams(self._compressed()).page(page)
+            fresh = [str(message) for message in self._unwalked.get_warnings()]
+            for message in fresh:
+                if message not in self._known_warnings:
+                    self._warnings.append(message)
+                    self._known_warnings.add(message)
+            # QPDF parses eagerly: a warning about an object it mis-read can
+            # sit in the collected warnings before this count begins, and one
+            # such object anywhere in the document leaves no page countable —
+            # what PDFium makes of the same bytes may be more (measured,
+            # 2026-10-01: a name with a #00). The corpus gives no warning.
+            if any(not _countable(message) for message in (*fresh, *self._warnings)):
+                return None
+            return found
+
+    def _compressed(self) -> frozenset[int]:
+        """The numbers of the objects the cross-reference holds in object streams.
+
+        QPDF reads such an object as what its body parses to, PDFium the body
+        itself when it looks like a stream object; where the two differ, the
+        page cannot be counted (measured, 2026-10-01).
+        """
+        if self._compressed_objects is None:
+            with _translated():
+                table = self._unwalked.get_xref_table()
+            self._compressed_objects = frozenset(
+                number for (number, _generation), entry in table.items() if entry.type == 2
+            )
+        return self._compressed_objects
 
     def warnings(self) -> tuple[str, ...]:
         """The warnings QPDF gave so far, for example about a media box it added.
@@ -1279,6 +1316,66 @@ _FORM_DEPTH = 40
 _PARSING_OPERATORS = "Do gs scn SCN Tf"
 
 
+# Warnings with which QPDF's parser says it mis-read an object, so that what
+# PDFium makes of the same bytes may be more (measured, 2026-10-01: a name
+# with a #00, an integer beyond 64 bits, a wrong /Length). QPDF's higher-level
+# repairs stay countable: the counter reads the unwalked view, which keeps
+# what the walked view repaired ("... overridding", "... repairing", the
+# stray-token recoveries of a content stream, a stream whose data ends early).
+_UNCOUNTABLE_WARNINGS = (
+    "treating object as null",
+    "expected endstream",
+    "not allowed in name token",
+    "expected dictionary key",
+)
+
+
+def _countable(message: str) -> bool:
+    return not any(part in message for part in _UNCOUNTABLE_WARNINGS)
+
+
+class _CannotCount(Exception):
+    """Raised where the two engines read an object differently, so counting ends."""
+
+
+def _dict_of(value: object):
+    """The value read as a dictionary: a dictionary, or a stream, as PDFium reads one.
+
+    PDFium reads a stream's dictionary wherever a dictionary is expected
+    (measured, 2026-10-01: a form's /Resources, an /XObject group); None for
+    anything else.
+    """
+    if isinstance(value, (pikepdf.Dictionary, pikepdf.Stream)):
+        return value
+    return None
+
+
+def _subtype_is(value: object, name: bytes) -> bool:
+    """Whether /Subtype names `name`, as PDFium reads it: a name or a string.
+
+    A name's bytes carry their slash; a string's do not, and PDFium accepts
+    either spelling (measured, 2026-10-01).
+    """
+    if isinstance(value, pikepdf.Name):
+        return bytes(value) == b"/" + name
+    return isinstance(value, pikepdf.String) and bytes(value) in (name, b"/" + name)
+
+
+def _read_otherwise(value: object, compressed: frozenset[int]) -> None:
+    """Refuse to count a compressed dictionary that PDFium reads as a stream.
+
+    An object stream entry holds what parses as an object; where its body is a
+    dictionary followed by the keyword `stream`, QPDF reads the dictionary and
+    PDFium the stream (measured, 2026-10-01). Such a dictionary sits where a
+    stream is required — a form, a pattern, a soft mask group, a glyph
+    procedure, an appearance — and what PDFium would parse from its bytes
+    cannot be counted.
+    """
+    if isinstance(value, pikepdf.Dictionary) and value.is_indirect:
+        if value.objgen[0] in compressed:
+            raise _CannotCount("an object stream holds what PDFium reads as a stream")
+
+
 class _Context:
     """Where a stream's names are looked up, as PDFium looks them up.
 
@@ -1298,22 +1395,24 @@ class _Context:
 
     def drawing(self, stream: pikepdf.Stream) -> _Context:
         """The context of a form drawn here: its own /Resources, else these."""
-        own = stream.get("/Resources")
-        if isinstance(own, pikepdf.Dictionary):
+        own = _dict_of(stream.get("/Resources"))
+        if own is not None:
             return _Context(own, ("own", stream.objgen), self.fallback, self.fallback_key)
         return self
 
     def lookup(self, kind: str, name: pikepdf.Name) -> tuple[object, tuple | None]:
         """The object `name` stands for, and the key of the resources it is in."""
-        group = self.resources.get(kind) if isinstance(self.resources, pikepdf.Dictionary) else None
-        if isinstance(group, pikepdf.Dictionary):
-            return group.get(name), self.key
+        resources = _dict_of(self.resources)
+        group = resources.get(kind) if resources is not None else None
+        dictionary = _dict_of(group)
+        if dictionary is not None:
+            return dictionary.get(name), self.key
         if self.fallback is not None and self.fallback_key != self.key:
-            group = (
-                self.fallback.get(kind) if isinstance(self.fallback, pikepdf.Dictionary) else None
-            )
-            if isinstance(group, pikepdf.Dictionary):
-                return group.get(name), self.fallback_key
+            fallback = _dict_of(self.fallback)
+            group = fallback.get(kind) if fallback is not None else None
+            dictionary = _dict_of(group)
+            if dictionary is not None:
+                return dictionary.get(name), self.fallback_key
         return None, None
 
 
@@ -1330,10 +1429,11 @@ class _ParsedStreams:
     up (_Context), and a stream is counted once per depth and per context.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, compressed: frozenset[int]) -> None:
         # Where the parts of a page's /Contents are joined, apart from the
         # document, which a count must not change.
         self._scratch = pikepdf.new()
+        self._compressed = compressed
         self._instructions: dict[tuple[int, int], list[tuple[str, pikepdf.Name]]] = {}
         self._counted: dict[tuple, int] = {}
         # Patterns, soft mask groups and Type 3 fonts already counted, and
@@ -1346,20 +1446,21 @@ class _ParsedStreams:
         A stream QPDF decodes only in part, with a warning, is counted as far
         as it decodes: PDFium draws the same part (measured, issue G1).
         """
-        resources = _inherited(page, "/Resources")
+        resources = _dict_of(_inherited(page, "/Resources"))
         top = _Context(resources, ("page",), resources, ("page",))
         try:
             total = self._content(self._page_content(page), None, top, 0)
             annots = page.get("/Annots")
             for annot in annots if isinstance(annots, pikepdf.Array) else ():
-                for appearance in _normal_appearances(annot):
+                for appearance in _normal_appearances(annot, self._compressed):
                     total += self._stream(appearance, top.drawing(appearance), 0)
         except MemoryError:
             raise
         except Exception:
             # pikepdf raises PdfError for a filter it does not know, TypeError
             # for an operator inside an array or a dictionary (measured, issue
-            # G1), and any exception where a warning filter makes one of its
+            # G1), _CannotCount where the engines read an object differently,
+            # and any exception where a warning filter makes one of its
             # warnings an error; none of them leaves a count.
             return None
         return total
@@ -1382,12 +1483,20 @@ class _ParsedStreams:
         for operator, name in self._read(owner, key):
             if operator == "Do":
                 drawn, _ = context.lookup("/XObject", name)
-                if isinstance(drawn, pikepdf.Stream) and drawn.get("/Subtype") == "/Form":
+                if isinstance(drawn, pikepdf.Stream) and _subtype_is(
+                    drawn.get("/Subtype"), b"Form"
+                ):
                     total += self._stream(drawn, context.drawing(drawn), depth + 1)
+                elif isinstance(drawn, pikepdf.Dictionary) and _subtype_is(
+                    drawn.get("/Subtype"), b"Form"
+                ):
+                    _read_otherwise(drawn, self._compressed)
             elif operator == "gs":
                 state, _ = context.lookup("/ExtGState", name)
-                mask = state.get("/SMask") if isinstance(state, pikepdf.Dictionary) else None
-                group = mask.get("/G") if isinstance(mask, pikepdf.Dictionary) else None
+                state = _dict_of(state)
+                mask = state.get("/SMask") if state is not None else None
+                mask = _dict_of(mask)
+                group = mask.get("/G") if mask is not None else None
                 if isinstance(group, pikepdf.Stream) and self._first(("mask", group.objgen)):
                     # Its own /Resources, else the page's (measured, issue G1).
                     page = _Context(
@@ -1397,6 +1506,8 @@ class _ParsedStreams:
                         context.fallback_key,
                     )
                     total += self._stream(group, page.drawing(group), 0)
+                else:
+                    _read_otherwise(group, self._compressed)
             elif operator in ("scn", "SCN"):
                 pattern, _ = context.lookup("/Pattern", name)
                 if (
@@ -1407,9 +1518,12 @@ class _ParsedStreams:
                     # Its own /Resources or none, and no fallback (measured).
                     alone = _Context(None, ("none",), None, None)
                     total += self._stream(pattern, alone.drawing(pattern), 0)
+                elif isinstance(pattern, pikepdf.Dictionary) and pattern.get("/PatternType") == 1:
+                    _read_otherwise(pattern, self._compressed)
             else:  # Tf
                 font, holder = context.lookup("/Font", name)
-                if isinstance(font, pikepdf.Dictionary) and font.get("/Subtype") == "/Type3":
+                font = _dict_of(font)
+                if font is not None and _subtype_is(font.get("/Subtype"), b"Type3"):
                     total += self._type3(
                         font, (holder, name) if not font.is_indirect else font.objgen, context
                     )
@@ -1443,8 +1557,8 @@ class _ParsedStreams:
         selected before it is shown (measured, issue G1): the font is counted
         once for each place it is selected, an upper bound.
         """
-        own = font.get("/Resources")
-        if isinstance(own, pikepdf.Dictionary):
+        own = _dict_of(font.get("/Resources"))
+        if own is not None:
             where = ("font", font_key)
             glyphs = _Context(own, where, own, where)
         else:
@@ -1452,11 +1566,13 @@ class _ParsedStreams:
             glyphs = _Context(context.resources, context.key, context.resources, context.key)
         if not self._first(where):
             return 0
-        procs = font.get("/CharProcs")
+        procs = _dict_of(font.get("/CharProcs"))
         total = 0
-        for proc in procs.values() if isinstance(procs, pikepdf.Dictionary) else ():
+        for proc in procs.values() if procs is not None else ():
             if isinstance(proc, pikepdf.Stream):
                 total += self._stream(proc, glyphs.drawing(proc), 0)
+            else:
+                _read_otherwise(proc, self._compressed)
         return total
 
     def _read(self, owner, key) -> list[tuple[str, pikepdf.Name]]:
@@ -1479,12 +1595,14 @@ class _ParsedStreams:
         return found
 
 
-def _normal_appearances(annot: object) -> list[pikepdf.Stream]:
+def _normal_appearances(annot: object, compressed: frozenset[int]) -> list[pikepdf.Stream]:
     """Every stream PDFium may take as the annotation's normal appearance.
 
     /AP /N, or each stream of it when it is a dictionary: PDFium selects by
     /AS, else by the field's /V, else /Off (measured, issue G1), and counting
-    them all spares copying that choice.
+    them all spares copying that choice. A compressed dictionary among the
+    states is what PDFium reads as a stream (measured, 2026-10-01) and makes
+    the page uncountable.
     """
     if not isinstance(annot, pikepdf.Dictionary):
         return []
@@ -1493,9 +1611,13 @@ def _normal_appearances(annot: object) -> list[pikepdf.Stream]:
     if isinstance(normal, pikepdf.Stream):
         return [normal]
     if isinstance(normal, pikepdf.Dictionary):
+        _read_otherwise(normal, compressed)
         # values(), not get() with each key: a key that is no UTF-8 comes with
         # surrogate escapes, and get() refuses it (measured, issue G1).
-        return [state for state in normal.values() if isinstance(state, pikepdf.Stream)]
+        states = [state for state in normal.values() if isinstance(state, pikepdf.Stream)]
+        for state in normal.values():
+            _read_otherwise(state, compressed)
+        return states
     return []
 
 
