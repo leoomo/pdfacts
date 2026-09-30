@@ -89,6 +89,9 @@ may break callers.
 - `Limits.max_items_per_page`: entries of a page's /Annots, checked before
   any is read.
 - The capability `FORMS`.
+- `Limits.max_forms_per_page`: the content streams PDFium parses for one
+  page, counted by QPDF before PDFium loads the page; `LimitExceededError`
+  above it, `LimitUncheckedError` where QPDF cannot count.
 
 ### Changed
 
@@ -185,6 +188,9 @@ may break callers.
 - A widget's facts are unknown unless PDFium reads a widget at the same
   index whose own dictionary agrees: rectangle, flags, /T, /AS, /Parent, /V,
   /DV, /TU, /FT, with the page's annotation counts equal.
+- "Limits" gains a check before PDFium loads a page: the content streams it
+  would parse, counted by QPDF, since a page of a few kilobytes can make that
+  one engine call take gigabytes or not return.
 
 ### Corrected
 

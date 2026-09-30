@@ -9,12 +9,12 @@ import pytest
 import pdfacts
 from pdfacts import Limits
 
-COUNTS = ["max_bytes", "max_pages", "max_objects", "max_render_pixels"]
+COUNTS = ["max_bytes", "max_pages", "max_objects", "max_render_pixels", "max_forms_per_page"]
 
 
 def test_every_limit_is_off_by_default():
     limits = Limits()
-    assert [getattr(limits, field.name) for field in dataclasses.fields(limits)] == [None] * 6
+    assert [getattr(limits, field.name) for field in dataclasses.fields(limits)] == [None] * 7
     assert [field.name for field in dataclasses.fields(limits)] == [
         "max_bytes",
         "max_pages",
@@ -22,6 +22,7 @@ def test_every_limit_is_off_by_default():
         "deadline_seconds",
         "max_render_pixels",
         "max_items_per_page",
+        "max_forms_per_page",
     ]
 
 
