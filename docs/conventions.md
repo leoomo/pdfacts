@@ -92,6 +92,42 @@ draw. Each fact states whether it came from page content or from an appearance.
 Reason: without appearance streams only 54% of the check boxes in the corpus
 were found.
 
+## Paths and images
+
+Paths and images are facts in user space, like every fact. A path is a list of
+subpaths. A subpath is a move and the segments that follow it, lines and
+curves, a curve given by its two control points and its end; it ends before
+the next move, or with a segment that closes it. `h` ends a subpath, and a
+line or a curve after it begins a new one where the closed subpath began (ISO
+32000-1, 8.5.2.1); PDFium gives no move there, so the new subpath's move is
+put at that point.
+
+Each subpath has a shape, by the first of these rules that applies to its
+segments in user space:
+
+| Shape | When |
+| --- | --- |
+| curves | a curve is among its segments |
+| line | a move and one line, the line not closing the subpath |
+| rectangle | a move and four lines, the last line ending at the move, closed or not, the edges alternating between keeping y and keeping x; its `rect` is the smallest rectangle that holds the four corners |
+| quad | a move and four lines, the last line ending at the move, that are no rectangle; its `quad` holds the four corners in the order they are drawn |
+| polyline | anything else, a lone move included |
+
+The four corners are the point of the move and the ends of the first three
+lines; the edges run from each corner to the next and from the fourth back to
+the first.
+
+Two numbers are one where they differ by at most 0.001 plus a millionth of the
+larger magnitude of the two. Two points are one where their x and their y are;
+an edge keeps x or y where its two ends' x or y are one. A caller that needs
+other rules keeps the segments.
+
+Reason: PDFium turns `re`, `m l l l h` and `m l l l l h` into the same five
+points, the last segment closed, so no rule can tell them apart. PDFium keeps
+coordinates as 32-bit floats. Near 14400 units, the largest page ISO 32000-1
+recommends (Annex C), they lie about 0.001 apart; anywhere, at most 2^-23 of
+the magnitude apart, and coordinates can lie far beyond the page.
+
 ## Fonts
 
 Fonts installed on the host are ignored. Only fonts embedded in the file and
