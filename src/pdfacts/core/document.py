@@ -204,9 +204,12 @@ class FeatureAccess:
     def _qpdf_ready(self) -> QpdfDocument:
         if self._closed:
             raise ClosedError()
-        assert self._qpdf is not None and self.qpdf_unknown is None, (
-            "a QPDF value was asked for while every value from QPDF is unknown"
-        )
+        if self._qpdf is None or self.qpdf_unknown is not None:
+            # Raised, not asserted: python -O removes an assert, and the next
+            # call would then go to QPDF although every value is unknown.
+            raise AssertionError(
+                "a QPDF value was asked for while every value from QPDF is unknown"
+            )
         return self._qpdf
 
     def _pdfium_ready(self) -> PdfiumDocument:
