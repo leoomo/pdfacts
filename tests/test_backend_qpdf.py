@@ -729,6 +729,7 @@ def test_no_engine_type_leaves_the_backend():
             document_.page_count(),
             document_.object_count(),
             document_.page_object(0),
+            document_.parsed_streams(0),
             document_.warnings(),
         ]
         assert all(plain(result) for result in results), results
@@ -745,6 +746,7 @@ def test_it_implements_the_object_reader():
         "object_count",
         "objects_as_written",
         "page_object",
+        "parsed_streams",
         "warnings",
         "close",
     }

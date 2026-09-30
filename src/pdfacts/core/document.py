@@ -111,8 +111,9 @@ class Page:
         is more pixels than the engine addresses.
 
         LimitExceededError when the pixels, counted from the region and the
-        scale, exceed max_render_pixels; the engine is not called then. Memory
-        is otherwise the caller's to limit.
+        scale, exceed max_render_pixels; the engine is not called then. Nor is
+        it when max_forms_per_page refuses the page (docs/conventions.md,
+        "Limits"). Memory is otherwise the caller's to limit.
         """
         self._document._check_open()
         scale = checked_scale(scale)
@@ -194,11 +195,14 @@ class FeatureAccess:
         pdfium: PdfiumDocument,
         qpdf_unknown: Unknown | None,
         max_items_per_page: int | None,
+        check_forms: Callable[[int], None],
     ) -> None:
         self._qpdf = qpdf
         self._pdfium = pdfium
         self.qpdf_unknown = qpdf_unknown
         self.max_items_per_page = max_items_per_page
+        # Document._check_forms: what PDFium would parse, before it loads a page.
+        self._check_forms = check_forms
         self._closed = False
 
     def _qpdf_ready(self) -> QpdfDocument:
@@ -231,11 +235,15 @@ class FeatureAccess:
 
     def pdfium_annotation_count(self, index: int) -> int:
         """PDFium's number of annotations on the page."""
-        return _pdfium_call(lambda: self._pdfium_ready().annotation_count(index))
+        pdfium = self._pdfium_ready()
+        self._check_forms(index)
+        return _pdfium_call(lambda: pdfium.annotation_count(index))
 
     def annotation_views(self, index: int) -> tuple[AnnotationView | None, ...]:
         """What PDFium reads in each annotation dictionary of the page."""
-        return _pdfium_call(lambda: self._pdfium_ready().annotation_views(index))
+        pdfium = self._pdfium_ready()
+        self._check_forms(index)
+        return _pdfium_call(lambda: pdfium.annotation_views(index))
 
     def _close(self) -> None:
         self._closed = True
@@ -261,6 +269,9 @@ class Document:
         self._deadline = opened.deadline
         self._max_render_pixels = opened.max_render_pixels
         self._max_items_per_page = opened.max_items_per_page
+        self._max_forms_per_page = opened.max_forms_per_page
+        # Pages whose count passed max_forms_per_page; QPDF counts each once.
+        self._forms_passed: set[int] = set()
         self._read: dict[int, Page] = {}
         self._pages = Pages(self)
         self._closed = False
@@ -355,6 +366,7 @@ class Document:
                 self._pdfium,
                 self._qpdf_unknown,
                 self._max_items_per_page,
+                self._check_forms,
             )
             # The wait for the lock may have taken this thread past the deadline.
             self._deadline()
@@ -382,6 +394,7 @@ class Document:
                 # Here, right before the page is read: the wait for the lock
                 # may have taken this thread past the deadline.
                 self._deadline()
+                self._check_forms(index)
                 page = self._read_page(index)
                 self._read[index] = page
         return page
@@ -431,7 +444,39 @@ class Document:
     ) -> RawBitmap:
         with runtime.engine():
             self._check_open()
+            self._check_forms(index)
             return _pdfium_call(lambda: self._pdfium.render(index, scale=scale, crop=crop, rgb=rgb))
+
+    def _check_forms(self, index: int) -> None:
+        """Before PDFium loads page `index`: what it would parse, against max_forms_per_page.
+
+        Called with the engine held. open() has refused a document whose QPDF
+        values are all unknown when the limit is set.
+        """
+        limit = self._max_forms_per_page
+        if limit is None or index in self._forms_passed:
+            return
+        if self._qpdf is None or self._qpdf_unknown is not None:
+            # Raised, not asserted: python -O removes an assert.
+            raise AssertionError("open() lets no document without QPDF's values take this limit")
+        try:
+            found = self._qpdf.parsed_streams(index)
+        except EngineFailure as failure:
+            if failure.kind is not FailureKind.FORMAT:
+                raise EngineError(engine="qpdf", detail=failure.detail) from failure
+            found = Unknown(UnknownReason.UNREADABLE, failure.detail)
+        if found is None:
+            found = Unknown(
+                UnknownReason.UNREADABLE, f"QPDF cannot read a content stream of page {index}"
+            )
+        if isinstance(found, Unknown):
+            raise LimitUncheckedError(limit="max_forms_per_page", allowed=limit, reason=found)
+        if found > limit:
+            raise LimitExceededError(limit="max_forms_per_page", allowed=limit, found=found)
+        # Counting takes time with the size of the content and the places a
+        # stream without /Resources is drawn; the deadline is checked after it.
+        self._deadline()
+        self._forms_passed.add(index)
 
 
 class _Opened:
@@ -449,6 +494,7 @@ class _Opened:
         deadline: Callable[[], None],
         max_render_pixels: int | None,
         max_items_per_page: int | None,
+        max_forms_per_page: int | None,
     ) -> None:
         self.pdfium = pdfium
         self.page_count = page_count
@@ -461,6 +507,7 @@ class _Opened:
         self.deadline = deadline
         self.max_render_pixels = max_render_pixels
         self.max_items_per_page = max_items_per_page
+        self.max_forms_per_page = max_forms_per_page
 
 
 @contextmanager
@@ -500,7 +547,8 @@ def open(
     Raises EmptyInputError, NotPdfError or DamagedFileError for input that is
     not a readable PDF, PasswordRequiredError when a password is needed or
     wrong, LimitExceededError when a limit is exceeded, LimitUncheckedError
-    when max_objects is set and the object count is unknown, and EngineError
+    when max_objects is set and the object count is unknown or
+    max_forms_per_page is set and QPDF cannot count, and EngineError
     when an engine fails otherwise. MemoryError passes unchanged.
 
     `_clock` is for tests: the deadline counts from the start of open().
@@ -553,6 +601,14 @@ def open(
                     raise LimitExceededError(
                         limit="max_objects", allowed=limits.max_objects, found=object_count
                     )
+            if limits.max_forms_per_page is not None and qpdf_unknown is not None:
+                # QPDF counts what PDFium parses for a page; without it no
+                # page could be checked.
+                raise LimitUncheckedError(
+                    limit="max_forms_per_page",
+                    allowed=limits.max_forms_per_page,
+                    reason=qpdf_unknown,
+                )
             return Document(
                 _Opened(
                     pdfium=pdfium,
@@ -564,6 +620,7 @@ def open(
                     deadline=_deadline(limits.deadline_seconds, started, _clock),
                     max_render_pixels=limits.max_render_pixels,
                     max_items_per_page=limits.max_items_per_page,
+                    max_forms_per_page=limits.max_forms_per_page,
                 )
             )
         except BaseException:

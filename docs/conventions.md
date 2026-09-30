@@ -377,10 +377,58 @@ The library checks what it can check between two engine calls:
 | number of items per page | while facts are collected |
 | deadline | between pages |
 | pixels of one rendering | before the engine is called |
+| content streams PDFium parses for one page | before PDFium loads the page, for its geometry, a rendering or its annotations |
 
 Time and memory cannot be enforced from inside a running engine call. They are
 the caller's responsibility; a separate process per document is the
 recommended way.
+
+Loading a page is one such call: PDFium parses the page's content and every
+form it draws, down to 40 levels. A page of a few kilobytes whose forms each
+draw the next twice makes that call take about 1 GB at 18 levels and 3 GB at
+20, and a form that draws itself twice makes it not return (measured).
+`max_forms_per_page` is checked before PDFium loads a page. QPDF counts the
+content streams PDFium would parse for the page, rendered with its
+annotations:
+
+- each form each time it is drawn, down to 40 levels below the content that
+  draws it; one drawn deeper counts once and is not parsed;
+- a tiling pattern and a soft mask group once, when first used, and the glyph
+  procedures of a Type 3 font once, all of them, when the font is first
+  selected, or, for a font without `/Resources`, once for each place it is
+  selected;
+- for each annotation, each stream of its normal appearance, hidden
+  annotations too;
+- a page's content and an appearance each start their own 40 levels; a
+  pattern, a soft mask group and a glyph procedure are counted as if they did
+  too, which can only count more.
+
+Names are looked up as PDFium looks them up: in a stream's own `/Resources`;
+without them, a form uses those of what draws it, an appearance and a soft
+mask group the page's, a pattern none; where the resources in use lack the
+kind of name (`/XObject`, `/Font`, ...), PDFium looks in the page's, except for
+a pattern. A page's resources are inherited through the page tree, and the
+parts of `/Contents` are read as one stream. The name an operator uses is
+taken next to it, as PDFium takes it. Where PDFium parses less, the count is an
+upper bound: it parses only the glyphs it shows and the one appearance it
+selects.
+
+Where QPDF cannot count, because it cannot open the file, the check of object
+streams failed, the engines count different pages, the pages QPDF found are
+not the file's, or it cannot read one of the content streams, a set limit
+makes `open()` or the page fail with `LimitUncheckedError`. The count reads
+every entry of the page's `/Annots`, also where `max_items_per_page` would
+refuse the page's annotations. It may add QPDF's warnings about content
+streams to the document's warnings, and pikepdf warns of content that ends
+inside a string; where the caller makes warnings errors, such a page cannot be
+counted. Counting takes memory with the size of the page's content, up to
+about twice what loading the page takes (measured: 1.2 GB against 0.6 GB for a
+`/Contents` listing one stream 300 times), and time with that size and the
+places a stream without `/Resources` is drawn; the deadline is checked after
+it. A known gap: a page is counted
+before the engines' views of it are compared, and where the two engines read
+different objects (see "Object identity") the count can miss what PDFium
+parses.
 
 The numbers are passed in by the caller. The library has no built-in defaults.
 
