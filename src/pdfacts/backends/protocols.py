@@ -225,6 +225,89 @@ class AnnotationView:
     values: Mapping[bytes, tuple[int, str]]
 
 
+# PDFium's matrix of an object, composed with those of the forms that hold it:
+# (a, b, c, d, e, f), x' = a*x + c*y + e, y' = b*x + d*y + f.
+Transform = tuple[float, float, float, float, float, float]
+
+
+@dataclass(frozen=True, slots=True)
+class DrawnPath:
+    """A path object as PDFium reads it, forms that hold it resolved.
+
+    Each value is None where the PDFium call that gives it returns false.
+    """
+
+    # Into page space for the page's content, into the appearance stream's own
+    # space for an appearance; None where PDFium gives no matrix for the path
+    # or a form that holds it.
+    matrix: Transform | None
+    # Per point: FPDF_SEGMENT_* kind, x, y in the path's own space, and whether
+    # it closes its subpath; a curve is three points in a row. None where
+    # PDFium gives no segment or point at an index it counts.
+    segments: tuple[tuple[int, float, float, bool], ...] | None
+    fill_mode: int | None  # FPDF_FILLMODE_*: 0 none, 1 even-odd, 2 nonzero
+    stroke: bool | None
+    fill_colour: tuple[int, int, int, int] | None
+    stroke_colour: tuple[int, int, int, int] | None
+    width: float | None  # in the path's own space
+    dash: tuple[float, ...] | None  # in the path's own space; () for a solid line
+    dash_phase: float | None
+    cap: int | None  # FPDF_LINECAP_*
+    join: int | None  # FPDF_LINEJOIN_*
+
+
+@dataclass(frozen=True, slots=True)
+class DrawnImage:
+    """An image object as PDFium reads it: where it maps the unit square, and its metadata.
+
+    The metadata are None where FPDFImageObj_GetImageMetadata returns false.
+    Where PDFium cannot decode the image, it returns true all the same, with
+    colour space 0 and 0 bits per pixel (measured, issue #58).
+    """
+
+    matrix: Transform | None  # as for DrawnPath
+    width: int | None  # pixels, as the image's dictionary gives them
+    height: int | None
+    colour_space: int | None  # FPDF_COLORSPACE_*, 0 where PDFium reports none
+    bits_per_pixel: int | None  # as PDFium decodes the image
+
+
+@dataclass(frozen=True, slots=True)
+class Drawing:
+    """The paths and images of a page's content, or of one appearance, in drawing order."""
+
+    objects: tuple[DrawnPath | DrawnImage, ...]
+    # Set when reading stopped at `cap`, before the last objects were read.
+    stopped: bool
+    # Set when a form lies deeper than PDFium reads forms, 40 levels: it is an
+    # object without children, and what it draws is not among the objects.
+    too_deep: bool
+
+
+@dataclass(frozen=True, slots=True)
+class AppearanceDrawing:
+    """What PDFium draws for one annotation: its normal appearance's objects and text."""
+
+    index: int  # the annotation's position in the page's /Annots
+    # FPDFAnnot_GetAP, normal mode: the text of the stream the objects come
+    # from, as PDFium decodes it: each byte through PDFDocEncoding, undefined
+    # bytes as U+0000, and data that begins with FE FF as UTF-16BE (measured,
+    # issue G3). "" where there is none, and for an empty stream.
+    appearance_text: str
+    flags: int  # FPDFAnnot_GetFlags, signed as PDFium gives it
+    drawing: Drawing
+
+
+class DrawingReader(Protocol):
+    """The paths and images an engine that interprets the page finds."""
+
+    def page_drawing(self, index: int, cap: int | None) -> Drawing: ...
+
+    def appearance_drawings(
+        self, index: int, cap: int | None
+    ) -> tuple[AppearanceDrawing | None, ...]: ...
+
+
 class AnnotationViewer(Protocol):
     """Annotation dictionaries as an engine that interprets the page reads them."""
 
