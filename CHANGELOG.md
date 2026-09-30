@@ -92,6 +92,10 @@ may break callers.
 - `Limits.max_forms_per_page`: the content streams PDFium parses for one
   page, counted by QPDF before PDFium loads the page; `LimitExceededError`
   above it, `LimitUncheckedError` where QPDF cannot count.
+- Fact types for paths and images: `Path`, `Image`, `Subpath`, `Segment`,
+  `SegmentKind`, `ShapeKind`, `FillRule`, `LineCap`, `LineJoin`,
+  `DisplayColour`, `Dash` and `ColourSpace`; the geometry `Quad` and the
+  reference `GraphicRef`. Nothing returns them yet.
 
 ### Changed
 
@@ -191,6 +195,9 @@ may break callers.
 - "Limits" gains a check before PDFium loads a page: the content streams it
   would parse, counted by QPDF, since a page of a few kilobytes can make that
   one engine call take gigabytes or not return.
+- "Paths and images": facts in user space; where a subpath ends; the shape of
+  each subpath (line, rectangle, quad, polyline, curves) by documented rules,
+  numbers compared within 0.001 plus a millionth of the larger magnitude.
 
 ### Corrected
 
