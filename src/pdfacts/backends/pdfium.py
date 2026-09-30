@@ -1,4 +1,4 @@
-"""PDFium backend: text, geometry and rendering.
+"""PDFium backend: text, geometry, rendering, annotations and what a page draws.
 
 The only module allowed to import pypdfium2.
 """
@@ -18,10 +18,15 @@ import pypdfium2.raw as pdfium_c
 
 from pdfacts.backends.protocols import (
     AnnotationView,
+    AppearanceDrawing,
     Box,
+    Drawing,
+    DrawnImage,
+    DrawnPath,
     EngineFailure,
     FailureKind,
     RawBitmap,
+    Transform,
 )
 
 T = TypeVar("T")
@@ -134,9 +139,10 @@ def _check_index(index: int, count: int) -> None:
 
 
 class PdfiumDocument:
-    """A document opened by PDFium: a GeometryReader, a Renderer, an AnnotationViewer.
+    """A document opened by PDFium.
 
-    It holds the native handle; no method returns a pypdfium2 object. A page is
+    A GeometryReader, a Renderer, an AnnotationViewer and a DrawingReader. It
+    holds the native handle; no method returns a pypdfium2 object. A page is
     opened for one call and closed before the call returns. No form environment
     is ever made: the document that renders must draw as M1 recorded.
     """
@@ -243,6 +249,30 @@ class PdfiumDocument:
         """The number of annotations PDFium counts on the page, every entry."""
         return self._read_page(index, lambda page: int(pdfium_c.FPDFPage_GetAnnotCount(page.raw)))
 
+    def page_drawing(self, index: int, cap: int | None) -> Drawing:
+        """The paths and images of the page's content, forms expanded, in drawing order.
+
+        Reading stops once `cap` objects are read and another follows; a cap
+        below 0 is a ValueError.
+        """
+        _check_cap(cap)
+        return self._read_page(index, lambda page: _page_drawing(page, cap))
+
+    def appearance_drawings(
+        self, index: int, cap: int | None
+    ) -> tuple[AppearanceDrawing | None, ...]:
+        """For each entry of the page's /Annots, what PDFium draws as its normal appearance.
+
+        None where PDFium gives no annotation for the entry. `cap` counts the
+        objects of all appearances together; reading stops as page_drawing
+        stops, and the drawing that stopped is the last one given. PDFium
+        parses an appearance when its objects are first asked for. After a
+        rendering of the page, PDFium draws appearances it generated for
+        annotations that have none (measured, issue G3).
+        """
+        _check_cap(cap)
+        return self._read_page(index, lambda page: _appearance_drawings(page, cap))
+
     def annotation_views(self, index: int) -> tuple[AnnotationView | None, ...]:
         """What PDFium reads in each annotation dictionary of the page's /Annots.
 
@@ -283,6 +313,255 @@ class PdfiumDocument:
                 return read(page)
             finally:
                 page.close()
+
+
+_IDENTITY: Transform = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+# PDFium reads forms 40 levels deep in a page's content and in an appearance;
+# a form drawn deeper is an object without children (measured, issue G3).
+_FORM_LEVELS = 40
+
+
+def _check_cap(cap: int | None) -> None:
+    if cap is not None and cap < 0:
+        raise ValueError(f"a cap is 0 or more, not {cap}")
+
+
+class _Budget:
+    """How many more paths and images may be read."""
+
+    def __init__(self, cap: int | None) -> None:
+        self.left = cap
+        self.stopped = False
+
+    def take(self) -> bool:
+        """False, and stopped, when the cap is used up."""
+        if self.left is None:
+            return True
+        if self.left == 0:
+            self.stopped = True
+            return False
+        self.left -= 1
+        return True
+
+
+def _count(value: int, what: str) -> int:
+    """A count PDFium gives; an engine failure where it gives -1 instead."""
+    if value < 0:
+        raise EngineFailure(FailureKind.OTHER, f"PDFium gives no count of {what}")
+    return value
+
+
+class _Found:
+    """The objects of one drawing so far, and whether a form lay too deep."""
+
+    def __init__(self) -> None:
+        self.objects: list[DrawnPath | DrawnImage] = []
+        self.too_deep = False
+
+    def drawing(self, budget: _Budget) -> Drawing:
+        return Drawing(objects=tuple(self.objects), stopped=budget.stopped, too_deep=self.too_deep)
+
+
+def _page_drawing(page: pypdfium2.PdfPage, cap: int | None) -> Drawing:
+    budget = _Budget(cap)
+    found = _Found()
+    raw = page.raw
+    for i in range(_count(pdfium_c.FPDFPage_CountObjects(raw), "the page's objects")):
+        if not _walk(pdfium_c.FPDFPage_GetObject(raw, i), _IDENTITY, 0, raw, found, budget):
+            break
+    return found.drawing(budget)
+
+
+def _appearance_drawings(
+    page: pypdfium2.PdfPage, cap: int | None
+) -> tuple[AppearanceDrawing | None, ...]:
+    budget = _Budget(cap)
+    drawings: list[AppearanceDrawing | None] = []
+    raw = page.raw
+    for index in range(pdfium_c.FPDFPage_GetAnnotCount(raw)):
+        annot = pdfium_c.FPDFPage_GetAnnot(raw, index)
+        if not annot:
+            drawings.append(None)
+            continue
+        try:
+            found = _Found()
+            count = _count(pdfium_c.FPDFAnnot_GetObjectCount(annot), "an appearance's objects")
+            for i in range(count):
+                obj = pdfium_c.FPDFAnnot_GetObject(annot, i)
+                if not _walk(obj, _IDENTITY, 0, raw, found, budget):
+                    break
+            drawings.append(
+                AppearanceDrawing(
+                    index=index,
+                    appearance_text=_appearance_text(annot),
+                    flags=pdfium_c.FPDFAnnot_GetFlags(annot),
+                    drawing=found.drawing(budget),
+                )
+            )
+        finally:
+            pdfium_c.FPDFPage_CloseAnnot(annot)
+        if budget.stopped:
+            break
+    return tuple(drawings)
+
+
+def _walk(
+    obj: pdfium_c.FPDF_PAGEOBJECT,
+    outer: Transform | None,
+    level: int,
+    page: pdfium_c.FPDF_PAGE,
+    found: _Found,
+    budget: _Budget,
+) -> bool:
+    """Add the paths and images of `obj`, a form's in order; False once the cap is used up.
+
+    `level` counts the forms that hold `obj`.
+    """
+    if not obj:
+        raise EngineFailure(FailureKind.OTHER, "PDFium gives no object at an index it counts")
+    kind = pdfium_c.FPDFPageObj_GetType(obj)
+    if kind not in (
+        pdfium_c.FPDF_PAGEOBJ_FORM,
+        pdfium_c.FPDF_PAGEOBJ_PATH,
+        pdfium_c.FPDF_PAGEOBJ_IMAGE,
+    ):
+        return True
+    own = _matrix(obj)
+    matrix = None if own is None or outer is None else _then(own, outer)
+    if kind == pdfium_c.FPDF_PAGEOBJ_FORM:
+        if level >= _FORM_LEVELS:
+            found.too_deep = True
+            return True
+        for i in range(_count(pdfium_c.FPDFFormObj_CountObjects(obj), "a form's objects")):
+            child = pdfium_c.FPDFFormObj_GetObject(obj, i)
+            if not _walk(child, matrix, level + 1, page, found, budget):
+                return False
+        return True
+    if not budget.take():
+        return False
+    found.objects.append(
+        _path(obj, matrix) if kind == pdfium_c.FPDF_PAGEOBJ_PATH else _image(obj, matrix, page)
+    )
+    return True
+
+
+def _matrix(obj: pdfium_c.FPDF_PAGEOBJECT) -> Transform | None:
+    m = pdfium_c.FS_MATRIX()
+    if not pdfium_c.FPDFPageObj_GetMatrix(obj, ctypes.byref(m)):
+        return None
+    return (m.a, m.b, m.c, m.d, m.e, m.f)
+
+
+def _then(first: Transform, second: Transform) -> Transform:
+    """The transform that applies `first`, then `second`."""
+    a1, b1, c1, d1, e1, f1 = first
+    a2, b2, c2, d2, e2, f2 = second
+    return (
+        a2 * a1 + c2 * b1,
+        b2 * a1 + d2 * b1,
+        a2 * c1 + c2 * d1,
+        b2 * c1 + d2 * d1,
+        a2 * e1 + c2 * f1 + e2,
+        b2 * e1 + d2 * f1 + f2,
+    )
+
+
+def _path(obj: pdfium_c.FPDF_PAGEOBJECT, matrix: Transform | None) -> DrawnPath:
+    fill_mode, stroke = ctypes.c_int(), ctypes.c_int()
+    drawn = pdfium_c.FPDFPath_GetDrawMode(obj, ctypes.byref(fill_mode), ctypes.byref(stroke))
+    width, phase = ctypes.c_float(), ctypes.c_float()
+    has_width = pdfium_c.FPDFPageObj_GetStrokeWidth(obj, ctypes.byref(width))
+    has_phase = pdfium_c.FPDFPageObj_GetDashPhase(obj, ctypes.byref(phase))
+    return DrawnPath(
+        matrix=matrix,
+        segments=_segments(obj),
+        fill_mode=fill_mode.value if drawn else None,
+        stroke=bool(stroke.value) if drawn else None,
+        fill_colour=_colour(pdfium_c.FPDFPageObj_GetFillColor, obj),
+        stroke_colour=_colour(pdfium_c.FPDFPageObj_GetStrokeColor, obj),
+        width=width.value if has_width else None,
+        dash=_dash(obj),
+        dash_phase=phase.value if has_phase else None,
+        cap=_style(pdfium_c.FPDFPageObj_GetLineCap(obj)),
+        join=_style(pdfium_c.FPDFPageObj_GetLineJoin(obj)),
+    )
+
+
+def _style(value: int) -> int | None:
+    """A line cap or join; None for PDFium's -1, which it gives when it has none."""
+    return value if value >= 0 else None
+
+
+def _segments(obj: pdfium_c.FPDF_PAGEOBJECT) -> tuple[tuple[int, float, float, bool], ...] | None:
+    count = pdfium_c.FPDFPath_CountSegments(obj)
+    if count < 0:
+        return None
+    segments = []
+    x, y = ctypes.c_float(), ctypes.c_float()
+    for i in range(count):
+        segment = pdfium_c.FPDFPath_GetPathSegment(obj, i)
+        if not segment or not pdfium_c.FPDFPathSegment_GetPoint(
+            segment, ctypes.byref(x), ctypes.byref(y)
+        ):
+            return None
+        segments.append(
+            (
+                pdfium_c.FPDFPathSegment_GetType(segment),
+                x.value,
+                y.value,
+                bool(pdfium_c.FPDFPathSegment_GetClose(segment)),
+            )
+        )
+    return tuple(segments)
+
+
+def _dash(obj: pdfium_c.FPDF_PAGEOBJECT) -> tuple[float, ...] | None:
+    count = pdfium_c.FPDFPageObj_GetDashCount(obj)
+    if count < 0:
+        return None
+    lengths = (ctypes.c_float * count)()
+    if count and not pdfium_c.FPDFPageObj_GetDashArray(obj, lengths, count):
+        return None
+    return tuple(lengths)
+
+
+def _colour(
+    get: Callable[..., int], obj: pdfium_c.FPDF_PAGEOBJECT
+) -> tuple[int, int, int, int] | None:
+    r, g, b, a = (ctypes.c_uint() for _ in range(4))
+    if not get(obj, ctypes.byref(r), ctypes.byref(g), ctypes.byref(b), ctypes.byref(a)):
+        return None
+    return (r.value, g.value, b.value, a.value)
+
+
+def _image(
+    obj: pdfium_c.FPDF_PAGEOBJECT, matrix: Transform | None, page: pdfium_c.FPDF_PAGE
+) -> DrawnImage:
+    meta = pdfium_c.FPDF_IMAGEOBJ_METADATA()
+    if not pdfium_c.FPDFImageObj_GetImageMetadata(obj, page, ctypes.byref(meta)):
+        return DrawnImage(
+            matrix=matrix, width=None, height=None, colour_space=None, bits_per_pixel=None
+        )
+    return DrawnImage(
+        matrix=matrix,
+        width=meta.width,
+        height=meta.height,
+        colour_space=meta.colorspace,
+        bits_per_pixel=meta.bits_per_pixel,
+    )
+
+
+def _appearance_text(annot: pdfium_c.FPDF_ANNOTATION) -> str:
+    """FPDFAnnot_GetAP, normal mode, as text; "" where PDFium gives none."""
+    mode = pdfium_c.FPDF_ANNOT_APPEARANCEMODE_NORMAL
+    needed = pdfium_c.FPDFAnnot_GetAP(annot, mode, None, 0)
+    if needed <= 2:
+        return ""
+    buffer = ctypes.create_string_buffer(needed)
+    pdfium_c.FPDFAnnot_GetAP(
+        annot, mode, ctypes.cast(buffer, ctypes.POINTER(pdfium_c.FPDF_WCHAR)), needed
+    )
+    return buffer.raw[:-2].decode("utf-16-le", "surrogatepass")
 
 
 def _annotation_views(page: pypdfium2.PdfPage) -> tuple[AnnotationView | None, ...]:
