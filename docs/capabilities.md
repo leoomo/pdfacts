@@ -21,6 +21,7 @@ on. Three states are used throughout:
 | Page geometry (`PAGE_GEOMETRY`) | proven | `tests/test_pages.py`, including where PDFium draws a rectangle of known position |
 | Object numbers of pages (`OBJECT_NUMBERS`), `UserUnit` (`USER_UNIT`) | proven | `tests/test_pages.py`; on the corpus both engines agree on all 467 pages |
 | Rendering a page or a region (`RENDERING`) | proven | `tests/test_render.py`; the first pages of five corpus files gave the same bytes on macOS arm64, Linux arm64 and Linux x86_64 |
+| Form fields and widgets (`FORMS`) | proven | `tests/test_forms.py`; on the corpus, 7934 widgets in 75 files with the run-time check passing on all of them, and 6960 terminal fields in 75 files |
 | Recovering a damaged file (`RECOVERY`) | proven | `tests/test_recovery.py`. Every corpus file with its end damaged six ways (`%%EOF` removed, its last byte cut, cut right after the offset of its last `startxref`, junk, Ctrl-Z or a vertical tab appended) recovered with the geometry of the original. The 32 files with an incremental update, cut 200 bytes into it: 30 refused as ending inside an update; two updates were shorter. Five corpus forms cut at 70 % and 95 %: one of the ten recovered, with the geometry and the form fields of the original; two refused as ending inside an update; seven refused, QPDF finding no `/Kids` in the root of the page tree. All five keep objects in object streams |
 | Everything else | planned | [ROADMAP.md](../ROADMAP.md) |
 
