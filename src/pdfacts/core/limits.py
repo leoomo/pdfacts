@@ -30,6 +30,8 @@ class Limits:
     # before the engine is called. Memory grows with the square of the scale,
     # and a running engine call cannot be stopped.
     max_render_pixels: int | None = None
+    # Entries of a page's /Annots; checked before any is read.
+    max_items_per_page: int | None = None
 
     def __post_init__(self) -> None:
         for field in fields(self):

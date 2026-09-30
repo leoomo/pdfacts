@@ -14,13 +14,14 @@ COUNTS = ["max_bytes", "max_pages", "max_objects", "max_render_pixels"]
 
 def test_every_limit_is_off_by_default():
     limits = Limits()
-    assert [getattr(limits, field.name) for field in dataclasses.fields(limits)] == [None] * 5
+    assert [getattr(limits, field.name) for field in dataclasses.fields(limits)] == [None] * 6
     assert [field.name for field in dataclasses.fields(limits)] == [
         "max_bytes",
         "max_pages",
         "max_objects",
         "deadline_seconds",
         "max_render_pixels",
+        "max_items_per_page",
     ]
 
 

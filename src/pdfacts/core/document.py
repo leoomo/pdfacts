@@ -20,7 +20,16 @@ from contextlib import contextmanager, suppress
 from types import TracebackType
 
 from pdfacts.backends.pdfium import PdfiumDocument
-from pdfacts.backends.protocols import Box, EngineFailure, FailureKind, PageObject, RawBitmap
+from pdfacts.backends.protocols import (
+    AnnotationView,
+    Box,
+    EngineFailure,
+    FailureKind,
+    FieldTree,
+    PageAnnotations,
+    PageObject,
+    RawBitmap,
+)
 from pdfacts.backends.qpdf import QpdfDocument, revision_part_follows
 from pdfacts.core import runtime
 from pdfacts.core.bitmap import Bitmap, Colour, checked_scale
@@ -169,6 +178,66 @@ class Pages:
             yield self._document._page(index)
 
 
+class FeatureAccess:
+    """What a feature package reads through, valid only inside Document._access().
+
+    Each method calls the engine through the core's guards, so an engine
+    failure becomes EngineError; no backend object is handed out. A QPDF
+    method called while every value from QPDF is unknown raises
+    AssertionError: the reader must return the Unknown instead. After the
+    block, every method raises ClosedError.
+    """
+
+    def __init__(
+        self,
+        qpdf: QpdfDocument,
+        pdfium: PdfiumDocument,
+        qpdf_unknown: Unknown | None,
+        max_items_per_page: int | None,
+    ) -> None:
+        self._qpdf = qpdf
+        self._pdfium = pdfium
+        self.qpdf_unknown = qpdf_unknown
+        self.max_items_per_page = max_items_per_page
+        self._closed = False
+
+    def _qpdf_ready(self) -> QpdfDocument:
+        if self._closed:
+            raise ClosedError()
+        assert self._qpdf is not None and self.qpdf_unknown is None, (
+            "a QPDF value was asked for while every value from QPDF is unknown"
+        )
+        return self._qpdf
+
+    def _pdfium_ready(self) -> PdfiumDocument:
+        if self._closed:
+            raise ClosedError()
+        return self._pdfium
+
+    def annotation_count(self, index: int) -> int | None:
+        """QPDF's number of entries of the page's /Annots; None if no array."""
+        return _qpdf_call(lambda: self._qpdf_ready().annotation_count(index))
+
+    def annotations(self, index: int) -> PageAnnotations:
+        """QPDF's entries of the page's /Annots and its widgets, as written."""
+        return _qpdf_call(lambda: self._qpdf_ready().annotations(index))
+
+    def field_tree(self) -> FieldTree | None:
+        """QPDF's field tree from /AcroForm /Fields; None without /AcroForm."""
+        return _qpdf_call(self._qpdf_ready().field_tree)
+
+    def pdfium_annotation_count(self, index: int) -> int:
+        """PDFium's number of annotations on the page."""
+        return _pdfium_call(lambda: self._pdfium_ready().annotation_count(index))
+
+    def annotation_views(self, index: int) -> tuple[AnnotationView | None, ...]:
+        """What PDFium reads in each annotation dictionary of the page."""
+        return _pdfium_call(lambda: self._pdfium_ready().annotation_views(index))
+
+    def _close(self) -> None:
+        self._closed = True
+
+
 class Document:
     """An open PDF document; open() makes one.
 
@@ -188,6 +257,7 @@ class Document:
         self._noted = set(self._notes)
         self._deadline = opened.deadline
         self._max_render_pixels = opened.max_render_pixels
+        self._max_items_per_page = opened.max_items_per_page
         self._read: dict[int, Page] = {}
         self._pages = Pages(self)
         self._closed = False
@@ -270,6 +340,25 @@ class Document:
     def _check_open(self) -> None:
         if self.closed:
             raise ClosedError()
+
+    @contextmanager
+    def _access(self) -> Iterator[FeatureAccess]:
+        """What a feature package reads through, while this holds the engine."""
+        self._check_open()
+        with runtime.engine():
+            self._check_open()
+            access = FeatureAccess(
+                self._qpdf,
+                self._pdfium,
+                self._qpdf_unknown,
+                self._max_items_per_page,
+            )
+            # The wait for the lock may have taken this thread past the deadline.
+            self._deadline()
+            try:
+                yield access
+            finally:
+                access._close()
 
     def _page(self, index: int) -> Page:
         self._check_open()
@@ -356,6 +445,7 @@ class _Opened:
         notes: list[str],
         deadline: Callable[[], None],
         max_render_pixels: int | None,
+        max_items_per_page: int | None,
     ) -> None:
         self.pdfium = pdfium
         self.page_count = page_count
@@ -367,6 +457,7 @@ class _Opened:
         self.notes = notes
         self.deadline = deadline
         self.max_render_pixels = max_render_pixels
+        self.max_items_per_page = max_items_per_page
 
 
 @contextmanager
@@ -469,6 +560,7 @@ def open(
                     notes=[qpdf_unknown.detail] if qpdf_unknown is not None else [],
                     deadline=_deadline(limits.deadline_seconds, started, _clock),
                     max_render_pixels=limits.max_render_pixels,
+                    max_items_per_page=limits.max_items_per_page,
                 )
             )
         except BaseException:
