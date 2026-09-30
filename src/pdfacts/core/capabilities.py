@@ -18,6 +18,7 @@ class Capability(StrEnum):
     OBJECT_NUMBERS = "object-numbers"
     RENDERING = "rendering"
     RECOVERY = "recovery"
+    FORMS = "forms"
     FONT_POLICY_EMBEDDED_ONLY = "font-policy-embedded-only"
     FONT_POLICY_HOST = "font-policy-host"
 
@@ -30,6 +31,7 @@ _TABLE: Mapping[Capability, bool] = MappingProxyType(
         Capability.OBJECT_NUMBERS: True,
         Capability.RENDERING: True,
         Capability.RECOVERY: True,
+        Capability.FORMS: True,
         Capability.FONT_POLICY_EMBEDDED_ONLY: True,
         Capability.FONT_POLICY_HOST: False,
     }

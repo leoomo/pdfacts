@@ -7,9 +7,12 @@ of P1. No engine is called, no check is made (part 2), nothing is public.
 
 from __future__ import annotations
 
+import types
 from dataclasses import dataclass
 
-from pdfacts.backends.protocols import FieldEntry, FieldTree, WidgetEntry, Written
+from pdfacts.backends.protocols import AnnotationView, FieldEntry, FieldTree, WidgetEntry, Written
+from pdfacts.core.document import Document
+from pdfacts.core.errors import LimitExceededError
 from pdfacts.core.geometry import Rect
 from pdfacts.core.refs import AnnotationRef, FieldRef
 from pdfacts.core.strings import decode_name, decode_text_string
@@ -24,6 +27,11 @@ from pdfacts.forms.model import (
 )
 
 _INVALID = UnknownReason.INVALID
+# PDFium's FPDF_OBJECT_* codes, named here so the reader imports no engine.
+_OBJECT_UNKNOWN = 0
+_OBJECT_STRING = 3
+_OBJECT_NULLOBJ = 8
+_OBJECT_REFERENCE = 9
 _UNREADABLE = UnknownReason.UNREADABLE
 
 
@@ -125,7 +133,7 @@ def _fields(tree: FieldTree | None) -> tuple[Field, ...] | Unknown:
             parent = tree.nodes[parent].parent
         entry = node.entry
         ref = _field_ref(entry)
-        facts = _field_facts(chain, 0, ref, nodes, index)
+        facts = _field_facts(chain)
         if nodes.invalid[index]:
             facts = {name: _invalid("the field tree is not valid here") for name in facts}
             facts["ref"] = ref
@@ -197,7 +205,7 @@ def _field_of(entry: WidgetEntry, nodes: _NodeTable) -> tuple[Field | Unknown, o
         return unknown, unknown
 
     ref = _field_ref(head)
-    facts = _field_facts(field_chain, terminal, ref, nodes, node_index)
+    facts = _field_facts(field_chain)
     if node_index is not None and nodes.invalid[node_index]:
         for name in (
             "name",
@@ -252,13 +260,7 @@ def _field_ref(entry: FieldEntry) -> FieldRef:
     )
 
 
-def _field_facts(
-    chain: list[FieldEntry] | tuple[FieldEntry, ...],
-    terminal: int,
-    ref: FieldRef,
-    nodes: _NodeTable,
-    node_index: int | None,
-) -> dict:
+def _field_facts(chain: list[FieldEntry] | tuple[FieldEntry, ...]) -> dict:
     """The facts of D5's table for one field chain (its head at index 0)."""
     head = chain[0]
     facts: dict[str, object] = {}
@@ -559,3 +561,209 @@ def _border(entry: WidgetEntry) -> BorderStyle | None | Unknown:
             return _invalid("the style of the border is not a name")
         style = decode_name(style_written.data)
     return BorderStyle(width, style)
+
+
+# --- the entry points and the run-time check (part 2) ----------------------------------
+
+_ABSENT = (_OBJECT_UNKNOWN, _OBJECT_NULLOBJ)
+
+
+def widgets(document: Document, page_index: int) -> tuple[Widget, ...] | Unknown:
+    """The widgets of one page, their facts checked against what PDFium reads."""
+    if not isinstance(document, Document):
+        raise TypeError(f"a document of pdfacts, not {type(document).__name__}")
+    page = document.pages[page_index]  # the index checks of Document._page
+    with document._access() as access:
+        if access.qpdf_unknown is not None:
+            return access.qpdf_unknown
+        if isinstance(page.ref.object_number, Unknown):
+            return page.ref.object_number
+        count = access.annotation_count(page_index)
+        if count is None:
+            return Unknown(_INVALID, "/Annots is not an array")
+        theirs = access.pdfium_annotation_count(page_index)
+        if access.max_items_per_page is not None and max(count, theirs) > access.max_items_per_page:
+            raise LimitExceededError(
+                limit="max_items_per_page",
+                allowed=access.max_items_per_page,
+                found=max(count, theirs),
+            )
+        if count != theirs:
+            return Unknown(
+                UnknownReason.ENGINES_DISAGREE,
+                f"QPDF finds {count} annotations on the page, PDFium {theirs}",
+            )
+        annotations = access.annotations(page_index)
+        views = access.annotation_views(page_index)
+        nodes = _nodes(access.field_tree())
+        widget_entries = {one.annotation.index: one for one in annotations.widgets}
+        out = []
+        for k, view in enumerate(views):
+            entry = annotations.entries[k] if k < len(annotations.entries) else None
+            ours = entry is not None and entry.subtype == b"Widget"
+            theirs = view is not None and view.widget
+            if ours and theirs:
+                widget_entry = widget_entries[k]
+                detail = _check(widget_entry, view)
+                if detail is not None:
+                    out.append(_disagreed(widget_entry, page_index, detail))
+                else:
+                    out.append(_widget(widget_entry, page_index, nodes))
+            elif ours or theirs:
+                side = "QPDF" if ours else "PDFium"
+                out.append(
+                    _disagreed(_bare_entry(k, entry), page_index, f"only {side} sees a widget here")
+                )
+        return tuple(out)
+
+
+def fields(document: Document) -> tuple[Field, ...] | Unknown:
+    """The terminal fields of the document, depth first from /AcroForm /Fields."""
+    if not isinstance(document, Document):
+        raise TypeError(f"a document of pdfacts, not {type(document).__name__}")
+    with document._access() as access:
+        if access.qpdf_unknown is not None:
+            return access.qpdf_unknown
+        return _fields(access.field_tree())
+
+
+def _bare_entry(index: int, entry):
+    """An entry-like holder for the position of a widget one engine alone sees.
+
+    Both directions need it: the index of a widget only PDFium sees (entry
+    missing or not a dictionary) and of one only QPDF sees (entry without the
+    parts a WidgetEntry has).
+    """
+    return types.SimpleNamespace(annotation=types.SimpleNamespace(index=index))
+
+
+def _check(entry: WidgetEntry, view: AnnotationView) -> str | None:
+    """D6: whether the widget's own dictionary agrees with what PDFium reads.
+
+    None when it agrees; the detail of the first attribute that differs
+    otherwise. Also fails when nothing identifies the widget.
+    """
+    compared = False
+    written = entry.entries.get(b"Rect")
+    if written is not None and written.kind == "array" and len(written.data) == 4:
+        numbers = []
+        usable = True
+        for item in written.data:
+            if item.kind not in ("integer", "real"):
+                usable = False
+                break
+            numbers.append(float(item.data))
+        if usable and view.rect is not None:
+            left, bottom, right, top = (
+                min(view.rect[0], view.rect[2]),
+                min(view.rect[1], view.rect[3]),
+                max(view.rect[0], view.rect[2]),
+                max(view.rect[1], view.rect[3]),
+            )
+            for ours, theirs in zip(numbers, (left, bottom, right, top), strict=True):
+                if abs(ours - theirs) > 0.001 + 1e-6 * max(abs(ours), abs(theirs)):
+                    return "PDFium reads another rectangle for this annotation"
+            compared = True
+    written = entry.entries.get(b"F")
+    flags = None
+    if written is not None and written.kind == "integer" and 0 <= written.data <= 2**32 - 1:
+        flags = written.data
+    if flags is None:
+        flags = 0
+    if flags % 2**32 != view.flags % 2**32:
+        return "PDFium reads other annotation flags"
+    detail = _text_agrees(entry.chain[0].entries.get(b"T"), view.t_type, view.t, "/T")
+    if detail is not None:
+        if detail == "present":
+            compared = True
+        else:
+            return detail
+    written = entry.entries.get(b"AS")
+    if written is not None and written.kind == "name":
+        if view.as_type in _ABSENT:
+            return "PDFium does not read the /AS of this annotation"
+        if len(written.data) <= 85 and _clean(view.as_text) != _text(written.data):
+            return "PDFium reads another /AS for this annotation"
+    elif (
+        written is not None
+        and view.as_type not in _ABSENT
+        and _clean(view.as_text) != _text_of_kind(written)
+    ):
+        return "PDFium reads another /AS for this annotation"
+    ours_parent = len(entry.chain) > 1 or entry.parent_invalid or entry.chain_loops
+    theirs_parent = view.parent_type not in _ABSENT
+    if ours_parent != theirs_parent:
+        return "PDFium reads another /Parent for this annotation"
+    for key in (b"V", b"DV", b"TU", b"FT"):
+        written = entry.chain[0].entries.get(key)
+        label = "/" + key.decode("ascii")
+        theirs = view.values[key]
+        if written is None:
+            if theirs[0] not in _ABSENT:
+                return f"PDFium reads a {label} that QPDF does not"
+        elif theirs[0] in _ABSENT:
+            return f"QPDF reads a {label} that PDFium does not"
+        elif written.kind == "string" and theirs[0] in (_OBJECT_STRING, _OBJECT_REFERENCE):
+            if _clean(theirs[1]) != _text(written.data):
+                return f"PDFium reads another {label} for this annotation"
+        elif written.kind == "name" and len(written.data) <= 85 and theirs[0] != _OBJECT_REFERENCE:
+            if _clean(theirs[1]) != _text(written.data):
+                return f"PDFium reads another {label} for this annotation"
+    if not compared:
+        return "nothing identifies this widget: neither its rectangle nor its /T was compared"
+    return None
+
+
+def _text_agrees(written, code: int, text: str, label: str) -> str | None:
+    """The own /T rule of D6: None to agree, "present" when it identified."""
+    if written is None:
+        if code not in _ABSENT:
+            return f"PDFium reads a {label} that QPDF does not"
+        return None
+    if code in _ABSENT:
+        return f"QPDF reads a {label} that PDFium does not"
+    if written.kind == "string" and code in (_OBJECT_STRING, _OBJECT_REFERENCE):
+        if _clean(text) != _text(written.data):
+            return f"PDFium reads another {label} for this annotation"
+        return "present"
+    return None
+
+
+def _text_of_kind(written) -> str:
+    if written.kind == "string":
+        return _clean(decode_text_string(written.data))
+    return _clean(decode_name(written.data).text) if written.kind == "name" else ""
+
+
+def _clean(text: str) -> str:
+    """The text without U+0000, U+FFFD and every lone surrogate."""
+    return "".join(
+        one for one in text if one not in ("\x00", "\ufffd") and not (0xD800 <= ord(one) <= 0xDFFF)
+    )
+
+
+def _text(data: bytes) -> str:
+    return _clean(decode_text_string(data))
+
+
+def _disagreed(entry, page_index: int, detail: str) -> Widget:
+    """A widget whose every fact is unknown, with the check's detail."""
+    unknown = Unknown(UnknownReason.ENGINES_DISAGREE, detail)
+    return Widget(
+        ref=AnnotationRef(
+            page_index=page_index,
+            annotation_index=entry.annotation.index,
+            kind="Widget",
+            object_number=unknown,
+            generation=unknown,
+        ),
+        rect=unknown,
+        annotation_flags=unknown,
+        field=unknown,
+        states=unknown,
+        state=unknown,
+        export_value=unknown,
+        border_colour=unknown,
+        background_colour=unknown,
+        border=unknown,
+    )

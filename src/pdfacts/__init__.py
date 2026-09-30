@@ -36,6 +36,7 @@ from pdfacts.forms.model import (
     FieldType,
     Widget,
 )
+from pdfacts.forms.reader import fields, widgets
 
 __version__ = "0.0.1"
 
@@ -85,7 +86,9 @@ __all__ = [
     "capabilities",
     "configure",
     "engine_info",
+    "fields",
     "open",
     "recover",
+    "widgets",
     "require",
 ]
