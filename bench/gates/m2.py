@@ -177,6 +177,8 @@ def check_file(data: bytes) -> dict:
     theirs_by_key = {(one["page"], one["index"]): one for one in theirs}
     in_form_true = 0
     unknown_types: dict[str, dict[str, int]] = {}
+    equal_of_buttons = {"states": 0, "state": 0, "export_value": 0}
+    equal_of_choice = {"options": 0}
     for one in ours:
         kind = one["type"]
         kind = kind if isinstance(kind, str) else "unknown"
@@ -197,11 +199,20 @@ def check_file(data: bytes) -> dict:
             for fact in m2_referee.FACTS:
                 if one[fact] == other[fact]:
                     equal[fact] += 1
+            # The buttons carry the states and export values, the choice fields the options.
+            if kind in ("checkbox", "radio"):
+                for fact in equal_of_buttons:
+                    if one[fact] == other[fact]:
+                        equal_of_buttons[fact] += 1
+            if kind in ("combo-box", "list-box") and one["options"] == other["options"]:
+                equal_of_choice["options"] += 1
     entry["unknown"] = unknown
     entry["unknown_types"] = unknown_types
     entry["types"] = types
     entry["known"] = known
     entry["equal"] = equal
+    entry["equal_of_buttons"] = equal_of_buttons
+    entry["equal_of_choice"] = equal_of_choice
     entry["in_form_true"] = in_form_true
     if isinstance(fields, Unknown):
         entry["fields"] = fields.reason.value
@@ -338,12 +349,22 @@ def _print_summary(count: int, rich: dict[str, dict], errors: dict[str, str]) ->
     for entry in rich.values():
         for kind, number in entry["types"].items():
             types[kind] = types.get(kind, 0) + number
+    buttons = {"states": 0, "state": 0, "export_value": 0}
+    choice = {"options": 0}
+    for entry in rich.values():
+        for fact, number in entry["equal_of_buttons"].items():
+            buttons[fact] += number
+        for fact, number in entry["equal_of_choice"].items():
+            choice[fact] += number
     print(
         f"buttons: checkbox {types.get('checkbox', 0)}, radio {types.get('radio', 0)}; "
-        f"states equal {equal['states']}, state equal {equal['state']}, "
-        f"export_value equal {equal['export_value']}"
+        f"states equal {buttons['states']}, state equal {buttons['state']}, "
+        f"export_value equal {buttons['export_value']}"
     )
-    print(f"choice fields: {types.get('combo-box', 0)}; options equal {equal['options']}")
+    print(
+        f"choice fields: {types.get('combo-box', 0) + types.get('list-box', 0)}; "
+        f"options equal {choice['options']}"
+    )
     unknown: dict[str, int] = {}
     unknown_types: dict[str, dict[str, int]] = {}
     for entry in rich.values():
