@@ -84,6 +84,12 @@ may break callers.
   `AnnotationRef` and `FieldRef`, and `Name` with `NameEncoding`. Nothing
   returns them yet.
 
+- `widgets(document, page_index)` and `fields(document)`: the widgets of one
+  page and the terminal fields of a document, every value from QPDF and each
+  widget checked against what PDFium reads in its own dictionary.
+- `Limits.max_items_per_page`: entries of a page's /Annots, checked before
+  any is read.
+- The capability `FORMS`.
 ### Changed
 
 - `EngineInfo` has a new required field `font_policy`: the active font policy,
@@ -174,6 +180,12 @@ may break callers.
   with one and the same engine. That was measured with the reference engine,
   not with PDFium. The section now lists what was measured and what was not.
 
+- A widget's facts are unknown unless PDFium reads a widget at the same
+  index whose own dictionary agrees: rectangle, flags, /T, /AS, /Parent, /V,
+  /DV, /TU, /FT, with the page's annotation counts equal.
+- "Object identity" said the page-to-object mapping held for all 7935
+  widgets in the corpus; the corpus has 7934 (7935 was the first
+  measurement, on 109 files, five of them test files).
 ## 0.0.1
 
 Project skeleton: pinned engines, `engine_info()`, import checks, corpus
