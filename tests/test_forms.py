@@ -417,14 +417,10 @@ def test_b11_pdfiums_ways_that_must_pass(entries, objects):
 def test_b11_t_null_on_a_kid():
     data = forms_file(
         {
-            6: widget(b"/Parent 8 0 R"),
+            6: widget(b"/Parent 8 0 R /T null"),
             8: b"<< /T (f) /FT /Tx /Kids [6 0 R] >>",
         },
         fields=b"[8 0 R]",
-    )
-    data = data.replace(
-        b"<< /Type /Annot /Subtype /Widget /P 4 0 R /Rect [10 10 110 30]  >>",
-        b"<< /Type /Annot /Subtype /Widget /P 4 0 R /Rect [10 10 110 30] /T null >>",
     )
     with pdfacts.open(data) as document:
         (widget_,) = pdfacts.widgets(document, 0)
