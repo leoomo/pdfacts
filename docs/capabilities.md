@@ -21,7 +21,7 @@ on. Three states are used throughout:
 | Page geometry (`PAGE_GEOMETRY`) | proven | `tests/test_pages.py`, including where PDFium draws a rectangle of known position |
 | Object numbers of pages (`OBJECT_NUMBERS`), `UserUnit` (`USER_UNIT`) | proven | `tests/test_pages.py`; on the corpus both engines agree on all 467 pages |
 | Rendering a page or a region (`RENDERING`) | proven | `tests/test_render.py`; the first pages of five corpus files gave the same bytes on macOS arm64, Linux arm64 and Linux x86_64 |
-| Form fields and widgets (`FORMS`) | proven | `tests/test_forms.py`; on the corpus, 7934 widgets in 75 files with the run-time check passing on all of them, and 6960 terminal fields in 75 files |
+| Form fields and widgets (`FORMS`) | proven | `tests/test_forms.py`; on the corpus, 7934 widgets in 75 files with the run-time check passing on all of them, and 6960 terminal fields in 75 files; the M2 gate |
 | Recovering a damaged file (`RECOVERY`) | proven | `tests/test_recovery.py`. Every corpus file with its end damaged six ways (`%%EOF` removed, its last byte cut, cut right after the offset of its last `startxref`, junk, Ctrl-Z or a vertical tab appended) recovered with the geometry of the original. The 32 files with an incremental update, cut 200 bytes into it: 30 refused as ending inside an update; two updates were shorter. Five corpus forms cut at 70 % and 95 %: one of the ten recovered, with the geometry and the form fields of the original; two refused as ending inside an update; seven refused, QPDF finding no `/Kids` in the root of the page tree. All five keep objects in object streams |
 | Everything else | planned | [ROADMAP.md](../ROADMAP.md) |
 
@@ -87,6 +87,29 @@ skipped.
 A gap found after the gate was set: a file whose last whole revision is
 followed by part of a revision opens with the pages of that last whole
 revision, without a warning. #32 closes the gap in M2.
+
+## Milestone M2: gate
+
+Run on 2026-09-30 with `bench/gates/m2.py` on commit `2cb16f131acb9a87e1bf536292bbe6346fac669a`, over the 104
+files of `bench/corpus/manifest.csv`: every widget of every file read twice
+through `pdfacts.widgets` and once by a referee, a reading of the
+dictionaries with pikepdf, independent of pdfacts, and the terminal fields
+through `pdfacts.fields`, compared with the referee's count. The referee was
+written clean-room, from the texts of issues #36, #38, #39 and #40,
+`docs/conventions.md` and `tests/synthetic`, by an author who had not read the
+source of pdfacts. pypdfium2
+5.13.0, PDFium 153.0.7999.0, pikepdf 10.14.0, QPDF 12.4.1.
+
+```
+104 files, 7934 widgets compared, 0 differences
+equal per fact: object 7934, rect 7934, annotation_flags 7934, field_ref 7934, name 7934, partial_names 7934, type 7934, field_flags 7934, label 7934, value 7934, default_value 7934, options 7934, in_form 7934, states 7934, state 7934, export_value 7934, border_colour 7934, background_colour 7934, border 7934
+known object 7934, rect 7934, annotation_flags 7934, field_ref 7934, name 7934, partial_names 7934, type 7934, field_flags 7934, label 6517, value 509, default_value 38, options 5, in_form 7934, states 2840, state 2845, export_value 811, border_colour 3918, background_colour 3943, border 3308; in_form true 7934
+buttons: checkbox 1665, radio 1180; states equal 2845, state equal 2845, export_value equal 2845
+choice fields: 5; options equal 5
+unknown: value invalid-in-file 61 (checkbox 54, pushbutton 7)
+stable: 104 of 104 files
+fields: 6960 in 75 files, equal to the referee's count in 104 of 104 files, 0 differing from a widget's field
+```
 
 ## What the engines provide
 
