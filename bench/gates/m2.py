@@ -34,6 +34,7 @@ from pdfacts import Unknown
 from pdfacts.core import runtime
 from pdfacts.core.engines import engine_info
 from pdfacts.core.geometry import Rect
+from pdfacts.core.strings import Name
 from pdfacts.forms.model import BorderStyle, ChoiceOption, DeviceColour, FieldType
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -81,7 +82,7 @@ def _plain(value):
         return [_plain(one) for one in value]
     if isinstance(value, Rect):
         return [value.x0 + 0.0, value.y0 + 0.0, value.x1 + 0.0, value.y1 + 0.0]
-    if hasattr(value, "raw") and hasattr(value, "text"):
+    if isinstance(value, Name):
         return {"name": value.raw.hex()}
     if isinstance(value, DeviceColour):
         return [one + 0.0 for one in value.components]
@@ -235,6 +236,10 @@ def check_file(data: bytes) -> dict:
                 if isinstance(widget.field, Unknown):
                     continue
                 number, generation = widget.field.ref.object_number, widget.field.ref.generation
+                # A field written directly has no ref to look up; the ref rule
+                # leaves it out.
+                if number is None:
+                    continue
                 if by_ref.get((number, generation)) != widget.field:
                     differing.append([number, generation])
     entry["field_differences"] = differing
@@ -384,7 +389,9 @@ def _print_summary(count: int, rich: dict[str, dict], errors: dict[str, str]) ->
     print("unknown: " + (", ".join(parts) if parts else "none"))
     stable = sum(1 for entry in rich.values() if entry["stable"])
     print(f"stable: {stable} of {count} files")
-    fields_files = sum(1 for entry in rich.values() if entry["fields"])
+    fields_files = sum(
+        1 for entry in rich.values() if isinstance(entry["fields"], int) and entry["fields"] > 0
+    )
     fields_total = sum(
         entry["fields"] for entry in rich.values() if isinstance(entry["fields"], int)
     )
