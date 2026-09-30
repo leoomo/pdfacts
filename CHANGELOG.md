@@ -198,6 +198,12 @@ may break callers.
 - "Paths and images": facts in user space; where a subpath ends; the shape of
   each subpath (line, rectangle, quad, polyline, curves) by documented rules,
   numbers compared within 0.001 plus a millionth of the larger magnitude.
+- "Limits": the count of what PDFium would parse follows its lenient reading
+  (a stream's dictionary where a dictionary is expected, a string `/Subtype`),
+  and a page whose objects QPDF mis-read or the two engines read differently
+  — a stream-object body inside an object stream — is refused with
+  `LimitUncheckedError` where the limit is set, since a few kilobytes could
+  otherwise make PDFium parse what QPDF counted as nothing.
 
 ### Corrected
 
