@@ -86,7 +86,7 @@ skipped.
 
 A gap found after the gate was set: a file whose last whole revision is
 followed by part of a revision opens with the pages of that last whole
-revision, without a warning. #32 closes the gap in M2.
+revision, without a warning. #32 closed the gap in M2 (#43).
 
 ## Milestone M2: gate
 
@@ -94,7 +94,7 @@ Run on 2026-09-30 with `bench/gates/m2.py` on commit `2cb16f131acb9a87e1bf536292
 files of `bench/corpus/manifest.csv`: every widget of every file read twice
 through `pdfacts.widgets` and once by a referee, a reading of the
 dictionaries with pikepdf, independent of pdfacts, and the terminal fields
-through `pdfacts.fields`, compared with the referee's count. The referee was
+read twice through `pdfacts.fields`, compared with the referee's count. The referee was
 written clean-room, from the texts of issues #36, #38, #39 and #40,
 `docs/conventions.md` and `tests/synthetic`, by an author who had not read the
 source of pdfacts. pypdfium2 5.13.0, PDFium 153.0.7999.0, pikepdf 10.14.0,
@@ -117,11 +117,12 @@ fields: 6960 in 75 files, equal to the referee's count in 104 of 104 files, 0 di
 | options and states of radio buttons and check boxes equal the file content | the run above, "buttons": `states`, `state` and `export_value`, the entry of `/Opt` for the widget, equal for 2845 of 2845 radio buttons and check boxes; the options of the 5 choice fields equal as well |
 | object references are stable across repeated reads | the run above, "stable": both reads of `widgets()` and of `fields()` equal in 104 of 104 files; `object` and `field_ref` equal the referee's for 7934 of 7934 widgets |
 
-The code of M2 last changed on `2cb16f1`, the commit the gate ran on; the
-merge of #53, `ee420b1`, adds only the record of that run and has the tree of
-`fa685c5`. `python3 tools/checks.py --all` passed on `fa685c5`: 1592 tests on
-macOS arm64, and 1591 on Linux arm64 and on Linux x86_64, where one test that
-needs macOS is skipped.
+The library under `src/` last changed with #52; the gate's code last changed
+on `2cb16f1`, the commit the gate ran on. The merge of #53, `ee420b1`, has the
+tree of `fa685c5`, which differs from `2cb16f1` only in the commit named in
+the record above. `python3 tools/checks.py --all` passed on `fa685c5`: 1592
+tests on macOS arm64, and 1591 on Linux arm64 and on Linux x86_64, where one
+test that needs macOS is skipped.
 
 ## What the engines provide
 
