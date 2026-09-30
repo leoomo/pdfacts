@@ -90,11 +90,14 @@ revision, without a warning. #32 closes the gap in M2.
 
 ## Milestone M2: gate
 
-Run on 2026-09-30 with `bench/gates/m2.py` on commit `6c4155655a384d520f4f87fc00505cab479818ee`, over the 104
+Run on 2026-09-30 with `bench/gates/m2.py` on commit `df92633619149a4d666da508ee5171d43ec3e2b1`, over the 104
 files of `bench/corpus/manifest.csv`: every widget of every file read twice
 through `pdfacts.widgets` and once by a referee, a reading of the
 dictionaries with pikepdf, independent of pdfacts, and the terminal fields
-through `pdfacts.fields`, compared with the referee's count. pypdfium2
+through `pdfacts.fields`, compared with the referee's count. The referee was
+written clean-room, from the texts of issues #36, #38, #39 and #40,
+`docs/conventions.md` and `tests/synthetic`, by an author who had not read the
+source of pdfacts. pypdfium2
 5.13.0, PDFium 153.0.7999.0, pikepdf 10.14.0, QPDF 12.4.1.
 
 ```
