@@ -98,3 +98,31 @@ class FieldRef:
                 )
             if value < lowest:
                 raise ValueError(f"{name} must be at least {lowest}, not {value}")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class GraphicRef:
+    """Which path or image: its page, what draws it, and its place in the drawing order.
+
+    The drawing order counts the paths and images of a page together: first
+    the page's content, forms drawn where they are drawn, then the normal
+    appearance of each annotation in /Annots order.
+    """
+
+    page_index: int  # from 0
+    annotation: AnnotationRef | None  # None for the page's content
+    drawing_index: int  # from 0
+
+    def __post_init__(self) -> None:
+        for name in ("page_index", "drawing_index"):
+            value = getattr(self, name)
+            if not _is_int(value):
+                raise TypeError(f"{name} must be an int, not {type(value).__name__}")
+            if value < 0:
+                raise ValueError(f"{name} starts at 0, not {value}")
+        if not (self.annotation is None or isinstance(self.annotation, AnnotationRef)):
+            raise TypeError(
+                f"annotation must be an AnnotationRef or None, not {type(self.annotation).__name__}"
+            )
+        if self.annotation is not None and self.annotation.page_index != self.page_index:
+            raise ValueError("the annotation is on another page")
