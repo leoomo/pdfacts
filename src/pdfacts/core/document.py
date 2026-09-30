@@ -518,8 +518,8 @@ def open(
     if revision_part_follows(data):
         raise DamagedFileError(
             detail="part of a revision follows the end of its last whole revision: its last "
-            "startxref may be unreadable or its last update unfinished, and the engines would "
-            "then read the revision before without a word"
+            "startxref may be unreadable or name another section, or its last update may be "
+            "unfinished, and the engines could then read an earlier revision without a word"
         )
 
     runtime.start()
