@@ -89,6 +89,6 @@ __all__ = [
     "fields",
     "open",
     "recover",
-    "widgets",
     "require",
+    "widgets",
 ]

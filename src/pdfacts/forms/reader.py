@@ -1,13 +1,12 @@
 """The forms reader: widgets and fields from QPDF's plain data (issue #39).
 
-Part 1: the computation only — the node table of D7, the facts of one widget
-of D4 and D5, and the fields of D8 — as private functions over the plain data
-of P1. No engine is called, no check is made (part 2), nothing is public.
+The node table of D7, the facts of one widget of D4 and D5, and the fields
+of D8, over the plain data of P1; and the public entry points `widgets()` and
+`fields()`, which run the check of D6 between the two engines.
 """
 
 from __future__ import annotations
 
-import types
 from dataclasses import dataclass
 
 from pdfacts.backends.protocols import AnnotationView, FieldEntry, FieldTree, WidgetEntry, Written
@@ -27,12 +26,12 @@ from pdfacts.forms.model import (
 )
 
 _INVALID = UnknownReason.INVALID
+_UNREADABLE = UnknownReason.UNREADABLE
 # PDFium's FPDF_OBJECT_* codes, named here so the reader imports no engine.
 _OBJECT_UNKNOWN = 0
 _OBJECT_STRING = 3
 _OBJECT_NULLOBJ = 8
 _OBJECT_REFERENCE = 9
-_UNREADABLE = UnknownReason.UNREADABLE
 
 
 def _invalid(detail: str) -> Unknown:
@@ -606,14 +605,12 @@ def widgets(document: Document, page_index: int) -> tuple[Widget, ...] | Unknown
                 widget_entry = widget_entries[k]
                 detail = _check(widget_entry, view)
                 if detail is not None:
-                    out.append(_disagreed(widget_entry, page_index, detail))
+                    out.append(_disagreed(k, page_index, detail))
                 else:
                     out.append(_widget(widget_entry, page_index, nodes))
             elif ours or theirs:
                 side = "QPDF" if ours else "PDFium"
-                out.append(
-                    _disagreed(_bare_entry(k, entry), page_index, f"only {side} sees a widget here")
-                )
+                out.append(_disagreed(k, page_index, f"only {side} sees a widget here"))
         return tuple(out)
 
 
@@ -627,16 +624,6 @@ def fields(document: Document) -> tuple[Field, ...] | Unknown:
         return _fields(access.field_tree())
 
 
-def _bare_entry(index: int, entry):
-    """An entry-like holder for the position of a widget one engine alone sees.
-
-    Both directions need it: the index of a widget only PDFium sees (entry
-    missing or not a dictionary) and of one only QPDF sees (entry without the
-    parts a WidgetEntry has).
-    """
-    return types.SimpleNamespace(annotation=types.SimpleNamespace(index=index))
-
-
 def _check(entry: WidgetEntry, view: AnnotationView) -> str | None:
     """D6: whether the widget's own dictionary agrees with what PDFium reads.
 
@@ -644,39 +631,26 @@ def _check(entry: WidgetEntry, view: AnnotationView) -> str | None:
     otherwise. Also fails when nothing identifies the widget.
     """
     compared = False
-    written = entry.entries.get(b"Rect")
-    if written is not None and written.kind == "array" and len(written.data) == 4:
-        numbers = []
-        usable = True
-        for item in written.data:
-            if item.kind not in ("integer", "real"):
-                usable = False
-                break
-            numbers.append(float(item.data))
-        if usable and view.rect is not None:
-            ours_ordered = (
-                min(numbers[0], numbers[2]),
-                min(numbers[1], numbers[3]),
-                max(numbers[0], numbers[2]),
-                max(numbers[1], numbers[3]),
-            )
-            theirs_ordered = (
-                min(view.rect[0], view.rect[2]),
-                min(view.rect[1], view.rect[3]),
-                max(view.rect[0], view.rect[2]),
-                max(view.rect[1], view.rect[3]),
-            )
-            for ours, theirs in zip(ours_ordered, theirs_ordered, strict=True):
-                if abs(ours - theirs) > 0.001 + 1e-6 * max(abs(ours), abs(theirs)):
-                    return "PDFium reads another rectangle for this annotation"
-            compared = True
+    rect = _rect(entry.entries.get(b"Rect"))
+    if isinstance(rect, Rect) and view.rect is not None:
+        theirs_ordered = (
+            min(view.rect[0], view.rect[2]),
+            min(view.rect[1], view.rect[3]),
+            max(view.rect[0], view.rect[2]),
+            max(view.rect[1], view.rect[3]),
+        )
+        for ours, theirs in zip((rect.x0, rect.y0, rect.x1, rect.y1), theirs_ordered, strict=True):
+            if abs(ours - theirs) > 0.001 + 1e-6 * max(abs(ours), abs(theirs)):
+                return "PDFium reads another rectangle for this annotation"
+        compared = True
     written = entry.entries.get(b"F")
-    flags = None
-    if written is not None and written.kind == "integer" and 0 <= written.data <= 2**32 - 1:
-        flags = written.data
-    if flags is None:
-        flags = 0
-    if flags % 2**32 != view.flags % 2**32:
+    if written is None:
+        ours_flags = 0
+    elif written.kind == "integer":
+        ours_flags = written.data % 2**32
+    else:
+        ours_flags = None
+    if ours_flags is not None and ours_flags != view.flags % 2**32:
         return "PDFium reads other annotation flags"
     detail = _text_agrees(entry.chain[0].entries.get(b"T"), view.t_type, view.t, "/T")
     if detail is not None:
@@ -685,17 +659,14 @@ def _check(entry: WidgetEntry, view: AnnotationView) -> str | None:
         else:
             return detail
     written = entry.entries.get(b"AS")
-    if written is not None and written.kind == "name":
-        if view.as_type in _ABSENT:
-            return "PDFium does not read the /AS of this annotation"
-        if len(written.data) <= 85 and _clean(view.as_text) != _text(written.data):
+    theirs_absent = view.as_type in _ABSENT
+    if (written is None) != theirs_absent:
+        if theirs_absent:
+            return "QPDF reads an /AS that PDFium does not"
+        return "PDFium reads an /AS that QPDF does not"
+    if written is not None and written.kind == "name" and len(written.data) <= 85:
+        if _clean(view.as_text) != _text(written.data):
             return "PDFium reads another /AS for this annotation"
-    elif (
-        written is not None
-        and view.as_type not in _ABSENT
-        and _clean(view.as_text) != _text_of_kind(written)
-    ):
-        return "PDFium reads another /AS for this annotation"
     ours_parent = len(entry.chain) > 1 or entry.parent_invalid or entry.chain_loops
     theirs_parent = view.parent_type not in _ABSENT
     if ours_parent != theirs_parent:
@@ -709,10 +680,7 @@ def _check(entry: WidgetEntry, view: AnnotationView) -> str | None:
                 return f"PDFium reads a {label} that QPDF does not"
         elif theirs[0] in _ABSENT:
             return f"QPDF reads a {label} that PDFium does not"
-        elif written.kind == "string" and theirs[0] in (_OBJECT_STRING, _OBJECT_REFERENCE):
-            if _clean(theirs[1]) != _text(written.data):
-                return f"PDFium reads another {label} for this annotation"
-        elif written.kind == "name" and len(written.data) <= 85 and theirs[0] != _OBJECT_REFERENCE:
+        elif written.kind == "string" or (written.kind == "name" and len(written.data) <= 85):
             if _clean(theirs[1]) != _text(written.data):
                 return f"PDFium reads another {label} for this annotation"
     if not compared:
@@ -728,17 +696,13 @@ def _text_agrees(written, code: int, text: str, label: str) -> str | None:
         return None
     if code in _ABSENT:
         return f"QPDF reads a {label} that PDFium does not"
-    if written.kind == "string" and code in (_OBJECT_STRING, _OBJECT_REFERENCE):
+    if written.kind == "string":
+        if code not in (_OBJECT_STRING, _OBJECT_REFERENCE):
+            return f"PDFium reads another {label} for this annotation"
         if _clean(text) != _text(written.data):
             return f"PDFium reads another {label} for this annotation"
         return "present"
     return None
-
-
-def _text_of_kind(written) -> str:
-    if written.kind == "string":
-        return _clean(decode_text_string(written.data))
-    return _clean(decode_name(written.data).text) if written.kind == "name" else ""
 
 
 def _clean(text: str) -> str:
@@ -752,13 +716,13 @@ def _text(data: bytes) -> str:
     return _clean(decode_text_string(data))
 
 
-def _disagreed(entry, page_index: int, detail: str) -> Widget:
+def _disagreed(annotation_index: int, page_index: int, detail: str) -> Widget:
     """A widget whose every fact is unknown, with the check's detail."""
     unknown = Unknown(UnknownReason.ENGINES_DISAGREE, detail)
     return Widget(
         ref=AnnotationRef(
             page_index=page_index,
-            annotation_index=entry.annotation.index,
+            annotation_index=annotation_index,
             kind="Widget",
             object_number=unknown,
             generation=unknown,

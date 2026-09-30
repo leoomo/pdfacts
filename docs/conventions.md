@@ -177,18 +177,22 @@ from `/AcroForm /Fields`. Every value comes from QPDF: the file content, read
 through its raw objects. PDFium is asked one thing per widget: whether it
 reads a widget at the same index of the page's `/Annots` whose own
 dictionary agrees — rectangle, annotation flags, `/T`, `/AS`, `/Parent`,
-`/V`, `/DV`, `/TU`, `/FT`, and the page's annotation counts are equal. Where
+`/V`, `/DV`, `/TU`, `/FT`, and the page's annotation counts are equal. Only
+the widget's own dictionary is compared: values inherited from a parent
+field, `/Opt` and the appearance streams are not. Where
 the check fails, every fact of the widget is unknown with the reason
 `engines-disagree`, and the detail names the attribute that differs; where a
 widget appears on one side only, the same unknown says so. Where neither the
 rectangle nor the own `/T` could be compared, nothing identifies the widget
 and the check fails. PDFium holds rectangles as 32-bit floats, so corners are
 compared within 0.001 plus a millionth of the larger magnitude, and its flag
-field is signed, so flags are compared modulo 2^32. Texts are compared after
+field is signed, so an integer `/F` is compared as written, modulo 2^32, and
+an absent one as 0. Texts are compared after
 deleting U+0000, U+FFFD and lone surrogates, `/AS` only for names of at most
 85 bytes (PDFium keeps 255 bytes of a name's syntax). The cross-reference
-itself is not checked; P7's object-stream check secures what PDFium cannot
-see, and the cross-reference remains a known gap (see "Object identity").
+itself is not checked; the object-stream check of `open()` secures what
+PDFium cannot see, and the cross-reference remains a known gap (see "Object
+identity").
 
 The terminal field of a widget is its own dictionary when it has `/T` or no
 `/Parent`, else its `/Parent`. Inheritance of `/FT`, `/Ff`, `/V`, `/DV` and
@@ -197,8 +201,10 @@ is not inherited. A widget's field is unknown as a whole when its `/Parent`
 chain loops or holds something that is not a dictionary, when the chain is
 longer than 33 dictionaries, when the terminal field's node in the field tree
 was not followed (the tree is deeper than 32 levels there), or when the link
-does not hold: the parent's `/Kids` must list the widget once, and every
-entry of the `/Kids` must be a widget dictionary. Names are the non-empty
+does not hold: the parent's `/Kids` must list the widget once, every
+entry of the `/Kids` must be a widget dictionary, the widget must not itself
+be a field node of the tree, and the terminal field must be a terminal node
+there. Names are the non-empty
 partial names joined with `.`; a partial name holding `.` makes the name
 unknown. Unknown field flags make the type unknown. A pushbutton has no
 value; the value of a signature field is not read. Where the field tree node

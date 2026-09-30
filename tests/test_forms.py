@@ -386,6 +386,70 @@ def test_b10_unchanged_views_pass(monkeypatch):
     assert widget_.export_value == "A"
 
 
+def b10_file(entries: bytes) -> bytes:
+    """A1 with the /F the case names: the same widget, that /F alone."""
+    return forms_file({6: widget(b"/T (a) /FT /Tx /V (x) /TU (L) " + entries)}, fields=b"[6 0 R]")
+
+
+def test_b10_flags_compared_as_written_modulo_2_32():
+    """PDFium reads 0; the written integer is 276447231 modulo 2^32."""
+    with pdfacts.open(b10_file(b"/F 99999999999999")) as document:
+        (widget_,) = pdfacts.widgets(document, 0)
+    assert isinstance(widget_.field, Unknown)
+    assert "flags" in widget_.field.detail
+
+
+def test_b10_flags_negative_integer_agrees_modulo_2_32():
+    """PDFium reads -1; -1 and 4294967295 are equal modulo 2^32."""
+    with pdfacts.open(b10_file(b"/F -1")) as document:
+        (widget_,) = pdfacts.widgets(document, 0)
+    assert not isinstance(widget_.field, Unknown), widget_.field
+    assert widget_.annotation_flags.reason is UnknownReason.INVALID
+
+
+def test_b10_flags_real_not_compared():
+    """PDFium reads 4; a real /F is not one of the kinds D6 compares."""
+    with pdfacts.open(b10_file(b"/F 4.7")) as document:
+        (widget_,) = pdfacts.widgets(document, 0)
+    assert not isinstance(widget_.field, Unknown), widget_.field
+    assert widget_.annotation_flags.reason is UnknownReason.INVALID
+
+
+def test_b10_as_that_only_pdfium_reads(monkeypatch):
+    with pdfacts.open(a1_file()) as document:
+        document.pages[0]
+        with_views(
+            monkeypatch,
+            document,
+            0,
+            lambda view: dataclasses.replace(view, as_type=3, as_text="On"),
+        )
+        (widget_,) = pdfacts.widgets(document, 0)
+    assert isinstance(widget_.field, Unknown)
+    assert "/AS" in widget_.field.detail
+
+
+def test_b10_v_compared_whatever_pdfiums_type(monkeypatch):
+    def other_type(view):
+        return dataclasses.replace(view, values={**view.values, b"V": (4, "y")})
+
+    with pdfacts.open(a1_file()) as document:
+        document.pages[0]
+        with_views(monkeypatch, document, 0, other_type)
+        (widget_,) = pdfacts.widgets(document, 0)
+    assert isinstance(widget_.field, Unknown)
+    assert "/V" in widget_.field.detail
+
+
+def test_b10_t_of_pdfium_not_a_string_or_reference(monkeypatch):
+    with pdfacts.open(a1_file()) as document:
+        document.pages[0]
+        with_views(monkeypatch, document, 0, lambda view: dataclasses.replace(view, t_type=4))
+        (widget_,) = pdfacts.widgets(document, 0)
+    assert isinstance(widget_.field, Unknown)
+    assert "/T" in widget_.field.detail
+
+
 @pytest.mark.parametrize(
     ("entries", "objects"),
     [
