@@ -962,19 +962,18 @@ def test_an_appearance_written_into_an_object_stream_leaves_the_page_unchecked()
     )
 
 
-def test_an_ap_written_as_a_stream_is_no_appearance_to_either_engine():
-    # Measured: PDFium draws nothing for an /AP that is a stream; the count is 0.
+def test_an_ap_written_as_a_stream_is_read_by_its_dictionary():
+    # Measured: PDFium takes the stream's dictionary at /AP and parses the
+    # appearance it names (2026-10-01; the review of #62 measured the same).
     data = page_file(
         b"",
         b"<< >>",
         {
-            10: form(b"/Fx Do", b"<< /XObject << /Fx 11 0 R >>"),
+            10: form(b"/Fx Do", b"<< /XObject << /Fx 11 0 R >> >>"),
             11: LINE,
             60: b"<< /Type /Annot /Subtype /Square /Rect [0 0 100 100] /AP 33 0 R >>",
             33: stream(b"", b"/N 10 0 R"),
         },
         annots=b"[60 0 R]",
     )
-    with pdfacts.open(data, limits=Limits(max_forms_per_page=5)) as document:
-        assert document._qpdf.parsed_streams(0) == 0
-        document.pages[0]
+    counted(data, 2)

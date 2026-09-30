@@ -200,10 +200,11 @@ may break callers.
   numbers compared within 0.001 plus a millionth of the larger magnitude.
 - "Limits": the count of what PDFium would parse follows its lenient reading
   (a stream's dictionary where a dictionary is expected, a string `/Subtype`),
-  and a page whose objects QPDF mis-read or the two engines read differently
-  — a stream-object body inside an object stream — is refused with
-  `LimitUncheckedError` where the limit is set, since a few kilobytes could
-  otherwise make PDFium parse what QPDF counted as nothing.
+  and a page where QPDF warns that it mis-read an object — any warning naming
+  an object and its offset — or where the two engines read an object
+  differently, a stream-object body inside an object stream among them, is
+  refused with `LimitUncheckedError` where the limit is set, since a few
+  kilobytes could otherwise make PDFium parse what QPDF counted as nothing.
 
 ### Corrected
 
