@@ -242,6 +242,129 @@ def test_a_linearized_file_with_two_objects_before_its_first_page_table_is_damag
     assert "last whole revision" in raised.value.detail
 
 
+def tables(case: cases.Updated) -> tuple[int, int]:
+    """The offsets of the cross-reference tables of `case.source` and of the update."""
+    (first,) = re.findall(rb"startxref\n([0-9]+)\n", case.source.data)
+    last = re.findall(rb"startxref\n([0-9]+)\n", case.data)[-1]
+    return int(first), int(last)
+
+
+def startxref(offset: int) -> bytes:
+    return b"startxref\n%d\n%%%%EOF\n" % offset
+
+
+STALE: dict[str, Callable[[int, int], bytes]] = {
+    "after the update": lambda first, last: startxref(first),
+    "in a comment": lambda first, last: b"%% startxref %d\n%%%%EOF\n" % first,
+    "in a comment after a startxref without an offset": (
+        lambda first, last: b"startxref\n%% startxref %d\n%%%%EOF\n" % first
+    ),
+    "after one naming the update": lambda first, last: startxref(last) + startxref(first),
+    "before one without an offset": lambda first, last: startxref(first) + b"startxref\n%%EOF\n",
+    "before one of 21 digits": lambda first, last: startxref(first) + startxref(10**20),
+    "with a sign and thirty leading zeros": (
+        lambda first, last: b"startxref\n+%s%d\n%%%%EOF\n" % (b"0" * 30, first)
+    ),
+}
+
+
+def opens_as_the_update(data: bytes) -> None:
+    with pdfacts.open(data) as document:
+        box = document.pages[0].geometry.visible_box
+    assert (box.x0, box.y0, box.x1, box.y1) == cases.UPDATED_MEDIA_BOX
+
+
+@pytest.mark.parametrize("name", list(STALE))
+def test_a_startxref_that_names_an_earlier_table_is_damaged(name):
+    first, last = tables(cases.incremental_update())
+    with pytest.raises(DamagedFileError) as raised:
+        pdfacts.open(cases.incremental_update().data + STALE[name](first, last))
+    assert "last whole revision" in raised.value.detail
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [
+        pytest.param(lambda first, last: startxref(last), id="the last table again"),
+        pytest.param(lambda first, last: startxref(last - 1), id="the same, one byte early"),
+        pytest.param(
+            lambda first, last: startxref(first) + startxref(last),
+            id="the first table, then the last",
+        ),
+        pytest.param(
+            lambda first, last: b"%% startxref %d\n%%%%EOF\n" % first + startxref(last),
+            id="the first table in a comment, then the last",
+        ),
+    ],
+)
+def test_a_startxref_that_names_the_last_table_again_still_opens(tail):
+    first, last = tables(cases.incremental_update())
+    opens_as_the_update(cases.incremental_update().data + tail(first, last))
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [
+        pytest.param(lambda first, last: b"startxref\n%%EOF\n", id="without an offset"),
+        pytest.param(
+            lambda first, last: b"startxref%d\n%%%%EOF\n" % first, id="glued to its offset"
+        ),
+    ],
+)
+def test_a_startxref_the_engines_pass_over_after_the_last_revision_still_opens(tail):
+    first, last = tables(cases.incremental_update())
+    opens_as_the_update(cases.incremental_update().data + tail(first, last))
+
+
+@pytest.mark.parametrize(
+    "offset",
+    [0, None, 2**63 - 64, 2**63, 10**20 - 1],
+    ids=["the header", "past the end", "2**63 - 64", "2**63", "10**20 - 1"],
+)
+def test_a_startxref_that_names_no_section_is_left_to_the_engines(offset):
+    case = cases.incremental_update()
+    at = 2 * len(case.data) if offset is None else offset
+    with pytest.raises(DamagedFileError) as raised:
+        pdfacts.open(case.data + startxref(at))
+    assert "last whole revision" not in raised.value.detail
+
+
+def test_a_startxref_that_names_an_earlier_table_is_refused_before_any_engine(monkeypatch):
+    def must_not_run(*args, **kwargs):
+        raise AssertionError("an engine was called")
+
+    monkeypatch.setattr(pdfium.PdfiumDocument, "open", must_not_run)
+    monkeypatch.setattr(runtime, "start", must_not_run)
+    first, last = tables(cases.incremental_update())
+    with pytest.raises(DamagedFileError) as raised:
+        pdfacts.open(cases.incremental_update().data + startxref(first))
+    assert "last whole revision" in raised.value.detail
+
+
+def test_one_revision_with_its_startxref_repeated_still_opens():
+    (t,) = re.findall(rb"startxref\n([0-9]+)\n", one_page())
+    assert pdfacts.open(one_page() + startxref(int(t))).page_count == 1
+
+
+def test_a_stale_startxref_after_bytes_before_the_header_is_damaged():
+    first, last = tables(cases.incremental_update())
+    with pytest.raises(DamagedFileError) as raised:
+        pdfacts.open(b"x" * 100 + cases.incremental_update().data + startxref(first))
+    assert "last whole revision" in raised.value.detail
+
+
+def test_the_last_table_named_again_after_bytes_before_the_header_still_opens():
+    first, last = tables(cases.incremental_update())
+    opens_as_the_update(b"x" * 100 + cases.incremental_update().data + startxref(last))
+
+
+def test_a_startxref_that_names_an_object_is_damaged():
+    case = cases.incremental_update()
+    with pytest.raises(DamagedFileError) as raised:
+        pdfacts.open(case.data + startxref(case.data.index(b"1 0 obj")))
+    assert "last whole revision" in raised.value.detail
+
+
 @pytest.mark.parametrize("name", list(cases.REBUILT))
 def test_a_file_pdfium_reads_only_by_rebuilding_its_table_is_damaged(name):
     with pytest.raises(DamagedFileError) as raised:
