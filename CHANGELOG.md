@@ -129,9 +129,6 @@ may break callers.
   too, names another section than that revision's: the engines would follow
   it, and read an earlier revision without a word where it names one's table
   (#44).
-- "Limits" gains a check before PDFium loads a page: the content streams it
-  would parse, counted by QPDF, since a page of a few kilobytes can make that
-  one engine call take gigabytes or not return.
 - A page counts as damaged when it is read if PDFium's visible box for it is
   not finite or has no area, or the boxes the file writes leave no area (a
   flat crop box, or a media box that is flat or that, intersected with the
@@ -191,6 +188,9 @@ may break callers.
 - A widget's facts are unknown unless PDFium reads a widget at the same
   index whose own dictionary agrees: rectangle, flags, /T, /AS, /Parent, /V,
   /DV, /TU, /FT, with the page's annotation counts equal.
+- "Limits" gains a check before PDFium loads a page: the content streams it
+  would parse, counted by QPDF, since a page of a few kilobytes can make that
+  one engine call take gigabytes or not return.
 
 ### Corrected
 
