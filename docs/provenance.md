@@ -41,6 +41,7 @@ This document is an engineering rule, not legal advice.
 | 2026-09-28 | `backends/pdfium.py` (open) | pypdfium2 source: `_helpers/document.py`, `_open_pdf` and `PdfDocument` (Apache-2.0 or BSD-3-Clause); PDFium `public/fpdfview.h` | the load call and how the password is passed; that a document without pages is refused with its handle left open; the error codes |
 | 2026-09-28 | `backends/qpdf.py` (recovery) | pikepdf source: `_methods.py`, `Pdf.save` (MPL-2.0) | the options of `save`: `encryption`, `object_stream_mode`, `linearize`, `deterministic_id`; that `save` writes through `_save` and adds a warning about widgets the form does not reach; `_cpphelpers.py`, `update_xmp_pdfversion`: that `fix_metadata_version` writes the XMP anew |
 | 2026-09-28 | `backends/pdfium.py` (rendering) | pypdfium2 source: `_helpers/page.py`, `PdfPage.render` and `_parse_renderopts`; `_helpers/bitmap.py`, `PdfBitmap.new_native`, `new_foreign` and `_get_buffer`; `internal/bases.py`, `AutoCloseable` (Apache-2.0 or BSD-3-Clause) | how the size of the bitmap follows from the page size, the scale and the crop; that a crop leaving less than one pixel raises ValueError before a bitmap is made; which flags grey and the reversed byte order set; that the default bitmap is made with `needs_free=False` and never destroyed in PDFium, that `new_foreign` is destroyed on close, and what `force_packed` does |
+| 2026-10-01 | `text/layout.py` | MuPDF's structured text device (`stext-device.c`, AGPL), as recalled in the measurements of 2026-09-27; nothing copied | measuring the pen's movement along and across the baseline in units of the font size; the thresholds 0.15 for a space and 0.8 for a new line |
 
 ## Knowledge gathered before the first implementation
 
@@ -52,4 +53,3 @@ Recorded so that later modules can cite it.
 | Page geometry under rotation, crop box and UserUnit | constructed files compared with rendering |
 | Thresholds for joining glyphs into words and lines | recalled from MuPDF's structured text code; to be pinned by constructed cases before use |
 | PDFium text interface behaviour: omitted spaces, line-end hyphen marker, ligature expansion, angle sign | measurement on the corpus |
-| 2026-10-01 | `text/layout.py` | MuPDF's structured text device (`stext-device.c`, AGPL), as recalled in the measurements of 2026-09-27; nothing copied | measuring the pen's movement along and across the baseline in units of the font size; the thresholds 0.15 for a space and 0.8 for a new line |

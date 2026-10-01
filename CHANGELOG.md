@@ -229,6 +229,7 @@ may break callers.
   is and its values; the rule that makes words and lines, a gap forward of
   0.15 of the glyph's size ending a word and a step of 0.8 either way
   beginning a line; what is passed over; what is known to go wrong.
+
 ### Corrected
 
 - `max_forms_per_page` (#56) counted too little where a file writes in the
