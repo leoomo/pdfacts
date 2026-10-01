@@ -50,6 +50,7 @@ from pdfacts.graphics.paths import (
     ShapeKind,
     Subpath,
 )
+from pdfacts.graphics.reader import images, paths
 
 __version__ = "0.0.1"
 
@@ -114,7 +115,9 @@ __all__ = [
     "configure",
     "engine_info",
     "fields",
+    "images",
     "open",
+    "paths",
     "recover",
     "require",
     "widgets",
