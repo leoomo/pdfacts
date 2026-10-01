@@ -12,7 +12,7 @@ with form fields, later for documents without.
 | 1 | M0 | project skeleton, pinned engines, corpus manifest | done 2026-09-27 |
 | 2 | M1 | documents, geometry, determinism, test and gate tooling | done 2026-09-29 |
 | 3 | M2 | forms: fields and widgets | done 2026-09-30 |
-| 4 | M3 | paths and images | planned |
+| 4 | M3 | paths and images | done 2026-10-01 |
 | 5 | M4a | text, first level | planned |
 | 6 | M5a | inspection, repair and decryption | planned |
 | 7 | M6 | the first consumer switches for documents with form fields; version 1.0 | planned |
@@ -121,6 +121,8 @@ Gate
 - the rules that turn path segments into lines, rectangles, quads and curves
   are documented and covered by constructed cases
 - constructed cases with nested transforms and repeated images are correct
+
+Recorded results are in [docs/capabilities.md](docs/capabilities.md).
 
 ## M4a Text, first level
 

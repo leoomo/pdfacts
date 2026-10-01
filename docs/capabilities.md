@@ -22,6 +22,98 @@ on. Three states are used throughout:
 | Object numbers of pages (`OBJECT_NUMBERS`), `UserUnit` (`USER_UNIT`) | proven | `tests/test_pages.py`; on the corpus both engines agree on all 467 pages |
 | Rendering a page or a region (`RENDERING`) | proven | `tests/test_render.py`; the first pages of five corpus files gave the same bytes on macOS arm64, Linux arm64 and Linux x86_64 |
 | Form fields and widgets (`FORMS`) | proven | `tests/test_forms.py`; on the corpus, 7934 widgets in 75 files with the run-time check passing on all of them, and 6960 terminal fields in 75 files; the M2 gate |
+| Paths and images (`GRAPHICS`) | proven | `tests/test_graphics_reader.py`, `tests/test_graphics_shapes.py`, `tests/test_graphics_cases.py`; on the corpus, 63472 paths and 1884 images on 467 pages, their numbers equal to PDFium's own for every page's content and every annotation's appearance; the M3 gate |
+
+## Milestone M3: gate
+
+Run on 2026-10-01 with `bench/gates/m3.py` on commit
+`24caf1e784e0221f709a55a17939a9aaf82eefb8`, on macOS arm64, over the 104 files of
+`bench/corpus/manifest.csv`: the paths and images of every page read twice
+through `pdfacts.paths` and `pdfacts.images`, each time from the file opened
+anew, and their numbers compared, for each page's content and each
+annotation's appearance, with PDFium's own count of path and image objects,
+forms expanded, read with pypdfium2 apart from pdfacts. pypdfium2 5.13.0,
+PDFium 153.0.7999.0, pikepdf 10.14.0, QPDF 12.4.1.
+
+```
+104 files, 467 pages, 2960 annotations with facts
+page: paths 58665, images 1884, line 12965, rectangle 43204, quad 119, polyline 1461, curves 8401
+appearance: paths 4807, images 0, line 47, rectangle 2988, quad 0, polyline 800, curves 1019
+unknown: appearance line_width unreadable 99, page fill_colour unreadable 638, page line_width unreadable 4, page stroke_colour unreadable 11
+stable: 104 of 104 files
+PDFium's own count: equal in 104 of 104 files; not compared: 0 pages, 0 annotations
+```
+
+The annotations with facts are those whose appearance holds a path or an
+image; PDFium gives objects for 2972 annotations, 12 of them text alone. The
+unknown values are those that "Paths and images" in `docs/conventions.md`
+names, as their details say: the 649 colours, "a pattern colour or colour space
+is set here, and PDFium reports a colour of its own", and the 103 line widths,
+"the transform scales the line width unevenly".
+
+| Part of the gate in `ROADMAP.md` | Shown by |
+| --- | --- |
+| the rules that turn path segments into lines, rectangles, quads and curves are documented | `docs/conventions.md`, "Paths and images": the five shapes, the first rule that applies, the four corners, and when two numbers are one |
+| and covered by constructed cases | `tests/test_graphics_shapes.py`, 34 tests of the rules on segments as given, the tolerance on both sides of it and growing with the numbers among them. `tests/test_graphics_cases.py`, `test_what_every_graphics_case_draws` over the 15 shape cases of `cases.GRAPHICS`, each drawn by a content stream and read through PDFium: `re`, `m l l l h` and `m l l l l h`, each a rectangle; a line; a rectangle turned by 90 degrees, still a rectangle, and a sheared one, a quad; a trapezoid; a corner 2^-11 off, still a rectangle, and 2^-6 off, a quad; an L and an open polyline; curves drawn with `c`, `v` and `y`; two rectangles in one path |
+| constructed cases with nested transforms are correct | the same test over four cases: forms nested two deep, each with its `/Matrix` and a `cm` before it; one form drawn twice, the state restored in between; an appearance that draws a form, placed on its `/Rect`; an appearance turned by its `/Matrix` and placed unevenly. The points are the construction's, put into user space by hand |
+| constructed cases with repeated images are correct | the same test over five cases: one image placed three times, scaled, turned and mirrored; one image in a form drawn twice; an inline image; an image in an appearance; paths and images in one drawing order, an appearance's last |
+| checked apart from pdfacts | `test_the_ink_lies_where_the_case_says`: each of the 19 cases filled in black, rendered by PDFium, has its ink in the box of the points the case gives, within a pixel |
+
+The tests ran with `python3 tools/checks.py --all` on `24caf1e`, the commit
+the gate ran on: 2053 tests on macOS arm64, and 2052 on Linux arm64 and on
+Linux x86_64, where one test that needs macOS is skipped. The commit that
+records the run changes documents only.
+
+## What the engines provide" (the block is fenced with
+four backticks, since it holds a fence of three):
+````markdown
+## Milestone M3: gate
+Run on <DATE> with `bench/gates/m3.py` on commit
+`<SHA>`, on macOS arm64, over the 104 files of
+`bench/corpus/manifest.csv`: the paths and images of every page read twice
+through `pdfacts.paths` and `pdfacts.images`, each time from the file opened
+anew, and their numbers compared, for each page's content and each
+annotation's appearance, with PDFium's own count of path and image objects,
+forms expanded, read with pypdfium2 apart from pdfacts. pypdfium2 5.13.0,
+PDFium 153.0.7999.0, pikepdf 10.14.0, QPDF 12.4.1.
+```
+104 files, 467 pages, 2960 annotations with facts
+page: paths 58665, images 1884, line 12965, rectangle 43204, quad 119, polyline 1461, curves 8401
+appearance: paths 4807, images 0, line 47, rectangle 2988, quad 0, polyline 800, curves 1019
+unknown: appearance line_width unreadable 99, page fill_colour unreadable 638, page line_width unreadable 4, page stroke_colour unreadable 11
+stable: 104 of 104 files
+PDFium's own count: equal in 104 of 104 files; not compared: 0 pages, 0 annotations
+```
+The annotations with facts are those whose appearance holds a path or an
+image; PDFium gives objects for 2972 annotations, 12 of them text alone. The
+unknown values are those that "Paths and images" in `docs/conventions.md`
+names, as their details say: the 649 colours, "a pattern colour or colour space
+is set here, and PDFium reports a colour of its own", and the 103 line widths,
+"the transform scales the line width unevenly".
+| Part of the gate in `ROADMAP.md` | Shown by |
+| --- | --- |
+| the rules that turn path segments into lines, rectangles, quads and curves are documented | `docs/conventions.md`, "Paths and images": the five shapes, the first rule that applies, the four corners, and when two numbers are one |
+| and covered by constructed cases | `tests/test_graphics_shapes.py`, 34 tests of the rules on segments as given, the tolerance on both sides of it and growing with the numbers among them. `tests/test_graphics_cases.py`, `test_what_every_graphics_case_draws` over the 15 shape cases of `cases.GRAPHICS`, each drawn by a content stream and read through PDFium: `re`, `m l l l h` and `m l l l l h`, each a rectangle; a line; a rectangle turned by 90 degrees, still a rectangle, and a sheared one, a quad; a trapezoid; a corner 2^-11 off, still a rectangle, and 2^-6 off, a quad; an L and an open polyline; curves drawn with `c`, `v` and `y`; two rectangles in one path |
+| constructed cases with nested transforms are correct | the same test over four cases: forms nested two deep, each with its `/Matrix` and a `cm` before it; one form drawn twice, the state restored in between; an appearance that draws a form, placed on its `/Rect`; an appearance turned by its `/Matrix` and placed unevenly. The points are the construction's, put into user space by hand |
+| constructed cases with repeated images are correct | the same test over five cases: one image placed three times, scaled, turned and mirrored; one image in a form drawn twice; an inline image; an image in an appearance; paths and images in one drawing order, an appearance's last |
+| checked apart from pdfacts | `test_the_ink_lies_where_the_case_says`: each of the 19 cases filled in black, rendered by PDFium, has its ink in the box of the points the case gives, within a pixel |
+The tests ran with `python3 tools/checks.py --all` on `<SHORT>`, the commit
+the gate ran on: 2053 tests on macOS arm64, and 2052 on Linux arm64 and on
+Linux x86_64, where one test that needs macOS is skipped. The commit that
+records the run changes documents only.
+````
+Where the text has `<SHA>`, write the 40 digits of the first commit;
+`<SHORT>`, its first seven; `<DATE>`, the date of the receipt's
+`environment.date` (UTC), as `YYYY-MM-DD`. The six lines in the block are
+those step 6 prints, word for word.
+6. `ROADMAP.md`:
+- The row `| 4 | M3 | paths and images | planned |` becomes
+`| 4 | M3 | paths and images | done <DATE> |`.
+- Under "## M3 Paths and images", after the last line of "Gate", one blank
+line and then
+`Recorded results are in [docs/capabilities.md](docs/capabilities.md).`,
+as under M1 and M2.
+7. `README.md`, the status note at the top becomes:
 | Recovering a damaged file (`RECOVERY`) | proven | `tests/test_recovery.py`. Every corpus file with its end damaged six ways (`%%EOF` removed, its last byte cut, cut right after the offset of its last `startxref`, junk, Ctrl-Z or a vertical tab appended) recovered with the geometry of the original. The 32 files with an incremental update, cut 200 bytes into it: 30 refused as ending inside an update; two updates were shorter. Five corpus forms cut at 70 % and 95 %: one of the ten recovered, with the geometry and the form fields of the original; two refused as ending inside an update; seven refused, QPDF finding no `/Kids` in the root of the page tree. All five keep objects in object streams |
 | Everything else | planned | [ROADMAP.md](../ROADMAP.md) |
 
