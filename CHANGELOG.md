@@ -220,7 +220,6 @@ may break callers.
   cannot back the page (its values unknown, the engines seeing the page
   differently or counting different annotations, `/Annots` no array), the
   page's paths and images are unknown as a whole.
-
 - "Glyph boxes": the advance box takes, along the writing direction, the
   extent of PDFium's loose box, since PDFium gives no advance width that can
   be relied on; across, the font's ascent and descent as before (decision of
