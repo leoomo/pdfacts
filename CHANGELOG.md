@@ -101,6 +101,8 @@ may break callers.
   annotation, in drawing order, each appearance checked against the one QPDF
   selects and placed on the page as the file says; values that cannot be
   determined are unknown with the reason. The capability `GRAPHICS`.
+- Fact types for text: `Glyph`, `Word`, `Line` and the reference `GlyphRef`.
+  Nothing returns them yet.
 
 ### Changed
 
@@ -219,6 +221,14 @@ may break callers.
   differently or counting different annotations, `/Annots` no array), the
   page's paths and images are unknown as a whole.
 
+- "Glyph boxes": the advance box takes, along the writing direction, the
+  extent of PDFium's loose box, since PDFium gives no advance width that can
+  be relied on; across, the font's ascent and descent as before (decision of
+  the maintainer, 2026-10-01).
+- "Glyphs, words and lines": a page's text in content order; what a glyph
+  is and its values; the rule that makes words and lines, a gap forward of
+  0.15 of the glyph's size ending a word and a step of 0.8 either way
+  beginning a line; what is passed over; what is known to go wrong.
 ### Corrected
 
 - `max_forms_per_page` (#56) counted too little where a file writes in the

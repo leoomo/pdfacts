@@ -52,3 +52,4 @@ Recorded so that later modules can cite it.
 | Page geometry under rotation, crop box and UserUnit | constructed files compared with rendering |
 | Thresholds for joining glyphs into words and lines | recalled from MuPDF's structured text code; to be pinned by constructed cases before use |
 | PDFium text interface behaviour: omitted spaces, line-end hyphen marker, ligature expansion, angle sign | measurement on the corpus |
+| 2026-10-01 | `text/layout.py` | MuPDF's structured text device (`stext-device.c`, AGPL), as recalled in the measurements of 2026-09-27; nothing copied | measuring the pen's movement along and across the baseline in units of the font size; the thresholds 0.15 for a space and 0.8 for a new line |
