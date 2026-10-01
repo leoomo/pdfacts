@@ -101,8 +101,13 @@ may break callers.
   annotation, in drawing order, each appearance checked against the one QPDF
   selects and placed on the page as the file says; values that cannot be
   determined are unknown with the reason. The capability `GRAPHICS`.
-- Fact types for text: `Glyph`, `Word`, `Line` and the reference `GlyphRef`.
-  Nothing returns them yet.
+- Fact types for text: `Glyph`, `Word`, `Line` and the reference `GlyphRef`;
+  `glyphs()`, `words()` and `lines()` return them.
+- `glyphs(document, page_index)`, `words(document, page_index)` and
+  `lines(document, page_index)`: a page's text in content order, read
+  through PDFium and made into glyphs, words and lines by the rules of
+  "Glyphs, words and lines"; unknown as a whole where a form lies deeper
+  than PDFium reads forms. The capability `TEXT`.
 
 ### Changed
 
@@ -228,6 +233,10 @@ may break callers.
   is and its values; the rule that makes words and lines, a gap forward of
   0.15 of the glyph's size ending a word and a step of 0.8 either way
   beginning a line; what is passed over; what is known to go wrong.
+- "Glyphs, words and lines": `glyphs()`, `words()` and `lines()`; a page's
+  text unknown where a form lies deeper than PDFium reads forms; the
+  characters count against `max_items_per_page`; the text drawn again that
+  PDFium leaves out of its text page, the first drawing kept.
 
 ### Corrected
 
