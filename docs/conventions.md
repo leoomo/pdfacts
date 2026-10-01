@@ -72,6 +72,7 @@ the width `/W` gives; the step from one origin to the next holds the
 character and word spacing and the adjustments of `TJ`. Of 988690 upright
 characters of the corpus that are no space, 79076 have a loose box that ends
 at their ink.
+
 ## Word and line boxes
 
 The union of the advance boxes of the glyphs that are not white space. Leading
