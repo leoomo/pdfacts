@@ -676,3 +676,389 @@ MISSING_PAGES: dict[str, Callable[[], NoPages]] = {
     "page with /Kids null": page_with_kids_null,
     "missing kid in the middle": missing_kid_in_the_middle,
 }
+
+
+# --- What a page draws (the M3 gate) ---------------------------------------------
+#
+# Each case is a page of 400 x 300 and what it draws, in drawing order. The
+# points are the construction's, put into user space by hand: each case says,
+# in its docstring or in the comment above it, which matrices it writes and
+# where they take a point. A case that writes none draws in user space as its
+# content is written.
+
+XY = tuple[float, float]
+
+DRAWN_FORM = b"/Type /XObject /Subtype /Form /BBox [0 0 400 300]"
+# Three by two pixels of black: placed, it fills its corners in black.
+BLACK_IMAGE = stream(
+    bytes(6),
+    b"/Type /XObject /Subtype /Image /Width 3 /Height 2 /ColorSpace /DeviceGray"
+    b" /BitsPerComponent 8",
+)
+
+
+@dataclass(frozen=True)
+class DrawnSubpath:
+    """A subpath as built: its shape under the rules of docs/conventions.md, and
+    its points in user space, the move's and then each segment's in order."""
+
+    shape: str
+    points: tuple[XY, ...]
+    closed: bool = False
+
+
+@dataclass(frozen=True)
+class DrawnPath:
+    subpaths: tuple[DrawnSubpath, ...]
+    # The index in /Annots of the annotation whose appearance draws it; None
+    # where the page's content draws it.
+    annotation: int | None = None
+
+
+@dataclass(frozen=True)
+class DrawnImage:
+    """A placement of the image of 3 x 2 pixels, DeviceGray, 8 bits."""
+
+    # Where the image's (0, 0), (1, 0), (1, 1) and (0, 1) go, in user space.
+    corners: tuple[XY, XY, XY, XY]
+    annotation: int | None = None
+
+
+@dataclass(frozen=True)
+class Drawing:
+    """A one-page file and what its page draws, in drawing order."""
+
+    data: bytes
+    drawn: tuple[DrawnPath | DrawnImage, ...]
+    # Everything is filled in black: the dark pixels of a rendering lie in
+    # the box that holds every point drawn.
+    inked: bool = True
+
+
+def _drawing_file(
+    content: bytes,
+    *,
+    resources: bytes = b"",
+    annots: bytes = b"",
+    objects: dict[int, bytes] | None = None,
+) -> bytes:
+    page = b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Contents 3 0 R"
+    if resources:
+        page += b" /Resources " + resources
+    if annots:
+        page += b" /Annots " + annots
+    return build(
+        {
+            1: b"<< /Type /Catalog /Pages 2 0 R >>",
+            2: b"<< /Type /Pages /Kids [4 0 R] /Count 1 >>",
+            3: stream(content),
+            4: page + b" >>",
+            **(objects or {}),
+        },
+        1,
+    )
+
+
+def _one(shape: str, *points: XY, closed: bool = False) -> DrawnPath:
+    return DrawnPath((DrawnSubpath(shape, points, closed),))
+
+
+# The rectangle (10, 20) to (110, 70), drawn from (10, 20) anticlockwise.
+_RECTANGLE = _one("rectangle", (10, 20), (110, 20), (110, 70), (10, 70), (10, 20), closed=True)
+
+
+def _shape(content: bytes, *drawn: DrawnPath, inked: bool = True) -> Drawing:
+    return Drawing(_drawing_file(content), drawn, inked)
+
+
+def _images_on_page(content: bytes, *corners: tuple[XY, XY, XY, XY]) -> Drawing:
+    data = _drawing_file(
+        content, resources=b"<< /XObject << /Im 5 0 R >> >>", objects={5: BLACK_IMAGE}
+    )
+    return Drawing(data, tuple(DrawnImage(c) for c in corners))
+
+
+def forms_nested_two_deep() -> Drawing:
+    """The page doubles and moves by (100, 50); form X turns by 90 degrees,
+    (x, y) to (-y, x), and moves its content by (10, 0); form Y moves by
+    (0, 5). (0, 0) of Y: (0, 5), (10, 5), (-5, 10), (90, 70)."""
+    data = _drawing_file(
+        b"2 0 0 2 100 50 cm /X Do",
+        resources=b"<< /XObject << /X 5 0 R >> >>",
+        objects={
+            5: stream(
+                b"1 0 0 1 10 0 cm /Y Do",
+                b"/Type /XObject /Subtype /Form /BBox [-100 -100 100 100]"
+                b" /Matrix [0 1 -1 0 0 0] /Resources << /XObject << /Y 6 0 R >> >>",
+            ),
+            6: stream(
+                b"0 0 20 10 re f",
+                b"/Type /XObject /Subtype /Form /BBox [0 0 20 10] /Matrix [1 0 0 1 0 5]",
+            ),
+        },
+    )
+    drawn = _one("rectangle", (90, 70), (90, 110), (70, 110), (70, 70), (90, 70), closed=True)
+    return Drawing(data, (drawn,))
+
+
+def one_form_drawn_twice() -> Drawing:
+    """Form X moves by (10, 10). Drawn once under a doubling: (0, 0) of the
+    form at (20, 20); then, the state restored, without it: at (10, 10)."""
+    data = _drawing_file(
+        b"q 2 0 0 2 0 0 cm /X Do Q /X Do",
+        resources=b"<< /XObject << /X 5 0 R >> >>",
+        objects={5: stream(b"0 0 30 20 re f", DRAWN_FORM + b" /Matrix [1 0 0 1 10 10]")},
+    )
+    doubled = _one("rectangle", (20, 20), (80, 20), (80, 60), (20, 60), (20, 20), closed=True)
+    plain = _one("rectangle", (10, 10), (40, 10), (40, 30), (10, 30), (10, 10), closed=True)
+    return Drawing(data, (doubled, plain))
+
+
+def _annotated(appearance: bytes, appearance_entries: bytes, objects=None) -> bytes:
+    """A Square annotation on /Rect [100 100 200 150] whose normal appearance,
+    object 7, has /BBox [0 0 50 25]: placed, it doubles and moves by (100, 100)
+    unless its /Matrix turns it."""
+    return _drawing_file(
+        b"",
+        annots=b"[6 0 R]",
+        objects={
+            6: b"<< /Type /Annot /Subtype /Square /Rect [100 100 200 150] /F 4"
+            b" /AP << /N 7 0 R >> >>",
+            7: stream(
+                appearance,
+                b"/Type /XObject /Subtype /Form /BBox [0 0 50 25] " + appearance_entries,
+            ),
+            **(objects or {}),
+        },
+    )
+
+
+def appearance_with_a_form() -> Drawing:
+    """The form moves by (10, 5), the placement doubles and moves by (100, 100):
+    (0, 0) of the form at (120, 110)."""
+    data = _annotated(
+        b"/F2 Do",
+        b"/Resources << /XObject << /F2 8 0 R >> >>",
+        {
+            8: stream(
+                b"0 0 20 10 re f",
+                b"/Type /XObject /Subtype /Form /BBox [0 0 50 25] /Matrix [1 0 0 1 10 5]",
+            )
+        },
+    )
+    drawn = DrawnPath(
+        (
+            DrawnSubpath(
+                "rectangle", ((120, 110), (160, 110), (160, 130), (120, 130), (120, 110)), True
+            ),
+        ),
+        annotation=0,
+    )
+    return Drawing(data, (drawn,))
+
+
+def appearance_turned_by_its_matrix() -> Drawing:
+    """/Matrix [0 1 -1 0 0 0] turns /BBox to (-25, 0, 0, 50); placed on /Rect,
+    x is taken 4 times and y once: (x, y) to (-4y + 200, x + 100)."""
+    data = _annotated(b"0 0 20 10 re f", b"/Matrix [0 1 -1 0 0 0]")
+    drawn = DrawnPath(
+        (
+            DrawnSubpath(
+                "rectangle", ((200, 100), (200, 120), (160, 120), (160, 100), (200, 100)), True
+            ),
+        ),
+        annotation=0,
+    )
+    return Drawing(data, (drawn,))
+
+
+def one_image_placed_three_times() -> Drawing:
+    """Scaled, (x, y) to (30x + 10, 20y + 10); turned, (x, y) to
+    (-30y + 100, 20x + 50); mirrored, (x, y) to (-30x + 250, 20y + 10)."""
+    return _images_on_page(
+        b"q 30 0 0 20 10 10 cm /Im Do Q q 0 20 -30 0 100 50 cm /Im Do Q"
+        b" q -30 0 0 20 250 10 cm /Im Do Q",
+        ((10, 10), (40, 10), (40, 30), (10, 30)),
+        ((100, 50), (100, 70), (70, 70), (70, 50)),
+        ((250, 10), (220, 10), (220, 30), (250, 30)),
+    )
+
+
+def one_image_in_a_form_drawn_twice() -> Drawing:
+    """The form scales the image to 30 x 20; the page moves it by (10, 100),
+    then doubles it and moves it by (100, 100)."""
+    data = _drawing_file(
+        b"q 1 0 0 1 10 100 cm /F Do Q q 2 0 0 2 100 100 cm /F Do Q",
+        resources=b"<< /XObject << /F 5 0 R >> >>",
+        objects={
+            5: stream(
+                b"30 0 0 20 0 0 cm /Im Do",
+                DRAWN_FORM + b" /Resources << /XObject << /Im 6 0 R >> >>",
+            ),
+            6: BLACK_IMAGE,
+        },
+    )
+    return Drawing(
+        data,
+        (
+            DrawnImage(((10, 100), (40, 100), (40, 120), (10, 120))),
+            DrawnImage(((100, 100), (160, 100), (160, 140), (100, 140))),
+        ),
+    )
+
+
+def an_inline_image() -> Drawing:
+    """Scaled, (x, y) to (30x + 10, 20y + 10)."""
+    data = _drawing_file(
+        b"q 30 0 0 20 10 10 cm BI /W 3 /H 2 /CS /G /BPC 8 ID " + bytes(6) + b" EI Q"
+    )
+    return Drawing(data, (DrawnImage(((10, 10), (40, 10), (40, 30), (10, 30))),))
+
+
+def an_image_in_an_appearance() -> Drawing:
+    """The appearance scales the image to its /BBox; placed, (0, 0) at (100, 100)."""
+    data = _annotated(
+        b"50 0 0 25 0 0 cm /Im Do", b"/Resources << /XObject << /Im 8 0 R >> >>", {8: BLACK_IMAGE}
+    )
+    corners = ((100, 100), (200, 100), (200, 150), (100, 150))
+    return Drawing(data, (DrawnImage(corners, annotation=0),))
+
+
+def paths_and_images_in_drawing_order() -> Drawing:
+    """A rectangle, an image, a rectangle, then the annotation's rectangle. The
+    image is scaled, (x, y) to (30x + 100, 20y + 100); the appearance's /BBox
+    has the size of /Rect, so placing it only moves it, by (300, 200)."""
+    data = _drawing_file(
+        b"10 20 50 30 re f q 30 0 0 20 100 100 cm /Im Do Q 200 20 50 30 re f",
+        resources=b"<< /XObject << /Im 5 0 R >> >>",
+        annots=b"[6 0 R]",
+        objects={
+            5: BLACK_IMAGE,
+            6: b"<< /Type /Annot /Subtype /Square /Rect [300 200 350 225] /AP << /N 7 0 R >> >>",
+            7: stream(b"0 0 50 25 re f", b"/Type /XObject /Subtype /Form /BBox [0 0 50 25]"),
+        },
+    )
+    return Drawing(
+        data,
+        (
+            _one("rectangle", (10, 20), (60, 20), (60, 50), (10, 50), (10, 20), closed=True),
+            DrawnImage(((100, 100), (130, 100), (130, 120), (100, 120))),
+            _one("rectangle", (200, 20), (250, 20), (250, 50), (200, 50), (200, 20), closed=True),
+            DrawnPath(
+                (
+                    DrawnSubpath(
+                        "rectangle",
+                        ((300, 200), (350, 200), (350, 225), (300, 225), (300, 200)),
+                        True,
+                    ),
+                ),
+                annotation=0,
+            ),
+        ),
+    )
+
+
+GRAPHICS: dict[str, Callable[[], Drawing]] = {
+    # The shape rules.
+    "re": partial(_shape, b"10 20 100 50 re f", _RECTANGLE),
+    "m l l l h": partial(_shape, b"10 20 m 110 20 l 110 70 l 10 70 l h f", _RECTANGLE),
+    "m l l l l h": partial(_shape, b"10 20 m 110 20 l 110 70 l 10 70 l 10 20 l h f", _RECTANGLE),
+    "a line": partial(
+        _shape, b"10 20 m 110 70 l S", _one("line", (10, 20), (110, 70)), inked=False
+    ),
+    # (x, y) to (-y + 300, x): the edges still keep x or y.
+    "a rectangle turned by 90 degrees": partial(
+        _shape,
+        b"0 1 -1 0 300 0 cm 10 20 100 50 re f",
+        _one("rectangle", (280, 10), (280, 110), (230, 110), (230, 10), (280, 10), closed=True),
+    ),
+    # (x, y) to (x + y, y): a parallelogram.
+    "a sheared rectangle": partial(
+        _shape,
+        b"1 0 1 1 0 0 cm 10 20 100 50 re f",
+        _one("quad", (30, 20), (130, 20), (180, 70), (80, 70), (30, 20), closed=True),
+    ),
+    "a trapezoid": partial(
+        _shape,
+        b"10 20 m 110 20 l 90 70 l 30 70 l h f",
+        _one("quad", (10, 20), (110, 20), (90, 70), (30, 70), (10, 20), closed=True),
+    ),
+    # 2^-11 off: within 0.001, one number.
+    "a corner 2^-11 off": partial(
+        _shape,
+        b"10 20 m 110 20.00048828125 l 110 70 l 10 70 l h f",
+        _one(
+            "rectangle", (10, 20), (110, 20.00048828125), (110, 70), (10, 70), (10, 20), closed=True
+        ),
+    ),
+    # 2^-6 off: beyond 0.001.
+    "a corner 2^-6 off": partial(
+        _shape,
+        b"10 20 m 110 20.015625 l 110 70 l 10 70 l h f",
+        _one("quad", (10, 20), (110, 20.015625), (110, 70), (10, 70), (10, 20), closed=True),
+    ),
+    "an L": partial(
+        _shape,
+        b"10 20 m 110 20 l 110 40 l 30 40 l 30 70 l 10 70 l h f",
+        _one(
+            "polyline",
+            (10, 20),
+            (110, 20),
+            (110, 40),
+            (30, 40),
+            (30, 70),
+            (10, 70),
+            (10, 20),
+            closed=True,
+        ),
+    ),
+    "an open polyline": partial(
+        _shape,
+        b"10 20 m 60 70 l 110 20 l S",
+        _one("polyline", (10, 20), (60, 70), (110, 20)),
+        inked=False,
+    ),
+    "a curve, c": partial(
+        _shape,
+        b"10 20 m 20 60 100 60 110 20 c S",
+        _one("curves", (10, 20), (20, 60), (100, 60), (110, 20)),
+        inked=False,
+    ),
+    # v: the first control point is the current point.
+    "a curve, v": partial(
+        _shape,
+        b"10 20 m 60 70 110 20 v S",
+        _one("curves", (10, 20), (10, 20), (60, 70), (110, 20)),
+        inked=False,
+    ),
+    # y: the second control point is the end.
+    "a curve, y": partial(
+        _shape,
+        b"10 20 m 60 70 110 20 y S",
+        _one("curves", (10, 20), (60, 70), (110, 20), (110, 20)),
+        inked=False,
+    ),
+    "two rectangles in one path": partial(
+        _shape,
+        b"10 20 50 30 re 200 100 50 30 re f",
+        DrawnPath(
+            (
+                DrawnSubpath("rectangle", ((10, 20), (60, 20), (60, 50), (10, 50), (10, 20)), True),
+                DrawnSubpath(
+                    "rectangle", ((200, 100), (250, 100), (250, 130), (200, 130), (200, 100)), True
+                ),
+            )
+        ),
+    ),
+    # Nested transforms.
+    "forms nested two deep": forms_nested_two_deep,
+    "one form drawn twice": one_form_drawn_twice,
+    "an appearance with a form": appearance_with_a_form,
+    "an appearance turned by its /Matrix": appearance_turned_by_its_matrix,
+    # Repeated images.
+    "one image placed three times": one_image_placed_three_times,
+    "one image in a form drawn twice": one_image_in_a_form_drawn_twice,
+    "an inline image": an_inline_image,
+    "an image in an appearance": an_image_in_an_appearance,
+    "paths and images in drawing order": paths_and_images_in_drawing_order,
+}

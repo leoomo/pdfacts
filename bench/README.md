@@ -74,6 +74,13 @@ installed the font policy. What is there:
 | `digest.py` | SHA-256 over int, float and str values; the module states the encoding |
 | `gates/m1.py` | reads the corpus and writes one receipt: per file a geometry digest, a glyph digest, counts, warnings |
 | `gates/compare.py` | compares two or more receipts, prints one table per file and column: identical, differs, missing, error |
+| `gates/m2.py`, `gates/m2_referee.py` | the M2 gate: the widgets and fields of the corpus, against a referee that reads the dictionaries with pikepdf |
+| `gates/m3.py` | the M3 gate: the paths and images of the corpus, read twice, their numbers against PDFium's own |
+
+The M2 and M3 gates take the same `--commit`, `--out`, `--only` and
+`--corpus` as the M1 gate and refuse a run on the same grounds, but for the
+font policy, which only the M1 gate checks; they run on one machine. The rest
+of this section is about the M1 gate.
 
 Run the gate on one machine, from the repository root, with the corpus in
 place (`bench/corpus/fetch.py --verify-only` reports `104 files: ok 104`):
