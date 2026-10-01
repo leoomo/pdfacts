@@ -95,7 +95,12 @@ may break callers.
 - Fact types for paths and images: `Path`, `Image`, `Subpath`, `Segment`,
   `SegmentKind`, `ShapeKind`, `FillRule`, `LineCap`, `LineJoin`,
   `DisplayColour`, `Dash` and `ColourSpace`; the geometry `Quad` and the
-  reference `GraphicRef`. Nothing returns them yet.
+  reference `GraphicRef`, returned by `paths()` and `images()`.
+- `paths(document, page_index)` and `images(document, page_index)`: what
+  PDFium interprets for a page, its content and the normal appearance of each
+  annotation, in drawing order, each appearance checked against the one QPDF
+  selects and placed on the page as the file says; values that cannot be
+  determined are unknown with the reason. The capability `GRAPHICS`.
 
 ### Changed
 
@@ -205,9 +210,21 @@ may break callers.
   differently, a stream-object body inside an object stream among them, is
   refused with `LimitUncheckedError` where the limit is set, since a few
   kilobytes could otherwise make PDFium parse what QPDF counted as nothing.
+- "Paths and images": where each value comes from, how an appearance is
+  checked and placed, where colours, widths and image values are unknown,
+  what is not applied or not given, and that paths and images count against
+  `max_items_per_page`. "Object identity" names paths and images as the
+  exception to facts read through PDFium being returned as usual: where QPDF
+  cannot back the page (its values unknown, the engines seeing the page
+  differently or counting different annotations, `/Annots` no array), the
+  page's paths and images are unknown as a whole.
 
 ### Corrected
 
+- `max_forms_per_page` (#56) counted too little where a file writes in the
+  place of a dictionary or a name what PDFium reads leniently, and where QPDF
+  read an object otherwise than PDFium: such a page could pass the check
+  while PDFium parsed far more. #62 corrected the count.
 - `docs/conventions.md` stated that unrounded values differ between platforms
   with one and the same engine. That was measured with the reference engine,
   not with PDFium. The section now lists what was measured and what was not.

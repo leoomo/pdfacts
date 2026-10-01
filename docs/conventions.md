@@ -128,6 +128,69 @@ coordinates as 32-bit floats. Near 14400 units, the largest page ISO 32000-1
 recommends (Annex C), they lie about 0.001 apart; anywhere, at most 2^-23 of
 the magnitude apart, and coordinates can lie far beyond the page.
 
+`paths(document, page_index)` and `images(document, page_index)` give what
+PDFium interprets for the page, in drawing order: its content, each form
+where it is drawn, then the normal appearance of each annotation in `/Annots`
+order. They give it whether or not a rendering shows it: hidden and NoView
+annotations, closed pop-ups and widgets too. Paths and images share one
+drawing index. A fact from an appearance carries the annotation's reference
+and its `/F`, 0 where it has none; a fact from the content carries neither.
+The values come from PDFium, which gives each object's points in its own
+space and its matrix composed through the forms that hold it; pdfacts
+composes the matrices in 64-bit floats. The deadline is checked when either
+function begins.
+
+An appearance's graphics are used only where the engines agree on it. QPDF
+selects the normal appearance PDFium would draw (`/AS`, else `/V`, else the
+`/V` of `/Parent`, else `/Off`); the text PDFium gives for the annotation's
+normal appearance must equal that stream's data, each byte read through
+PDFDocEncoding as PDFium reads it, and the flags must agree, modulo 2^32, an
+absent `/F` as 0. An `/F` that is not an integer is not compared, and one
+that is not an integer from 0 to 2^32 - 1 leaves the facts' flags unknown,
+`invalid-in-file`. Where the engines do not agree,
+every fact of the annotation is unknown, `engines-disagree`. Where QPDF selects
+no appearance, PDFium must draw none; once the page was rendered, PDFium draws
+appearances it generated for annotations that have none, and those
+annotations are then unknown. Where QPDF cannot tell which appearance PDFium
+draws, and where QPDF cannot decode the appearance stream, the annotation's
+facts are unknown. An annotation whose facts are unknown is given as one path
+and one image, each of its own drawing index, with the annotation's reference
+and every value unknown with the reason, its flags included. Where PDFium draws an annotation that has
+no `/Subtype` to name it by, or an empty one, the page's paths and images are
+unknown.
+
+An appearance is placed on the page as ISO 32000-1 (12.5.5) places it: its
+`/BBox`, transformed by its `/Matrix`, is scaled and moved onto the
+annotation's `/Rect`, and each point goes through the `/Matrix` and then that
+placement. A `/Rect` or `/BBox` that is not four numbers, a `/Matrix` that is
+not six, a box without area and a placement that is not finite leave the
+annotation's facts unknown, `invalid-in-file`.
+
+| Value | Where it is unknown |
+| --- | --- |
+| fill and stroke colour | where the content, or a form it draws, selects a pattern colour space or sets a pattern colour (PDFium then reports a colour of its own), where QPDF cannot read that content or warns that it misread an object of the file, and where PDFium gives no colour. QPDF's warnings gather as it reads the file, so a colour known at first can be unknown once another page was read |
+| line width, dash | where the transform does not scale every direction alike: its two scales differ by more than a thousandth, or the cosine of the angle between its two directions exceeds about a thousandth; elsewhere they are given in user space, scaled by the geometric mean of the two scales. A negative width or dash length and a dash of zeros are `invalid-in-file`; a transform that makes every dash length 0 leaves the dash unknown |
+| points | where a point is not finite in user space, `invalid-in-file` |
+| cap, join, draw mode, points, matrix | where PDFium gives none |
+| an image's values | where PDFium gives no metadata, all of them but its corners; its colour space and bits per pixel where PDFium cannot decode it (it reports 0 bits per pixel); a pattern colour space is `invalid-in-file`; a pixel size outside 1 to 2^31 - 1 is `invalid-in-file` |
+| everything of the page | where a form in the page's content lies deeper than PDFium reads forms, 40 levels |
+| everything of an annotation | where a form in its appearance lies deeper than 40 levels |
+
+The page's paths and images are unknown as a whole, with that reason, where
+QPDF's values are all unknown, where the engines see the page differently
+(its object number is unknown), where `/Annots` is not an array, and where
+the engines count different annotations: without QPDF, an appearance cannot
+be checked and a colour not judged ("Object identity" names this exception).
+
+The entries of a page's `/Annots` are held to `max_items_per_page`, and so
+are its paths and images together; above it the page is refused with
+`LimitExceededError` before more is read. Where the paths and images exceed
+it, reading stops at the first one beyond, and `found` is the limit plus one.
+
+Not applied: clip paths and optional content; a path is given as the content
+draws it. Not given: shadings painted with `sh`, the cells of patterns, the
+glyphs of Type 3 fonts, text.
+
 ## Fonts
 
 Fonts installed on the host are ignored. Only fonts embedded in the file and
@@ -162,7 +225,8 @@ checked at run time:
 | before a value from QPDF is used for a page or an annotation | the object at the same position is the same in both engines. For a page, PDFium not exposing object numbers, that means the same visible box, within 0.001, and the same rotation. QPDF's visible box is its media box, US letter where it has none it can use, intersected with its crop box, corners in order; its rotation is taken modulo 360, and a value that is not a multiple of 90 counts as 0. For an annotation: PDFium reads a widget at the same index, and the widget's own dictionary agrees: rectangle, flags, /T, /AS, /Parent, /V, /DV, /TU, /FT; the page's annotation counts are equal |
 
 When a check fails, the values that depend on it are unknown and the reason is
-stated. Facts read through PDFium are returned as usual.
+stated. Facts read through PDFium are returned as usual, except paths and
+images, whose appearances cannot be checked without QPDF ("Paths and images").
 
 No PDFium call gives an object number, so the check on open is made on
 QPDF's side alone. Measured: all 104 corpus files pass it; 93 of them use
