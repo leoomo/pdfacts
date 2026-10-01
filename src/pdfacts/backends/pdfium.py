@@ -25,7 +25,9 @@ from pdfacts.backends.protocols import (
     DrawnPath,
     EngineFailure,
     FailureKind,
+    PageText,
     RawBitmap,
+    TextCharacter,
     Transform,
 )
 
@@ -141,10 +143,11 @@ def _check_index(index: int, count: int) -> None:
 class PdfiumDocument:
     """A document opened by PDFium.
 
-    A GeometryReader, a Renderer, an AnnotationViewer and a DrawingReader. It
-    holds the native handle; no method returns a pypdfium2 object. A page is
-    opened for one call and closed before the call returns. No form environment
-    is ever made: the document that renders must draw as M1 recorded.
+    A GeometryReader, a Renderer, an AnnotationViewer, a DrawingReader and a
+    TextReader. It holds the native handle; no method returns a pypdfium2
+    object. A page is opened for one call and closed before the call returns.
+    No form environment is ever made: the document that renders must draw as
+    M1 recorded.
     """
 
     def __init__(self, document: pypdfium2.PdfDocument, data: bytes) -> None:
@@ -273,6 +276,15 @@ class PdfiumDocument:
         _check_cap(cap)
         return self._read_page(index, lambda page: _appearance_drawings(page, cap))
 
+    def page_text(self, index: int, cap: int | None) -> PageText:
+        """The characters of the page's content, forms expanded, in content order.
+
+        Once `cap` characters are given and another follows, the rest are left
+        out; a cap below 0 is a ValueError.
+        """
+        _check_cap(cap)
+        return self._read_page(index, lambda page: _page_text(page, cap))
+
     def annotation_views(self, index: int) -> tuple[AnnotationView | None, ...]:
         """What PDFium reads in each annotation dictionary of the page's /Annots.
 
@@ -327,7 +339,7 @@ def _check_cap(cap: int | None) -> None:
 
 
 class _Budget:
-    """How many more paths and images may be read."""
+    """How many more objects, or characters, may be read."""
 
     def __init__(self, cap: int | None) -> None:
         self.left = cap
@@ -370,6 +382,136 @@ def _page_drawing(page: pypdfium2.PdfPage, cap: int | None) -> Drawing:
         if not _walk(pdfium_c.FPDFPage_GetObject(raw, i), _IDENTITY, 0, raw, found, budget):
             break
     return found.drawing(budget)
+
+
+def _page_text(page: pypdfium2.PdfPage, cap: int | None) -> PageText:
+    order, too_deep = _text_objects(page.raw)
+    found: list[tuple[int, int]] = []
+    textpage = page.get_textpage()
+    try:
+        raw = textpage.raw
+        for i in range(_count(pdfium_c.FPDFText_CountChars(raw), "the page's characters")):
+            generated = pdfium_c.FPDFText_IsGenerated(raw, i)
+            if generated == -1:
+                raise EngineFailure(
+                    FailureKind.OTHER, "PDFium does not say whether a character is its own"
+                )
+            if generated == 1:
+                continue
+            obj = pdfium_c.FPDFText_GetTextObject(raw, i)
+            position = order.get(ctypes.cast(obj, ctypes.c_void_p).value) if obj else None
+            if position is None:
+                raise EngineFailure(
+                    FailureKind.OTHER, "PDFium gives a character of no text object on the page"
+                )
+            found.append((position, i))
+        found.sort()
+        budget = _Budget(cap)
+        characters: list[TextCharacter] = []
+        fonts: dict[int, tuple[float | None, float | None]] = {}
+        for _, i in found:
+            if not budget.take():
+                break
+            characters.append(_character(raw, i, fonts))
+    finally:
+        textpage.close()
+    return PageText(characters=tuple(characters), stopped=budget.stopped, too_deep=too_deep)
+
+
+def _answer(value: int) -> bool | None:
+    """1 as True, 0 as False, and -1, PDFium's failure, as None."""
+    return {1: True, 0: False}.get(value)
+
+
+def _character(
+    textpage: pdfium_c.FPDF_TEXTPAGE,
+    index: int,
+    fonts: dict[int, tuple[float | None, float | None]],
+) -> TextCharacter:
+    x, y = ctypes.c_double(), ctypes.c_double()
+    origin = None
+    if pdfium_c.FPDFText_GetCharOrigin(textpage, index, ctypes.byref(x), ctypes.byref(y)):
+        origin = (x.value, y.value)
+    m = pdfium_c.FS_MATRIX()
+    matrix = None
+    if pdfium_c.FPDFText_GetMatrix(textpage, index, ctypes.byref(m)):
+        matrix = (m.a, m.b, m.c, m.d, m.e, m.f)
+    rect = pdfium_c.FS_RECTF()
+    loose_box = None
+    if pdfium_c.FPDFText_GetLooseCharBox(textpage, index, ctypes.byref(rect)):
+        loose_box = (rect.left, rect.bottom, rect.right, rect.top)
+    obj = pdfium_c.FPDFText_GetTextObject(textpage, index)
+    font_size = None
+    render_mode = None
+    ascent: float | None = None
+    descent: float | None = None
+    if obj:
+        font_size = pdfium_c.FPDFText_GetFontSize(textpage, index)
+        mode = pdfium_c.FPDFTextObj_GetTextRenderMode(obj)
+        render_mode = mode if mode >= 0 else None
+        ascent, descent = _font_metrics(obj, fonts)
+    return TextCharacter(
+        code=pdfium_c.FPDFText_GetUnicode(textpage, index),
+        map_error=_answer(pdfium_c.FPDFText_HasUnicodeMapError(textpage, index)),
+        hyphen=_answer(pdfium_c.FPDFText_IsHyphen(textpage, index)),
+        origin=origin,
+        matrix=matrix,
+        font_size=font_size,
+        loose_box=loose_box,
+        render_mode=render_mode,
+        ascent=ascent,
+        descent=descent,
+    )
+
+
+def _font_metrics(
+    obj: pdfium_c.FPDF_PAGEOBJECT, fonts: dict[int, tuple[float | None, float | None]]
+) -> tuple[float | None, float | None]:
+    """The ascent and descent of the text object's font, per unit of font size.
+
+    Asked at size 1000, where PDFium's metrics in thousandths come back whole,
+    and divided by 1000.
+    """
+    font = pdfium_c.FPDFTextObj_GetFont(obj)
+    if not font:
+        return None, None
+    key = ctypes.addressof(font.contents)
+    if key not in fonts:
+        ascent, descent = ctypes.c_float(), ctypes.c_float()
+        fonts[key] = (
+            ascent.value / 1000
+            if pdfium_c.FPDFFont_GetAscent(font, 1000.0, ctypes.byref(ascent))
+            else None,
+            descent.value / 1000
+            if pdfium_c.FPDFFont_GetDescent(font, 1000.0, ctypes.byref(descent))
+            else None,
+        )
+    return fonts[key]
+
+
+def _text_objects(page: pdfium_c.FPDF_PAGE) -> tuple[dict[int, int], bool]:
+    """Each text object of the page's content by its address, numbered in
+    content order, and whether a form lies deeper than PDFium reads forms."""
+    order: dict[int, int] = {}
+    too_deep = False
+    count = _count(pdfium_c.FPDFPage_CountObjects(page), "the page's objects")
+    pending = [(pdfium_c.FPDFPage_GetObject(page, i), 0) for i in reversed(range(count))]
+    while pending:
+        obj, level = pending.pop()
+        if not obj:
+            raise EngineFailure(FailureKind.OTHER, "PDFium gives no object at an index it counts")
+        kind = pdfium_c.FPDFPageObj_GetType(obj)
+        if kind == pdfium_c.FPDF_PAGEOBJ_TEXT:
+            order[ctypes.cast(obj, ctypes.c_void_p).value] = len(order)
+        elif kind == pdfium_c.FPDF_PAGEOBJ_FORM:
+            if level >= _FORM_LEVELS:
+                too_deep = True
+                continue
+            count = _count(pdfium_c.FPDFFormObj_CountObjects(obj), "a form's objects")
+            pending.extend(
+                (pdfium_c.FPDFFormObj_GetObject(obj, i), level + 1) for i in reversed(range(count))
+            )
+    return order, too_deep
 
 
 def _appearance_drawings(
