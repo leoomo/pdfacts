@@ -126,3 +126,19 @@ class GraphicRef:
             )
         if self.annotation is not None and self.annotation.page_index != self.page_index:
             raise ValueError("the annotation is on another page")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class GlyphRef:
+    """Which glyph: its page and its place in the content order of the page's glyphs."""
+
+    page_index: int  # from 0
+    glyph_index: int  # from 0
+
+    def __post_init__(self) -> None:
+        for name in ("page_index", "glyph_index"):
+            value = getattr(self, name)
+            if not _is_int(value):
+                raise TypeError(f"{name} must be an int, not {type(value).__name__}")
+            if value < 0:
+                raise ValueError(f"{name} starts at 0, not {value}")
