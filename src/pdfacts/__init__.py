@@ -24,7 +24,7 @@ from pdfacts.core.errors import (
 from pdfacts.core.geometry import Matrix, PageGeometry, Point, Quad, Rect
 from pdfacts.core.limits import Limits
 from pdfacts.core.recovery import Recovery, recover
-from pdfacts.core.refs import AnnotationRef, FieldRef, GraphicRef, PageRef
+from pdfacts.core.refs import AnnotationRef, FieldRef, GlyphRef, GraphicRef, PageRef
 from pdfacts.core.runtime import FontPolicy, configure
 from pdfacts.core.strings import Name, NameEncoding
 from pdfacts.core.values import Unknown, UnknownReason
@@ -51,6 +51,8 @@ from pdfacts.graphics.paths import (
     Subpath,
 )
 from pdfacts.graphics.reader import images, paths
+from pdfacts.text.glyphs import Glyph
+from pdfacts.text.layout import Line, Word
 
 __version__ = "0.0.1"
 
@@ -78,6 +80,8 @@ __all__ = [
     "FieldType",
     "FillRule",
     "FontPolicy",
+    "Glyph",
+    "GlyphRef",
     "GraphicRef",
     "Image",
     "InputError",
@@ -85,6 +89,7 @@ __all__ = [
     "LimitExceededError",
     "LimitUncheckedError",
     "Limits",
+    "Line",
     "LineCap",
     "LineJoin",
     "Matrix",
@@ -110,6 +115,7 @@ __all__ = [
     "UnknownReason",
     "UnsupportedError",
     "Widget",
+    "Word",
     "__version__",
     "capabilities",
     "configure",
