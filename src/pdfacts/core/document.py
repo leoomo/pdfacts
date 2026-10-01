@@ -21,8 +21,11 @@ from types import TracebackType
 
 from pdfacts.backends.pdfium import PdfiumDocument
 from pdfacts.backends.protocols import (
+    AnnotationAppearance,
     AnnotationView,
+    AppearanceDrawing,
     Box,
+    Drawing,
     EngineFailure,
     FailureKind,
     FieldTree,
@@ -244,6 +247,28 @@ class FeatureAccess:
         pdfium = self._pdfium_ready()
         self._check_forms(index)
         return _pdfium_call(lambda: pdfium.annotation_views(index))
+
+    def page_drawing(self, index: int, cap: int | None) -> Drawing:
+        """PDFium's paths and images of the page's content, `cap` at most."""
+        pdfium = self._pdfium_ready()
+        self._check_forms(index)
+        return _pdfium_call(lambda: pdfium.page_drawing(index, cap))
+
+    def appearance_drawings(
+        self, index: int, cap: int | None
+    ) -> tuple[AppearanceDrawing | None, ...]:
+        """PDFium's paths and images of each annotation's normal appearance, `cap` at most."""
+        pdfium = self._pdfium_ready()
+        self._check_forms(index)
+        return _pdfium_call(lambda: pdfium.appearance_drawings(index, cap))
+
+    def appearances(self, index: int) -> tuple[AnnotationAppearance, ...]:
+        """QPDF's /Annots entries with the normal appearance each would draw."""
+        return _qpdf_call(lambda: self._qpdf_ready().appearances(index))
+
+    def page_uses_pattern(self, index: int) -> bool | None:
+        """Whether QPDF finds a pattern colour set in the page's content."""
+        return _qpdf_call(lambda: self._qpdf_ready().page_uses_pattern(index))
 
     def _close(self) -> None:
         self._closed = True
