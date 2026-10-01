@@ -214,8 +214,10 @@ may break callers.
   checked and placed, where colours, widths and image values are unknown,
   what is not applied or not given, and that paths and images count against
   `max_items_per_page`. "Object identity" names paths and images as the
-  exception to facts read through PDFium being returned as usual: where a
-  check fails, a page's paths and images are unknown as a whole.
+  exception to facts read through PDFium being returned as usual: where QPDF
+  cannot back the page (its values unknown, the engines seeing the page
+  differently or counting different annotations, `/Annots` no array), the
+  page's paths and images are unknown as a whole.
 
 ### Corrected
 
