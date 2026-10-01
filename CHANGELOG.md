@@ -95,7 +95,7 @@ may break callers.
 - Fact types for paths and images: `Path`, `Image`, `Subpath`, `Segment`,
   `SegmentKind`, `ShapeKind`, `FillRule`, `LineCap`, `LineJoin`,
   `DisplayColour`, `Dash` and `ColourSpace`; the geometry `Quad` and the
-  reference `GraphicRef`. Nothing returns them yet.
+  reference `GraphicRef`, returned by `paths()` and `images()`.
 
 ### Changed
 
@@ -198,6 +198,10 @@ may break callers.
 - "Paths and images": facts in user space; where a subpath ends; the shape of
   each subpath (line, rectangle, quad, polyline, curves) by documented rules,
   numbers compared within 0.001 plus a millionth of the larger magnitude.
+- "Paths and images": where each value comes from, how an appearance is
+  checked and placed, where colours, widths and image values are unknown,
+  what is not applied or not given, and that paths and images count against
+  `max_items_per_page`.
 - "Limits": the count of what PDFium would parse follows its lenient reading
   (a stream's dictionary where a dictionary is expected, a string `/Subtype`),
   and a page where QPDF warns that it mis-read an object — any warning naming
@@ -208,6 +212,10 @@ may break callers.
 
 ### Corrected
 
+- `max_forms_per_page` (#56) counted too little where a file writes in the
+  place of a dictionary or a name what PDFium reads leniently, and where QPDF
+  read an object otherwise than PDFium: such a page could pass the check
+  while PDFium parsed far more. #62 corrected the count.
 - `docs/conventions.md` stated that unrounded values differ between platforms
   with one and the same engine. That was measured with the reference engine,
   not with PDFium. The section now lists what was measured and what was not.
