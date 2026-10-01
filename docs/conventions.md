@@ -102,6 +102,28 @@ are drawn; within one object, as PDFium's text page gives its characters. The
 characters PDFium adds of its own, spaces and line breaks, are none of them.
 Nothing is clipped: text outside the visible box is given as well.
 
+`glyphs(document, page_index)`, `words(document, page_index)` and
+`lines(document, page_index)` give them, each a tuple. Where a form lies
+deeper in the page's content than PDFium reads forms, 40 levels, the page's
+text is unknown as a whole, `unreadable`: PDFium's text page leaves out what
+such a form draws without a sign. The characters PDFium reads from the
+content count against `max_items_per_page`, white space among them; above
+the limit the page is refused, and no more characters are read than the
+limit and one, though PDFium has made the whole text page by then. PDFium loads the
+page only once `max_forms_per_page` is checked; apart from that count, which
+QPDF makes, nothing of the text depends on QPDF: where QPDF's values are
+unknown, the text is given as usual ("Object identity").
+
+PDFium leaves out of its text page what it takes for text drawn again, as a
+bold face drawn twice is, and keeps the first drawing, its render mode with
+it. What is not on its text page is no glyph. Measured at size 10, the font
+policy installed, in a font 1000 thousandths wide unless named:
+
+| Drawn again | Left out | Kept |
+| --- | --- | --- |
+| a text object with the codes of one of the five text objects before it | "AB" 7.5 to the right; "ABCDE" 8.9 to the right or 5.5 up; Helvetica's "i" 0.6 to the right; at one place, with four text objects between, or eight paths | "AB" 8 to the right; "ABCDE" 9.5 to the right or 6 up; Helvetica's "i" 0.8 to the right; five text objects between |
+| a character with the code and font of one of the six characters before it | the "A" of "AC" 0.6 to the right of "AB"; the "A" of "AX" at the place of "ABCDEF"; the "H" of "Hello" at the place of an "H" at size 12 | the "A" of "AC" 0.8 to the right, or in another font; the "A" of "AX" at the place of "ABCDEFG" |
+
 A glyph is one character of the content, or several one after another at one
 origin, as PDFium gives the characters of a ligature it expanded, an accent
 at its letter, or the two halves of a character beyond U+FFFF. A glyph of
@@ -156,7 +178,11 @@ Known to go wrong: a space that `Tw` widens by 0.8 of the size or more begins
 a new line, since PDFium's loose box does not hold `Tw`; so does a space 0.8
 of the size wide or more that stands at the next character's origin, its box
 reaching past it, so that the next step is one back; and letters that `Tc`
-spaces by 0.8 of the size or more each stand on a line of their own. Not
+spaces by 0.8 of the size or more each stand on a line of their own. Text
+drawn again where PDFium leaves it out is lost, though drawn on purpose: two
+lines of the same ten characters 7 apart at size 10 come out as one; and text
+drawn invisible under the same text drawn visibly gives that text render mode
+3. Not
 given: words and lines of text that is not upright, and text in annotation
 appearances.
 
