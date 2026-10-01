@@ -17,6 +17,7 @@ from types import MappingProxyType
 import pikepdf
 
 from pdfacts.backends.protocols import (
+    AnnotationAppearance,
     AnnotationEntry,
     Box,
     EngineFailure,
@@ -29,6 +30,7 @@ from pdfacts.backends.protocols import (
     PageAnnotations,
     PageObject,
     RecoveredBytes,
+    SelectedAppearance,
     WidgetEntry,
     Written,
 )
@@ -318,22 +320,13 @@ class QpdfDocument:
             entries: list[AnnotationEntry] = []
             widgets: list[WidgetEntry] = []
             for position, item in enumerate(annots):
-                dictionary = isinstance(item, pikepdf.Dictionary)
-                item_objgen = item.objgen if dictionary and item.is_indirect else None
-                subtype_value = item.get("/Subtype") if dictionary else None
-                subtype = (
-                    _name_bytes(subtype_value) if isinstance(subtype_value, pikepdf.Name) else None
-                )
-                entry = AnnotationEntry(
-                    position,
-                    item_objgen[0] if item_objgen else None,
-                    item_objgen[1] if item_objgen else None,
-                    dictionary,
-                    subtype,
-                )
+                entry = _annotation_entry(position, item)
                 entries.append(entry)
-                if subtype != b"Widget":
+                if entry.subtype != b"Widget":
                     continue
+                item_objgen = (
+                    None if entry.object_number is None else (entry.object_number, entry.generation)
+                )
                 kept = self._kept.widgets.get(item_objgen) if item_objgen else None
                 if kept is not None:
                     # Listed again, on this page or another: converted once per
@@ -397,6 +390,107 @@ class QpdfDocument:
                 user_unit=user_unit,
                 user_unit_invalid=user_unit_invalid,
             )
+
+    def appearances(self, index: int) -> tuple[AnnotationAppearance, ...]:
+        """Each entry of the page's /Annots with the normal appearance PDFium would draw.
+
+        () when /Annots is absent or not an array; annotation_count() tells
+        the two apart. The appearance is selected as PDFium selects it
+        (_selected_appearance). Where QPDF's parser has warned that it
+        mis-read an object of the file (_misread), the selection is undecided
+        and uses_pattern unknown: QPDF's view of the annotation is not the
+        file's (measured, the review of the G2 draft, 2026-10-01).
+        """
+        self._check_open()
+        objgen = self._annotated_page(index)
+        with _translated():
+            page = self._unwalked.get_object(objgen)
+            annots = page.get("/Annots")
+            if not isinstance(annots, pikepdf.Array):
+                return ()
+            resources = _inherited(page, "/Resources")
+            top = _Context(resources, ("page",), resources, ("page",))
+            self.warnings()
+            out = []
+            for position, item in enumerate(annots):
+                entry = _annotation_entry(position, item)
+                if not entry.dictionary:
+                    # QPDF can drop a whole annotation it cannot read; PDFium
+                    # still draws it (measured, 2026-10-01), so say why.
+                    out.append(
+                        AnnotationAppearance(
+                            entry,
+                            None,
+                            None,
+                            None,
+                            "QPDF warns that it misread an object of the file"
+                            if self._misread()
+                            else None,
+                        )
+                    )
+                    continue
+                kept = _Kept()
+                rect = item.get("/Rect")
+                flags = item.get("/F")
+                selected = _selected_appearance(item)
+                misread = self._misread()
+                if misread and not isinstance(selected, str):
+                    selected = "QPDF warns that it misread an object of the file"
+                appearance = None
+                if isinstance(selected, pikepdf.Stream):
+                    appearance = _appearance(selected, top, kept)
+                if misread and appearance is not None:
+                    appearance = SelectedAppearance(
+                        data=appearance.data,
+                        bbox=appearance.bbox,
+                        matrix=appearance.matrix,
+                        uses_pattern=None,
+                    )
+                out.append(
+                    AnnotationAppearance(
+                        entry,
+                        None if rect is None else _written(rect, 0, kept),
+                        None if flags is None else _written(flags, 0, kept),
+                        appearance,
+                        selected if isinstance(selected, str) else None,
+                    )
+                )
+            return tuple(out)
+
+    def page_uses_pattern(self, index: int) -> bool | None:
+        """Whether the page's content, or a form it draws, sets a pattern colour.
+
+        A pattern colour is set by scn or SCN with a name; PDFium gives no
+        colour for it that pdfacts can use (issue G2). None where QPDF cannot
+        read the content.
+        """
+        self._check_open()
+        objgen = self._annotated_page(index)
+        with _translated():
+            page = self._unwalked.get_object(objgen)
+            resources = _inherited(page, "/Resources")
+            top = _Context(resources, ("page",), resources, ("page",))
+            # The joined content lives in the counter's scratch document, which
+            # must outlive the parsing.
+            counter = _ParsedStreams(self._compressed())
+            self.warnings()
+            # Where QPDF warns that it mis-read an object, what the content
+            # sets is as unreadable (issue #62's rule).
+            found = _uses_pattern(lambda: counter._page_content(page), top)
+            return None if self._misread() else found
+
+    def _misread(self) -> bool:
+        """Whether QPDF's parser has warned that it mis-read an object of the file.
+
+        The unwalked view's queue is drained into the collected warnings, so
+        the answer covers warnings raised before this call too (issue #62).
+        """
+        fresh = [str(message) for message in self._unwalked.get_warnings()]
+        for message in fresh:
+            if message not in self._known_warnings:
+                self._warnings.append(message)
+                self._known_warnings.add(message)
+        return any(not _countable(message) for message in (*fresh, *self._warnings))
 
     def parsed_streams(self, index: int) -> int | None:
         """The content streams PDFium parses for page `index` and its annotations.
@@ -1617,6 +1711,162 @@ def _normal_appearances(annot: object, compressed: frozenset[int]) -> list[pikep
             _read_otherwise(state, compressed)
         return states
     return []
+
+
+def _annotation_entry(position: int, item: object) -> AnnotationEntry:
+    """The entry at `position` of a page's /Annots, as the file writes it."""
+    dictionary = isinstance(item, pikepdf.Dictionary)
+    objgen = item.objgen if dictionary and item.is_indirect else None
+    subtype = item.get("/Subtype") if dictionary else None
+    return AnnotationEntry(
+        position,
+        objgen[0] if objgen else None,
+        objgen[1] if objgen else None,
+        dictionary,
+        _name_bytes(subtype) if isinstance(subtype, pikepdf.Name) else None,
+    )
+
+
+def _selected_appearance(annot: pikepdf.Dictionary) -> pikepdf.Stream | str | None:
+    """The normal appearance PDFium draws for an annotation (measured, issue G2).
+
+    /AP /N when it is a stream. When it is a dictionary of states: the state
+    /AS names, and none when /N has no stream by that name; where /AS says
+    nothing, the state the annotation's /V names, else its /Parent's /V, and
+    /Off when that names no state of /N. None when PDFium draws none; a str
+    where QPDF cannot tell which one PDFium draws, saying why.
+    """
+    ap = _dict_of(annot.get("/AP"))
+    normal = ap.get("/N") if ap is not None else None
+    if isinstance(normal, pikepdf.Stream):
+        return normal
+    if not isinstance(normal, pikepdf.Dictionary):
+        return None
+    # items(), not get() with a key: a key that is no UTF-8 comes with surrogate
+    # escapes, and get() refuses it.
+    states = {_key_bytes(key): value for key, value in normal.items()}
+    wanted = _state_text(annot.get("/AS"), "/AS")
+    if not wanted:
+        wanted = _state_text(annot.get("/V"), "/V")
+        if not wanted:
+            parent = _dict_of(annot.get("/Parent"))
+            if parent is not None:
+                wanted = _state_text(parent.get("/V"), "the /V of its /Parent")
+        if isinstance(wanted, bytes):
+            # An empty name is no choice: PDFium falls back past it (measured,
+            # issue G2), so a state named / is not selected by an empty /V.
+            wanted = wanted if wanted and wanted in states else b"Off"
+    if isinstance(wanted, str):
+        return wanted
+    chosen = states.get(wanted)
+    return chosen if isinstance(chosen, pikepdf.Stream) else None
+
+
+def _state_text(value: object, where: str) -> bytes | str:
+    """What PDFium reads as the name of a state: b"" where it reads nothing.
+
+    The bytes of a name or a string, true or false, the digits of an integer
+    wrapped to PDFium's 32 bits — 2147483648 names the state -2147483648
+    (measured, issue G2) — and 5.0 names the state 5, but a real number's own
+    spelling QPDF cannot tell. A str where QPDF cannot tell at all: a name
+    whose bytes it cannot read (a stray #), or a real number.
+    """
+    if isinstance(value, pikepdf.Name):
+        try:
+            return _name_bytes(value)
+        except ValueError:
+            return f"{where} is a name QPDF cannot read"
+    if isinstance(value, pikepdf.String):
+        return bytes(value)
+    if isinstance(value, bool):
+        return b"true" if value else b"false"
+    if isinstance(value, int):
+        return b"%d" % (((value + 2**31) % 2**32) - 2**31)
+    if isinstance(value, Decimal):
+        return f"{where} is a number PDFium writes out in its own way to name a state"
+    return b""
+
+
+def _appearance(stream: pikepdf.Stream, page: _Context, kept: _Kept) -> SelectedAppearance:
+    try:
+        data: bytes | None = stream.read_bytes()
+    except pikepdf.PdfError:
+        data = None
+    bbox = stream.get("/BBox")
+    matrix = stream.get("/Matrix")
+    return SelectedAppearance(
+        data=data,
+        bbox=None if bbox is None else _written(bbox, 0, kept),
+        matrix=None if matrix is None else _written(matrix, 0, kept),
+        uses_pattern=_uses_pattern(lambda: stream, page.drawing(stream)),
+    )
+
+
+def _uses_pattern(owner, context: _Context) -> bool | None:
+    """Whether the content `owner()` gives, or a form it draws, sets a pattern colour.
+
+    None where QPDF cannot read one of them.
+    """
+    try:
+        return _pattern_in(owner(), context, 0, {})
+    except MemoryError:
+        raise
+    except Exception:
+        # As in _ParsedStreams.page: PdfError for a filter pikepdf does not
+        # know, TypeError for an operator inside an array or a dictionary, and
+        # any exception a warning filter makes of pikepdf's warnings.
+        return None
+
+
+def _pattern_space(name: pikepdf.Name, context: _Context) -> bool:
+    """Whether cs/CS with `name` selects a Pattern colour space (measured, G2).
+
+    The name /Pattern, or a name whose /ColorSpace resource is /Pattern or an
+    array that starts with /Pattern: PDFium makes up a colour for a fill in
+    such a space even where no pattern is ever set (the review of the G2
+    draft, 2026-10-01).
+    """
+    if bytes(name) == b"/Pattern":
+        return True
+    space, _ = context.lookup("/ColorSpace", name)
+    if isinstance(space, pikepdf.Name):
+        return bytes(space) == b"/Pattern"
+    return (
+        isinstance(space, pikepdf.Array)
+        and len(space) > 0
+        and isinstance(space[0], pikepdf.Name)
+        and bytes(space[0]) == b"/Pattern"
+    )
+
+
+def _pattern_in(owner, context: _Context, depth: int, seen: dict[tuple, bool]) -> bool:
+    """Whether `owner` sets a pattern colour, or a form it draws does, down to 40 levels.
+
+    Names are looked up as PDFium looks them up (_Context); a form is read once
+    for each level and context it is drawn in, as _ParsedStreams counts it.
+    """
+    for operands, operator in pikepdf.parse_content_stream(owner, "Do scn SCN cs CS"):
+        name = operands[-1] if operands else None
+        if not isinstance(name, pikepdf.Name):
+            continue
+        op = str(operator)
+        if op in ("scn", "SCN"):
+            return True
+        if op in ("cs", "CS") and _pattern_space(name, context):
+            return True
+        drawn, _ = context.lookup("/XObject", name)
+        if (
+            isinstance(drawn, pikepdf.Stream)
+            and _subtype_is(drawn.get("/Subtype"), b"Form")
+            and depth < _FORM_DEPTH
+        ):
+            inner = context.drawing(drawn)
+            key = (drawn.objgen, depth + 1, inner.key, inner.fallback_key)
+            if key not in seen:
+                seen[key] = _pattern_in(drawn, inner, depth + 1, seen)
+            if seen[key]:
+                return True
+    return False
 
 
 def _number(value: object) -> float | None:
