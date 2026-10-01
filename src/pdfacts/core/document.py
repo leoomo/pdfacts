@@ -31,6 +31,7 @@ from pdfacts.backends.protocols import (
     FieldTree,
     PageAnnotations,
     PageObject,
+    PageText,
     RawBitmap,
 )
 from pdfacts.backends.qpdf import QpdfDocument, revision_part_follows
@@ -261,6 +262,12 @@ class FeatureAccess:
         pdfium = self._pdfium_ready()
         self._check_forms(index)
         return _pdfium_call(lambda: pdfium.appearance_drawings(index, cap))
+
+    def page_text(self, index: int, cap: int | None) -> PageText:
+        """PDFium's characters of the page's content in content order, `cap` at most."""
+        pdfium = self._pdfium_ready()
+        self._check_forms(index)
+        return _pdfium_call(lambda: pdfium.page_text(index, cap))
 
     def appearances(self, index: int) -> tuple[AnnotationAppearance, ...]:
         """QPDF's /Annots entries with the normal appearance each would draw."""
