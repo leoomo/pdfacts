@@ -46,7 +46,7 @@ src/pdfacts/
                  capabilities, runtime, digest, engines
   backends/      protocols, pdfium, qpdf
   text/          glyphs, layout
-  graphics/      paths, images
+  graphics/      paths, images, reader
   annotations/   model, reader            later: ops, appearance
   forms/         model, reader            later: fill
   inspect/       report, active_content

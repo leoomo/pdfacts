@@ -43,7 +43,7 @@ def test_nothing_is_claimed_that_is_not_implemented():
         Capability.RENDERING,
         Capability.RECOVERY,
         Capability.FORMS,
-    Capability.GRAPHICS,
+        Capability.GRAPHICS,
         Capability.FONT_POLICY_EMBEDDED_ONLY,
     }
 
