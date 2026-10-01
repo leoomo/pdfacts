@@ -225,6 +225,42 @@ class AnnotationView:
     values: Mapping[bytes, tuple[int, str]]
 
 
+@dataclass(frozen=True, slots=True)
+class SelectedAppearance:
+    """The normal appearance QPDF selects for an annotation, as the file writes it."""
+
+    data: bytes | None  # the stream's data decoded; None where QPDF cannot decode it
+    bbox: Written | None  # /BBox; None when absent
+    matrix: Written | None  # /Matrix; None when absent
+    # Whether its content, or a form it draws, sets a pattern colour (scn or
+    # SCN with a name); None where QPDF cannot read that content.
+    uses_pattern: bool | None
+
+
+@dataclass(frozen=True, slots=True)
+class AnnotationAppearance:
+    """One entry of a page's /Annots, with the appearance PDFium would draw for it."""
+
+    annotation: AnnotationEntry
+    rect: Written | None  # /Rect; None when absent or no dictionary
+    flags: Written | None  # /F; None when absent or no dictionary
+    # Selected as PDFium selects it (issue G2): /N when it is a stream; from a
+    # dictionary of states, /AS, else /V, else the /V of /Parent, else /Off.
+    # None when PDFium draws none, or where QPDF cannot tell.
+    appearance: SelectedAppearance | None
+    # Why QPDF cannot tell which appearance PDFium draws, where it cannot;
+    # None otherwise.
+    undecided: str | None
+
+
+class AppearanceReader(Protocol):
+    """Annotation appearances and pattern colours as the file writes them."""
+
+    def appearances(self, index: int) -> tuple[AnnotationAppearance, ...]: ...
+
+    def page_uses_pattern(self, index: int) -> bool | None: ...
+
+
 # PDFium's matrix of an object, composed with those of the forms that hold it:
 # (a, b, c, d, e, f), x' = a*x + c*y + e, y' = b*x + d*y + f.
 Transform = tuple[float, float, float, float, float, float]
