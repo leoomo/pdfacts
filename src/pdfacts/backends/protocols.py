@@ -344,6 +344,73 @@ class DrawingReader(Protocol):
     ) -> tuple[AppearanceDrawing | None, ...]: ...
 
 
+@dataclass(frozen=True, slots=True)
+class TextCharacter:
+    """A character of a page's content as PDFium's text page reads it.
+
+    Each value is None where the PDFium call that gives it returns false, or
+    answers -1 to a question.
+    """
+
+    code: int  # FPDFText_GetUnicode: the character PDFium maps the code to
+    # FPDFText_HasUnicodeMapError: PDFium found no character for the code and
+    # gives the code itself (measured, issue T1).
+    map_error: bool | None
+    # FPDFText_IsHyphen: a hyphen at the end of a line, which PDFium gives as
+    # U+0002 (measured, issue T1).
+    hyphen: bool | None
+    origin: tuple[float, float] | None  # FPDFText_GetCharOrigin, in page space
+    # FPDFText_GetMatrix: the text matrix with the horizontal scaling and the
+    # rise, and the matrices of the content and of the forms that hold the
+    # text; the font size is not in it. Its translation is where the text
+    # object begins, not the character: that is the origin (measured, issue T1).
+    matrix: Transform | None
+    # FPDFText_GetFontSize: the size Tf sets, below 0 where Tf sets it so.
+    # None where the character has no text object: PDFium then gives 1. Text
+    # at size 0 is not on the text page at all (measured, issue T1).
+    font_size: float | None
+    # FPDFText_GetLooseCharBox, in page space: left, bottom, right, top. Along
+    # the baseline, from the nearer of the origin and the ink to the farther of
+    # the advance and the ink; across, the ascent and descent held within the
+    # font's /FontBBox, then reaching as far as the ink. For some characters,
+    # mostly hyphens in fonts the file embeds, the ink box alone (measured,
+    # issue T1). It does not follow from the other values.
+    loose_box: Box | None
+    # FPDFTextObj_GetTextRenderMode of the character's text object: 0 to 7 as
+    # Tr sets it; 3 and 7 paint nothing.
+    render_mode: int | None
+    # FPDFFont_GetAscent and FPDFFont_GetDescent of the text object's font, per
+    # unit of font size; the descent is below 0 where it lies below the
+    # baseline.
+    ascent: float | None
+    descent: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class PageText:
+    """The characters of a page's content, in content order.
+
+    Content order: by text object, as a walk of the page's objects that goes
+    into each form where it is drawn meets them; within one text object, as
+    PDFium's text page gives them. The text page itself puts the text of one
+    line in order of x (measured, issue T1). The characters PDFium adds of
+    its own, spaces and line breaks, are left out (FPDFText_IsGenerated).
+    """
+
+    characters: tuple[TextCharacter, ...]
+    # Set when characters beyond `cap` were left out.
+    stopped: bool
+    # Set when a form lies deeper than PDFium reads forms, 40 levels: whatever
+    # text it would draw is not among the characters (measured, issue T1).
+    too_deep: bool
+
+
+class TextReader(Protocol):
+    """The text an engine that interprets the page reads."""
+
+    def page_text(self, index: int, cap: int | None) -> PageText: ...
+
+
 class AnnotationViewer(Protocol):
     """Annotation dictionaries as an engine that interprets the page reads them."""
 
