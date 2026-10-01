@@ -53,6 +53,7 @@ from pdfacts.graphics.paths import (
 from pdfacts.graphics.reader import images, paths
 from pdfacts.text.glyphs import Glyph
 from pdfacts.text.layout import Line, Word
+from pdfacts.text.reader import glyphs, lines, words
 
 __version__ = "0.0.1"
 
@@ -121,10 +122,13 @@ __all__ = [
     "configure",
     "engine_info",
     "fields",
+    "glyphs",
     "images",
+    "lines",
     "open",
     "paths",
     "recover",
     "require",
     "widgets",
+    "words",
 ]
