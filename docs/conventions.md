@@ -57,11 +57,21 @@ be read, the value is unknown, not 1.
 
 | Box | Definition |
 | --- | --- |
-| advance box | from the origin along the writing direction by the advance width; height from the font's ascent and descent |
+| advance box | along the writing direction, the extent of PDFium's loose box: as a rule from the origin, or from the ink where it begins before, to the end of the advance, or of the ink where it reaches further; for some glyphs, mostly hyphens in fonts the file embeds, the ink alone. Across, from the font's descent to its ascent at the glyph's size |
 | ink box | tight bounds of the glyph outline |
 
 Height from the font's ascent and descent placed the top edge within 0.5 pt of
 the reference for 98.6% of glyphs. The engine's own loose box reached 89.7%.
+
+PDFium gives no advance width that can be relied on, so the advance box takes
+the extent of its loose box along the writing direction (decision of the
+maintainer, 2026-10-01). Asked with the character, `FPDFFont_GetGlyphWidth`
+gives for the characters of an expanded ligature 0, or the width of another
+code, and for a CID font without `/ToUnicode` its default width instead of
+the width `/W` gives; the step from one origin to the next holds the
+character and word spacing and the adjustments of `TJ`. Of 988690 upright
+characters of the corpus that are no space, 79076 have a loose box that ends
+at their ink.
 
 ## Word and line boxes
 
@@ -83,6 +93,72 @@ The raw characters are kept. Normalized text is provided next to them:
 | --- | --- |
 | U+0002 for a hyphen at the end of a line | U+002D, flagged as a line-end hyphen |
 | a ligature expanded into several characters at one origin | kept as one cluster |
+
+## Glyphs, words and lines
+
+A page's glyphs, words and lines are facts in user space, in content order:
+by text object, in the order the page's content draws them, forms where they
+are drawn; within one object, as PDFium's text page gives its characters. The
+characters PDFium adds of its own, spaces and line breaks, are none of them.
+Nothing is clipped: text outside the visible box is given as well.
+
+A glyph is one character of the content, or several one after another at one
+origin, as PDFium gives the characters of a ligature it expanded, an accent
+at its letter, or the two halves of a character beyond U+FFFF. A glyph of
+white space always stands alone: white space is a character Python's
+`str.isspace()` calls so, a space, a tab, a no-break space, a line end and
+the like, of a code PDFium maps. A glyph keeps the raw characters ("Text");
+its values:
+
+| Value | Rule |
+| --- | --- |
+| text | the characters as PDFium maps the codes, U+0002 for a hyphen at the end of a line; unknown where PDFium finds no character for a code, or gives half of a surrogate pair alone |
+| direction | of the glyph matrix, PDFium's matrix scaled by the font size: the angle of its x axis, a font size below 0 turning it half round |
+| size | the font size across the baseline: the glyph matrix's area over its length along the baseline, so that horizontal scaling and shear leave it as it is |
+| box | the advance box ("Glyph boxes"), a quadrilateral: the start of the baseline at the descent, its end at the descent, its end at the ascent, its start at the ascent; of several characters, the extent of all their loose boxes |
+| upright | whether the baseline runs left to right as the page is shown, its rotation applied, within one degree |
+| render mode | 0 to 7 as `Tr` sets it; 3 and 7 paint nothing. Invisible text is given like any other |
+
+The direction, size, render mode and font of a glyph of several characters
+are its first character's; its box holds all their loose boxes along the
+baseline; it is a line-end hyphen where one of them is.
+
+Words and lines are made of the upright glyphs whose box is known; the others,
+white space among them, are passed over: they move no pen and end no word. For each glyph that takes part after the
+first, the step from where the glyph before that took part ended along its
+baseline to this glyph's origin is measured in units of this glyph's size,
+along its baseline and across it:
+
+| Step | Then |
+| --- | --- |
+| across, 0.8 or more either way | a new line begins |
+| along, 0.8 or more forward, or 0.8 or more back | a new line begins |
+| along, from 0.15 up to 0.8 forward | a word ends |
+| along, less than 0.15 forward, or less than 0.8 back | the glyph belongs to the word |
+
+A glyph of white space ends a word and belongs to none; it moves the pen like
+any glyph. A line without a word is none. A word's text is its glyphs' text
+with U+0002 written as "-", the normalized text of "Text"; a line's is its
+words' text with one space between two. Either is unknown where the text of
+one of its glyphs is. A word joins nothing across a line-end hyphen. A word's
+box holds its glyphs' boxes, a line's its words' boxes ("Word and line
+boxes").
+
+Reason: on the corpus, these rules give 97.6 % of the words and 92.8 % of
+the lines of the engine the first consumer uses now, 93.6 % of the lines that
+are upright as shown; the line breaks PDFium adds give 54.8 % of the lines,
+since PDFium joins the text of separate columns on one baseline into one
+line. A step back is no gap: an italic glyph's ink can reach past its
+advance. The thresholds follow the approach of MuPDF's structured text
+(`docs/provenance.md`); each is pinned by a constructed case.
+
+Known to go wrong: a space that `Tw` widens by 0.8 of the size or more begins
+a new line, since PDFium's loose box does not hold `Tw`; so does a space 0.8
+of the size wide or more that stands at the next character's origin, its box
+reaching past it, so that the next step is one back; and letters that `Tc`
+spaces by 0.8 of the size or more each stand on a line of their own. Not
+given: words and lines of text that is not upright, and text in annotation
+appearances.
 
 ## Appearance streams
 
