@@ -76,11 +76,12 @@ installed the font policy. What is there:
 | `gates/compare.py` | compares two or more receipts, prints one table per file and column: identical, differs, missing, error |
 | `gates/m2.py`, `gates/m2_referee.py` | the M2 gate: the widgets and fields of the corpus, against a referee that reads the dictionaries with pikepdf |
 | `gates/m3.py` | the M3 gate: the paths and images of the corpus, read twice, their numbers against PDFium's own |
+| `gates/m4a.py` | the M4a gate: the glyphs, words and lines of the corpus, digested for comparing platforms, their characters against PDFium's own count, and what the rule set leaves out or may get wrong, counted |
 
-The M2 and M3 gates take the same `--commit`, `--out`, `--only` and
-`--corpus` as the M1 gate and refuse a run on the same grounds, but for the
-font policy, which only the M1 gate checks; they run on one machine. The rest
-of this section is about the M1 gate.
+The M2, M3 and M4a gates take the same `--commit`, `--out`, `--only` and
+`--corpus` as the M1 gate and refuse a run on the same grounds; the font
+policy is checked by the M4a gate as well, not by the M2 and M3 gates, which
+run on one machine. The rest of this section is about the M1 gate.
 
 Run the gate on one machine, from the repository root, with the corpus in
 place (`bench/corpus/fetch.py --verify-only` reports `104 files: ok 104`):
