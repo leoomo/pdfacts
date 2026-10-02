@@ -444,6 +444,127 @@ class Renderer(Protocol):
     ) -> RawBitmap: ...
 
 
+class ContentsForm(StrEnum):
+    """How a page writes /Contents."""
+
+    STREAM = "stream"
+    ARRAY = "array"
+    # An array reached through a reference.
+    INDIRECT_ARRAY = "indirect array"
+    # No key, a null, or a reference to an object the file lacks, which is a
+    # null (ISO 32000-2, 7.3.10).
+    ABSENT = "absent"
+    # Anything else: a number, a name, a dictionary.
+    OTHER = "other"
+
+
+@dataclass(frozen=True, slots=True)
+class ContentStreamLength:
+    """A stream of a page's /Contents and the /Length its dictionary writes.
+
+    QPDF, its recovery off as open() reads, reads a stream only where /Length
+    is an integer that leads to endstream; any other it reads as null and
+    warns that it mis-read the object (FileStructure.misread).
+    """
+
+    object_number: int
+    generation: int
+    length: int
+    # /Length is a reference to the integer.
+    length_indirect: bool
+
+
+@dataclass(frozen=True, slots=True)
+class PageContents:
+    """What a page writes in /Contents."""
+
+    form: ContentsForm
+    # The object of an indirect array; None otherwise.
+    array_object: tuple[int, int] | None
+    # The streams /Contents names, in order.
+    streams: tuple[ContentStreamLength, ...]
+    # The entries of the array that are not streams, a null included; 1 for
+    # a /Contents of the form OTHER.
+    others: int
+
+
+@dataclass(frozen=True, slots=True)
+class ObjectCounts:
+    """The objects QPDF reads, and of them each kind."""
+
+    objects: int
+    # Streams other than object and cross-reference streams.
+    streams: int
+    object_streams: int
+    cross_reference_streams: int
+    dictionaries: int
+    arrays: int
+
+
+@dataclass(frozen=True, slots=True)
+class EncryptionEntries:
+    """A file's encryption as QPDF reads it.
+
+    The dictionary's entries as written, None where absent or of another
+    type; QPDF opens no file whose /V, /R or /P is absent or of another type
+    (measured). And what QPDF's security handler makes of them. A handler of
+    /V 1 or 2 names no method: it is RC4 by the standard, and QPDF answers
+    "none".
+    """
+
+    # The bytes of the names; a str saying why where QPDF cannot tell them, a
+    # name with a stray #.
+    filter: bytes | str | None
+    sub_filter: bytes | str | None
+    v: int | None
+    r: int | None
+    # /Length, in bits.
+    length: int | None
+    # True when the key is there and holds anything but an integer.
+    length_invalid: bool
+    p: int | None
+    encrypt_metadata: bool | None
+    # True when the key is there and holds anything but a boolean.
+    encrypt_metadata_invalid: bool
+    # QPDF's: the key's length in bits, and the methods for streams, strings
+    # and embedded files, each "none", "unknown", "rc4", "aes" or "aesv3".
+    key_bits: int
+    stream_method: str
+    string_method: str
+    file_method: str
+    # Whether the password given matched the user's, and whether it matched
+    # the owner's; both where the two passwords are the same.
+    user_password_matched: bool
+    owner_password_matched: bool
+
+
+@dataclass(frozen=True, slots=True)
+class FileStructure:
+    """What the inspection reads of a file's structure, through QPDF."""
+
+    # QPDF warned, reading every object, that it mis-read one (issue #62's
+    # rule). It reads such an object as null, or as something else, and drops
+    # a dictionary's key whose value it reads as null (measured), so a page's
+    # /Contents can look absent; the warning names the object, not what
+    # refers to it.
+    misread: bool
+    # None where `misread`.
+    objects: ObjectCounts | None
+    # None where the file is not encrypted.
+    encryption: EncryptionEntries | None
+    # Each page's /Contents, in page order; None where `misread`, or where
+    # the pages QPDF found are not the objects the file's page tree lists.
+    pages: tuple[PageContents, ...] | None
+    # What QPDF warned of while it read these, in the order it warned.
+    warnings: tuple[str, ...]
+
+
+class StructureReader(Protocol):
+    """What the inspection asks QPDF of a file's structure."""
+
+    def structure(self) -> FileStructure: ...
+
+
 class ObjectReader(Protocol):
     """The objects of the file as they are written."""
 
