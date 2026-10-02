@@ -6,8 +6,10 @@ The only module allowed to import pikepdf.
 from __future__ import annotations
 
 import io
+import json
 import math
 import re
+from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
@@ -20,14 +22,20 @@ from pdfacts.backends.protocols import (
     AnnotationAppearance,
     AnnotationEntry,
     Box,
+    ContentsForm,
+    ContentStreamLength,
+    EncryptionEntries,
     EngineFailure,
     FailureKind,
     FieldEntry,
     FieldNode,
     FieldTree,
+    FileStructure,
     KidEntry,
     Kids,
+    ObjectCounts,
     PageAnnotations,
+    PageContents,
     PageObject,
     RecoveredBytes,
     SelectedAppearance,
@@ -197,7 +205,8 @@ class _Input(io.BytesIO):
 
 
 class QpdfDocument:
-    """A document opened by QPDF with recovery switched off: an ObjectReader.
+    """A document opened by QPDF with recovery switched off: an ObjectReader, an
+    AppearanceReader and a StructureReader.
 
     It holds the native handles; no method returns a pikepdf object. Values are
     reported as the file writes them: nothing is normalized, and whether a
@@ -212,6 +221,7 @@ class QpdfDocument:
     from the view QPDF walked, the values from a view nothing walks. When the
     pages QPDF found are not, index by index, the objects the file's page tree
     lists, no page has values: its object at an index may not be the file's.
+    The structure is read from a third view (structure()).
     """
 
     def __init__(
@@ -222,6 +232,8 @@ class QpdfDocument:
         pages: tuple[tuple[int, int], ...],
         pages_as_written: bool,
         objects_as_written: bool,
+        data: bytes,
+        password: str | None,
     ) -> None:
         # Use open(); this takes documents that are already open.
         self._walked = walked
@@ -239,6 +251,9 @@ class QpdfDocument:
         self._known_warnings: set[str] = set()
         # The numbers of the compressed objects, read once (parsed_streams).
         self._compressed_objects: frozenset[int] | None = None
+        # The input, for the view of structure().
+        self._data = data
+        self._password = password
         self._closed = False
 
     @classmethod
@@ -273,7 +288,16 @@ class QpdfDocument:
             for source in sources:
                 source.close()
             raise
-        return cls(walked, unwalked, sources, pages, pages == as_written, objects_as_written)
+        return cls(
+            walked,
+            unwalked,
+            sources,
+            pages,
+            pages == as_written,
+            objects_as_written,
+            data,
+            password,
+        )
 
     def page_count(self) -> int:
         """The number of pages QPDF found."""
@@ -390,6 +414,62 @@ class QpdfDocument:
                 user_unit=user_unit,
                 user_unit_invalid=user_unit_invalid,
             )
+
+    def structure(self) -> FileStructure:
+        """The file's objects by kind, its encryption and each page's /Contents.
+
+        Read from a view of its own, opened for the call and closed after it,
+        QPDF's recovery off as open() reads. QPDF reads an object it cannot
+        read as written as null and warns, when it reads the object; reading
+        every object in the views the other values come from would change
+        those values (issue #62's rule, _misread). So this view's warnings go
+        into the structure, not into warnings(). Where QPDF warned that it
+        mis-read an object, the counts and the contents are not known. A
+        page's /Contents is read from the page object the file's page tree
+        lists; where the pages QPDF found are not those objects, no page's is
+        known (as page_object()).
+        """
+        self._check_open()
+        sources: list[_Input] = []
+        try:
+            with _translated():
+                pdf = _opened(
+                    self._data,
+                    self._password,
+                    sources,
+                    attempt_recovery=False,
+                    inherit_page_attributes=False,
+                )
+                try:
+                    kinds = Counter(_object_kind(obj) for obj in pdf.objects)
+                    encryption = _encryption_entries(pdf) if pdf.is_encrypted else None
+                    pages = None
+                    if self._pages_as_written:
+                        pages = tuple(
+                            _page_contents(pdf.get_object(objgen)) for objgen in self._pages
+                        )
+                    # Taken after the reading, so that they hold what it raised.
+                    warnings = tuple(str(message) for message in pdf.get_warnings())
+                finally:
+                    pdf.close()
+        finally:
+            for source in sources:
+                source.close()
+        if any(not _countable(message) for message in warnings):
+            return FileStructure(
+                misread=True, objects=None, encryption=encryption, pages=None, warnings=warnings
+            )
+        objects = ObjectCounts(
+            objects=sum(kinds.values()),
+            streams=kinds["stream"],
+            object_streams=kinds["object stream"],
+            cross_reference_streams=kinds["cross-reference stream"],
+            dictionaries=kinds["dictionary"],
+            arrays=kinds["array"],
+        )
+        return FileStructure(
+            misread=False, objects=objects, encryption=encryption, pages=pages, warnings=warnings
+        )
 
     def appearances(self, index: int) -> tuple[AnnotationAppearance, ...]:
         """Each entry of the page's /Annots with the normal appearance PDFium would draw.
@@ -1889,6 +1969,101 @@ def _box(value: object) -> Box | None:
     if x0 is None or y0 is None or x1 is None or y1 is None:
         return None
     return (x0, y0, x1, y1)
+
+
+def _object_kind(obj: object) -> str:
+    if isinstance(obj, pikepdf.Stream):
+        kind = obj.stream_dict.get("/Type")
+        if kind == pikepdf.Name.ObjStm:
+            return "object stream"
+        if kind == pikepdf.Name.XRef:
+            return "cross-reference stream"
+        return "stream"
+    if isinstance(obj, pikepdf.Dictionary):
+        return "dictionary"
+    if isinstance(obj, pikepdf.Array):
+        return "array"
+    return "other"
+
+
+# An indirect reference as QPDF writes one in JSON.
+_REFERENCE = re.compile(r"\d+ \d+ R")
+
+
+def _page_contents(page: pikepdf.Object) -> PageContents:
+    """What the page writes in /Contents; pikepdf hands out a null as None."""
+    value = page.get("/Contents")
+    if value is None:
+        return PageContents(form=ContentsForm.ABSENT, array_object=None, streams=(), others=0)
+    if isinstance(value, pikepdf.Stream):
+        return PageContents(
+            form=ContentsForm.STREAM, array_object=None, streams=(_stream_length(value),), others=0
+        )
+    if isinstance(value, pikepdf.Array):
+        streams = tuple(_stream_length(item) for item in value if isinstance(item, pikepdf.Stream))
+        if value.is_indirect:
+            form = ContentsForm.INDIRECT_ARRAY
+            array_object = (int(value.objgen[0]), int(value.objgen[1]))
+        else:
+            form, array_object = ContentsForm.ARRAY, None
+        others = len(value) - len(streams)
+        return PageContents(form=form, array_object=array_object, streams=streams, others=others)
+    return PageContents(form=ContentsForm.OTHER, array_object=None, streams=(), others=1)
+
+
+def _stream_length(stream: pikepdf.Stream) -> ContentStreamLength:
+    """The /Length the stream's dictionary writes. pikepdf resolves a
+    reference before it hands out the value; QPDF's JSON of the dictionary
+    still names it."""
+    length = _integer(stream.stream_dict.get("/Length"))
+    if length is None:
+        # QPDF reads no such stream (ContentStreamLength, measured); should it
+        # ever, no length is made up.
+        raise EngineFailure(FailureKind.OTHER, "QPDF read a stream whose /Length is no integer")
+    written = json.loads(stream.stream_dict.to_json()).get("/Length")
+    return ContentStreamLength(
+        object_number=int(stream.objgen[0]),
+        generation=int(stream.objgen[1]),
+        length=length,
+        length_indirect=isinstance(written, str) and _REFERENCE.fullmatch(written) is not None,
+    )
+
+
+def _encryption_entries(pdf: pikepdf.Pdf) -> EncryptionEntries:
+    """The encryption dictionary as written, and QPDF's security handler."""
+    info = pdf.encryption
+    found = pdf.trailer.get("/Encrypt")
+    dictionary = found if isinstance(found, pikepdf.Dictionary) else pikepdf.Dictionary()
+    length = dictionary.get("/Length")
+    metadata = dictionary.get("/EncryptMetadata")
+    return EncryptionEntries(
+        filter=_name_entry(dictionary.get("/Filter"), "/Filter"),
+        sub_filter=_name_entry(dictionary.get("/SubFilter"), "/SubFilter"),
+        v=_integer(dictionary.get("/V")),
+        r=_integer(dictionary.get("/R")),
+        length=_integer(length),
+        length_invalid=length is not None and _integer(length) is None,
+        p=_integer(dictionary.get("/P")),
+        encrypt_metadata=metadata if isinstance(metadata, bool) else None,
+        encrypt_metadata_invalid=metadata is not None and not isinstance(metadata, bool),
+        key_bits=int(info.bits),
+        stream_method=info.stream_method.name,
+        string_method=info.string_method.name,
+        file_method=info.file_method.name,
+        user_password_matched=bool(pdf.user_password_matched),
+        owner_password_matched=bool(pdf.owner_password_matched),
+    )
+
+
+def _name_entry(value: object, key: str) -> bytes | str | None:
+    """The bytes of a name; None for anything else; a str where QPDF cannot
+    tell its bytes, a name with a stray # (as _state_text)."""
+    if not isinstance(value, pikepdf.Name):
+        return None
+    try:
+        return _name_bytes(value)
+    except ValueError:
+        return f"{key} is a name QPDF cannot read"
 
 
 def _integer(value: object) -> int | None:
