@@ -8,13 +8,13 @@ follow the approach of MuPDF's structured text, recalled, not copied
 
 from __future__ import annotations
 
-import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
 from pdfacts.core.geometry import Point, Rect
 from pdfacts.core.refs import _is_int
 from pdfacts.core.values import Unknown
+from pdfacts.text.angles import unit_of
 from pdfacts.text.glyphs import Glyph, _text
 
 # In units of the glyph's size: a gap forward from SPACE on ends a word; a step
@@ -109,8 +109,7 @@ def words_and_lines(
             continue
         assert not isinstance(glyph.origin, Unknown)
         assert not isinstance(glyph.size, Unknown) and not isinstance(glyph.direction, Unknown)
-        ux = math.cos(math.radians(glyph.direction))
-        uy = math.sin(math.radians(glyph.direction))
+        ux, uy = unit_of(glyph.direction)
         if pen is None:
             lines.append([[]])
         else:

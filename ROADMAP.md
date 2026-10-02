@@ -13,7 +13,7 @@ with form fields, later for documents without.
 | 2 | M1 | documents, geometry, determinism, test and gate tooling | done 2026-09-29 |
 | 3 | M2 | forms: fields and widgets | done 2026-09-30 |
 | 4 | M3 | paths and images | done 2026-10-01 |
-| 5 | M4a | text, first level | planned |
+| 5 | M4a | text, first level | done 2026-10-02 |
 | 6 | M5a | inspection, repair and decryption | planned |
 | 7 | M6 | the first consumer switches for documents with form fields; version 1.0 | planned |
 | 8 | M4b | text probe, then text in full | planned |
@@ -144,6 +144,8 @@ Gate
   platforms
 - what the rule set is known to get wrong is listed in
   [docs/capabilities.md](docs/capabilities.md), with counts from the corpus
+
+Recorded results are in [docs/capabilities.md](docs/capabilities.md).
 
 ## M5a Inspection, repair and decryption
 
