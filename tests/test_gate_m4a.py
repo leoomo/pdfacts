@@ -12,6 +12,7 @@ import csv
 import dataclasses
 import hashlib
 import json
+import math
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -441,3 +442,16 @@ def test_16_one_file_that_fails_fails_the_run(failing):
     }[failing]
     assert m4a.exit_status({"errors": {}, "files": {"a.pdf": good, "b.pdf": good}}) == 0
     assert m4a.exit_status({"errors": {}, "files": {"a.pdf": good, "b.pdf": bad}}) == 1
+
+
+def test_17_the_gate_takes_none_of_the_c_librarys_trigonometry(monkeypatch):
+    """The gate measures the steps as words and lines are made, with the
+    vector along the baseline that pdfacts computes."""
+    before = m4a.read_file(written())
+
+    def fails(*arguments):
+        raise AssertionError("the C library's trigonometry was taken")
+
+    for name in ("atan", "atan2", "sin", "cos", "tan"):
+        monkeypatch.setattr(math, name, fails)
+    assert m4a.read_file(written()) == before
