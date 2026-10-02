@@ -584,6 +584,11 @@ The library checks what it can check between two engine calls:
 | pixels of one rendering | before the engine is called |
 | content streams PDFium parses for one page | before PDFium loads the page, for its geometry, a rendering or its annotations |
 
+The number of objects `max_objects` checks is the larger of the trailer's
+`/Size` and the number of objects QPDF's cross-reference holds: QPDF reads any
+of these whatever `/Size` says, with a warning where `/Size` is not one more
+than the highest object number (measured).
+
 Time and memory cannot be enforced from inside a running engine call. They are
 the caller's responsibility; a separate process per document is the
 recommended way.
@@ -632,7 +637,15 @@ a broken hex string (measured, 2026-10-01) — or the two engines read an
 object differently, the entry of an object stream whose body is a stream
 object, which QPDF reads as a dictionary and PDFium parses as a stream
 (measured, 2026-10-01), a set limit makes `open()` or the page fail with
-`LimitUncheckedError`. The warnings that name no object and no offset stay
+`LimitUncheckedError`. QPDF warns of an object it mis-read only when it reads
+it, and its warnings gather as it reads the file, so a page that could be
+counted at first can be refused once another page was read, as a colour can
+become unknown ("Paths and images"). Reading every object when the file is
+opened would end that, but it costs time and memory with the size of every
+object once decoded, many times that size (measured, 2026-10-02: a 4 MB array
+takes about 270 MB more), and the objects of an object stream may be
+compressed, so that `max_bytes` does not bound it; so QPDF reads what the
+pages read. The warnings that name no object and no offset stay
 countable — the page-tree repairs of the walked view, the recoveries of a
 content stream — and the corpus gives none of the refusing ones at all. The count reads
 every entry of the page's `/Annots`, also where `max_items_per_page` would
