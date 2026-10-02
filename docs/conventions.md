@@ -177,14 +177,17 @@ advance. The thresholds follow the approach of MuPDF's structured text
 Known to go wrong: a space that `Tw` widens by 0.8 of the size or more begins
 a new line, since PDFium's loose box does not hold `Tw`; so does a space 0.8
 of the size wide or more that stands at the next character's origin, its box
-reaching past it, so that the next step is one back; and letters that `Tc`
-spaces by 0.8 of the size or more each stand on a line of their own. Text
+reaching past it, so that the next step is one back; letters that `Tc` spaces
+by 0.8 of the size or more each stand on a line of their own; so do words
+that a `TJ` spaces 0.8 of the size or more apart, as justified text may, for
+a `TJ` sets columns apart the same way; and a run of spaces, which PDFium
+gives as one character at the first one's origin, leaves the width of the
+others as a gap, and a gap of 0.8 of the size or more begins a new line. Text
 drawn again where PDFium leaves it out is lost, though drawn on purpose: two
 lines of the same ten characters 7 apart at size 10 come out as one; and text
 drawn invisible under the same text drawn visibly gives that text render mode
-3. Not
-given: words and lines of text that is not upright, and text in annotation
-appearances.
+3. Not given: words and lines of text that is not upright, and text in
+annotation appearances.
 
 ## Appearance streams
 

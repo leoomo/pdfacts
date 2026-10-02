@@ -73,7 +73,7 @@ installed the font policy. What is there:
 | --- | --- |
 | `digest.py` | SHA-256 over int, float and str values; the module states the encoding |
 | `gates/m1.py` | reads the corpus and writes one receipt: per file a geometry digest, a glyph digest, counts, warnings |
-| `gates/compare.py` | compares two or more receipts, prints one table per file and column: identical, differs, missing, error |
+| `gates/compare.py` | compares two or more receipts of one gate, the M1 or the M4a gate, prints one table per file and column: identical, differs, missing, error |
 | `gates/m2.py`, `gates/m2_referee.py` | the M2 gate: the widgets and fields of the corpus, against a referee that reads the dictionaries with pikepdf |
 | `gates/m3.py` | the M3 gate: the paths and images of the corpus, read twice, their numbers against PDFium's own |
 | `gates/m4a.py` | the M4a gate: the glyphs, words and lines of the corpus, digested for comparing platforms, their characters against PDFium's own count, and what the rule set leaves out or may get wrong, counted |
@@ -81,7 +81,8 @@ installed the font policy. What is there:
 The M2, M3 and M4a gates take the same `--commit`, `--out`, `--only` and
 `--corpus` as the M1 gate and refuse a run on the same grounds; the font
 policy is checked by the M4a gate as well, not by the M2 and M3 gates, which
-run on one machine. The rest of this section is about the M1 gate.
+run on one machine. The rest of this section is about the M1 gate; the M4a
+gate runs on three platforms and is compared the same way.
 
 Run the gate on one machine, from the repository root, with the corpus in
 place (`bench/corpus/fetch.py --verify-only` reports `104 files: ok 104`):
@@ -114,17 +115,17 @@ never a warning text.
 ### The run on three platforms
 
 ```bash
-python3 bench/gates/run.py
+python3 bench/gates/run.py m1
 ```
 
-`run.py` runs the gate on macOS natively (in a fresh copy of the working
-tree) and in the Linux arm64 and Linux x86_64 containers of `tools/checks.py`,
-all three over the same snapshot of the tree. It refuses to run while the
-working tree has uncommitted changes, and when
-`bench/corpus/fetch.py --verify-only` does not report `104 files: ok 104`.
-The corpus is not part of the snapshot: each run places it from a read-only
-source with `fetch.py --from`, which checks every hash. A platform that fails
-leaves no receipt of an earlier run behind.
+`run.py` takes the gate, `m1` or `m4a`, and runs `bench/gates/<gate>.py` on
+macOS natively (in a fresh copy of the working tree) and in the Linux arm64
+and Linux x86_64 containers of `tools/checks.py`, all three over the same
+snapshot of the tree. It refuses to run while the working tree has uncommitted
+changes, and when `bench/corpus/fetch.py --verify-only` does not report
+`104 files: ok 104`. The corpus is not part of the snapshot: each run places
+it from a read-only source with `fetch.py --from`, which checks every hash. A
+platform that fails leaves no receipt of an earlier run behind.
 
 The three receipts go to `bench/out/`, named `m1-darwin-arm64.json`,
 `m1-linux-arm64.json` and `m1-linux-amd64.json` on this machine. A full run
@@ -138,6 +139,19 @@ uv run python bench/gates/compare.py bench/out/m1-darwin-arm64.json bench/out/m1
 
 `run.py` does not compare the receipts itself; that is the next step, and its
 exit status says whether every file was identical on every platform.
+
+Each receipt names its gate, and `compare.py` compares the receipts of one
+gate only: a receipt of another gate, or one that names none, is refused.
+For the M4a gate, `python3 bench/gates/run.py m4a` writes
+`m4a-darwin-arm64.json`, `m4a-linux-arm64.json` and `m4a-linux-amd64.json`,
+and the comparison has a column for each of the glyph, the word and the line
+digests, and one for the tallies: the unknown values, what is not given or
+left out, the new lines inside one text object, the pages whose characters
+differ from PDFium's and the pages not compared:
+
+```bash
+uv run python bench/gates/compare.py bench/out/m4a-darwin-arm64.json bench/out/m4a-linux-arm64.json bench/out/m4a-linux-amd64.json
+```
 
 ## Comparison with other libraries
 
