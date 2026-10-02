@@ -255,6 +255,13 @@ may break callers.
 - "Object identity" said the page-to-object mapping held for all 7935
   widgets in the corpus; the corpus has 7934 (7935 was the first
   measurement, on 109 files, five of them test files).
+- A glyph's direction came from the C library's `atan2`, in radians turned
+  into degrees: on the corpus it gave one glyph a direction on macOS that
+  differed in its last bit from the one on Linux, and two glyphs on every
+  platform a direction one bit off the angle of its unit vector along the
+  baseline, rounded once. Words and lines took the vector along the baseline
+  from the C library's `sin` and `cos`. Both are now computed in decimal
+  arithmetic and rounded once, the same on every platform.
 
 ## 0.0.1
 

@@ -45,7 +45,7 @@ src/pdfacts/
   core/          document, geometry, refs, errors, limits,
                  capabilities, runtime, digest, engines
   backends/      protocols, pdfium, qpdf
-  text/          glyphs, layout, reader
+  text/          angles, glyphs, layout, reader
   graphics/      paths, images, reader
   annotations/   model, reader            later: ops, appearance
   forms/         model, reader            later: fill
