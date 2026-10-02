@@ -576,6 +576,10 @@ class ObjectReader(Protocol):
         """Whether each compressed object is named once in its stream, at its index."""
         ...
 
+    def cross_reference_count(self) -> int:
+        """The objects the cross-reference holds, which QPDF reads whatever /Size says."""
+        ...
+
     def annotation_count(self, index: int) -> int | None:
         """The number of entries of the page's /Annots; None when it is no array."""
         ...

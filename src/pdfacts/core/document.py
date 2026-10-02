@@ -631,9 +631,14 @@ def open(
                     raise LimitUncheckedError(
                         limit="max_objects", allowed=limits.max_objects, reason=object_count
                     )
-                if object_count > limits.max_objects:
+                # QPDF reads any object its cross-reference holds, whatever
+                # /Size says; the larger of the two is checked. The count is a
+                # number only where QPDF opened the file (_object_count).
+                assert qpdf is not None
+                found = max(object_count, _qpdf_call(qpdf.cross_reference_count))
+                if found > limits.max_objects:
                     raise LimitExceededError(
-                        limit="max_objects", allowed=limits.max_objects, found=object_count
+                        limit="max_objects", allowed=limits.max_objects, found=found
                     )
             if limits.max_forms_per_page is not None and qpdf_unknown is not None:
                 # QPDF counts what PDFium parses for a page; without it no

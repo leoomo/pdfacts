@@ -127,6 +127,10 @@ may break callers.
 - The repository uses no hosted continuous integration. The checks of every
   change run on the development machine: natively on macOS, and in containers
   for Linux arm64 and Linux x86_64.
+- `max_objects` is compared with the larger of the trailer's `/Size` and the
+  number of objects QPDF's cross-reference holds, which QPDF reads whatever
+  `/Size` says: a file whose `/Size` is too small no longer passes.
+  `Document.object_count` is still `/Size`.
 
 ### Conventions
 
@@ -242,6 +246,11 @@ may break callers.
   a run of spaces that PDFium gives as one character, where the gap the
   others leave is 0.8 of the size or more (decision of the maintainer,
   2026-10-02).
+- "Limits": the number of objects `max_objects` checks counts the objects of
+  the cross-reference too; a page's count for `max_forms_per_page` can be
+  refused once another page was read, as a colour can become unknown, since
+  QPDF warns of an object it mis-read only when it reads it (decisions of the
+  maintainer, 2026-10-02).
 
 ### Corrected
 

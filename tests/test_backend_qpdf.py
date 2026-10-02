@@ -745,6 +745,7 @@ def test_it_implements_the_object_reader():
         "page_count",
         "object_count",
         "objects_as_written",
+        "cross_reference_count",
         "page_object",
         "parsed_streams",
         "warnings",

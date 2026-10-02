@@ -19,8 +19,10 @@ class Limits:
     max_bytes: int | None = None
     # The page count; checked as soon as PDFium has opened the file.
     max_pages: int | None = None
-    # The object count from the trailer; checked as soon as QPDF has opened
-    # the file. When the count is unknown, open() raises LimitUncheckedError.
+    # The object count: the trailer's /Size, or the number of objects QPDF's
+    # cross-reference holds where that is larger, since QPDF reads any of
+    # them whatever /Size says; checked as soon as QPDF has opened the file.
+    # When the count is unknown, open() raises LimitUncheckedError.
     max_objects: int | None = None
     # Seconds from the start of open() or recover(). open() checks it before
     # each page is read; recover() once the file is rebuilt and once the
