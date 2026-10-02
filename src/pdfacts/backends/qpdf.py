@@ -10,7 +10,7 @@ import json
 import math
 import re
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
 from decimal import Decimal
@@ -232,6 +232,7 @@ class QpdfDocument:
         pages: tuple[tuple[int, int], ...],
         pages_as_written: bool,
         objects_as_written: bool,
+        cross_reference: int,
         data: bytes,
         password: str | None,
     ) -> None:
@@ -244,6 +245,7 @@ class QpdfDocument:
         self._pages = pages
         self._pages_as_written = pages_as_written
         self._objects_as_written = objects_as_written
+        self._cross_reference = cross_reference
         # Plain data kept so that shared objects convert once (issue #36).
         self._kept = _Kept()
         self._warnings: list[str] = []
@@ -278,7 +280,8 @@ class QpdfDocument:
                 # from the start.
                 pages = tuple(page.obj.objgen for page in walked.pages)
                 as_written = _page_objects_as_written(unwalked)
-                objects_as_written = _objects_as_written(unwalked)
+                table = unwalked.get_xref_table()
+                objects_as_written = _objects_as_written(unwalked, table)
         except BaseException:
             for view in views:
                 # The first exception is the one to report. MemoryError is
@@ -295,6 +298,7 @@ class QpdfDocument:
             pages,
             pages == as_written,
             objects_as_written,
+            len(table),
             data,
             password,
         )
@@ -320,6 +324,15 @@ class QpdfDocument:
         """Whether each compressed object is named once in its object stream, at its index."""
         self._check_open()
         return self._objects_as_written
+
+    def cross_reference_count(self) -> int:
+        """The objects QPDF's cross-reference holds, in use or in an object stream.
+
+        QPDF reads any of them that is asked for, whatever the trailer's /Size
+        says: a /Size below their number gives a warning only (measured).
+        """
+        self._check_open()
+        return self._cross_reference
 
     def annotation_count(self, index: int) -> int | None:
         """The number of entries of the page's /Annots; None when it is no array."""
@@ -598,11 +611,14 @@ class QpdfDocument:
                 if message not in self._known_warnings:
                     self._warnings.append(message)
                     self._known_warnings.add(message)
-            # QPDF parses eagerly: a warning about an object it mis-read can
-            # sit in the collected warnings before this count begins, and one
-            # such object anywhere in the document leaves no page countable —
-            # what PDFium makes of the same bytes may be more (measured,
-            # 2026-10-01: a name with a #00). The corpus gives no warning.
+            # QPDF warns of an object it mis-read when it reads it (measured,
+            # #83): such a warning can sit in the collected warnings, from what
+            # was read before, before this count begins, and one such object
+            # read anywhere in the document leaves no page countable — what
+            # PDFium makes of the same bytes may be more (measured,
+            # 2026-10-01: a name with a #00). So a page counted at first can be
+            # refused once another page was read (docs/conventions.md,
+            # "Limits"). The corpus gives no warning.
             if any(not _countable(message) for message in (*fresh, *self._warnings)):
                 return None
             return found
@@ -994,8 +1010,12 @@ def _page_objects_as_written(pdf: pikepdf.Pdf) -> tuple[tuple[int, int] | None, 
     return tuple(pages)
 
 
-def _objects_as_written(pdf: pikepdf.Pdf) -> bool:
+def _objects_as_written(
+    pdf: pikepdf.Pdf, table: Mapping[tuple[int, int], pikepdf.XrefEntry]
+) -> bool:
     """Whether each compressed object is named once in its object stream, at its index.
+
+    `table` is the view's cross-reference, as pikepdf gives it.
 
     The cross-reference gives a compressed object as an object stream and an
     index. QPDF finds the object by the number in the stream's header and
@@ -1004,7 +1024,7 @@ def _objects_as_written(pdf: pikepdf.Pdf) -> bool:
     index and names no number twice.
     """
     headers: dict[int, list[int]] = {}
-    for (number, _), entry in pdf.get_xref_table().items():
+    for (number, _), entry in table.items():
         if entry.type != 2:
             continue
         header = headers.get(entry.obj_stream_number)
