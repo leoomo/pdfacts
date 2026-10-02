@@ -1,6 +1,6 @@
 # Architecture
 
-Status: design; M3 is done. The package layout below is the target, not
+Status: design; M4a is done. The package layout below is the target, not
 a list of what exists.
 
 ## Layers
@@ -45,7 +45,7 @@ src/pdfacts/
   core/          document, geometry, refs, errors, limits,
                  capabilities, runtime, digest, engines
   backends/      protocols, pdfium, qpdf
-  text/          glyphs, layout, reader
+  text/          angles, glyphs, layout, reader
   graphics/      paths, images, reader
   annotations/   model, reader            later: ops, appearance
   forms/         model, reader            later: fill

@@ -26,7 +26,6 @@ import csv
 import ctypes
 import hashlib
 import json
-import math
 import platform
 import re
 import sys
@@ -44,6 +43,7 @@ import pdfacts
 from pdfacts import Glyph, Line, Point, Quad, Rect, Unknown, Word
 from pdfacts.core import runtime
 from pdfacts.core.engines import engine_info
+from pdfacts.text.angles import unit_of
 from pdfacts.text.layout import LINE
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -261,8 +261,7 @@ def breaks(found: tuple[Glyph, ...], owner: dict[int, int]) -> Counter[str]:
             continue
         assert not isinstance(glyph.origin, Unknown)
         assert not isinstance(glyph.direction, Unknown) and not isinstance(glyph.size, Unknown)
-        ux = math.cos(math.radians(glyph.direction))
-        uy = math.sin(math.radians(glyph.direction))
+        ux, uy = unit_of(glyph.direction)
         if before is not None and owner[before.ref.glyph_index] == owner[glyph.ref.glyph_index]:
             dx, dy = glyph.origin.x - pen[0], glyph.origin.y - pen[1]
             along = (dx * ux + dy * uy) / glyph.size

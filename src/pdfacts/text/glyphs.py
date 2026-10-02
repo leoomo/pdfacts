@@ -15,6 +15,7 @@ from pdfacts.backends.protocols import TextCharacter
 from pdfacts.core.geometry import Point, Quad, _finite_float
 from pdfacts.core.refs import GlyphRef, _is_int
 from pdfacts.core.values import Unknown, UnknownReason
+from pdfacts.text.angles import degrees_of
 
 # The baseline of an upright glyph runs left to right as the page is shown,
 # within this many degrees.
@@ -198,10 +199,7 @@ def _frame(
         why = Unknown(_UNREADABLE, "the glyph matrix has no extent")
         return why, why, why
     unit = (sign * a / length, sign * b / length)
-    direction = math.degrees(math.atan2(unit[1], unit[0])) % 360
-    if direction >= 360:  # a tiny negative angle comes back as 360
-        direction = 0.0
-    return direction, abs(character.font_size) * area / length, unit
+    return degrees_of(*unit), abs(character.font_size) * area / length, unit
 
 
 def _box(
