@@ -143,9 +143,9 @@ Gate
 - glyph, word and line facts of every corpus file are identical on three
   platforms
 - what the rule set is known to get wrong is listed in
+  [docs/capabilities.md](docs/capabilities.md), with counts from the corpus
 
 Recorded results are in [docs/capabilities.md](docs/capabilities.md).
-  [docs/capabilities.md](docs/capabilities.md), with counts from the corpus
 
 ## M5a Inspection, repair and decryption
 
