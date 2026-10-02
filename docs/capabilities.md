@@ -23,6 +23,7 @@ on. Three states are used throughout:
 | Rendering a page or a region (`RENDERING`) | proven | `tests/test_render.py`; the first pages of five corpus files gave the same bytes on macOS arm64, Linux arm64 and Linux x86_64 |
 | Form fields and widgets (`FORMS`) | proven | `tests/test_forms.py`; on the corpus, 7934 widgets in 75 files with the run-time check passing on all of them, and 6960 terminal fields in 75 files; the M2 gate |
 | Paths and images (`GRAPHICS`) | proven | `tests/test_graphics_reader.py`, `tests/test_graphics_shapes.py`, `tests/test_graphics_cases.py`; on the corpus, 63472 paths and 1884 images on 467 pages, their numbers equal to PDFium's own for every page's content and every annotation's appearance; the M3 gate |
+| Text: glyphs, words and lines (`TEXT`) | proven | `tests/test_text_rules.py`, `tests/test_text_reader.py`, `tests/test_text_cases.py`, `tests/test_text_angles.py`; on the corpus, 1103908 glyphs, 154208 words and 32496 lines on 467 pages, the glyphs holding PDFium's characters in 104 of 104 files, every value identical on macOS arm64, Linux arm64 and Linux x86_64; the M4a gate |
 | Recovering a damaged file (`RECOVERY`) | proven | `tests/test_recovery.py`. Every corpus file with its end damaged six ways (`%%EOF` removed, its last byte cut, cut right after the offset of its last `startxref`, junk, Ctrl-Z or a vertical tab appended) recovered with the geometry of the original. The 32 files with an incremental update, cut 200 bytes into it: 30 refused as ending inside an update; two updates were shorter. Five corpus forms cut at 70 % and 95 %: one of the ten recovered, with the geometry and the form fields of the original; two refused as ending inside an update; seven refused, QPDF finding no `/Kids` in the root of the page tree. All five keep objects in object streams |
 | Everything else | planned | [ROADMAP.md](../ROADMAP.md) |
 
@@ -164,6 +165,93 @@ The tests ran with `python3 tools/checks.py --all` on `24caf1e`, the commit
 the gate ran on: 2053 tests on macOS arm64, and 2052 on Linux arm64 and on
 Linux x86_64, where one test that needs macOS is skipped. The commit that
 records the run changes documents only.
+
+## Milestone M4a: gate
+
+Run on 2026-10-02 with `bench/gates/run.py m4a` on commit
+`f36993a2c4c3898b2b30ffbdfa4bf9fed5c09951`, over the 104 files of
+`bench/corpus/manifest.csv`: the glyphs, words and lines of every page read
+through `pdfacts.glyphs`, `pdfacts.words` and `pdfacts.lines` after the
+runtime installed the font policy, every value of every fact put into a
+digest of each, and the characters the glyphs hold compared with PDFium's
+own, read with pypdfium2 apart from pdfacts. Every platform reported
+pypdfium2 5.13.0, PDFium 153.0.7999.0, pikepdf 10.14.0, QPDF 12.4.1 and the
+font policy embedded-only.
+
+| Platform | `uname -m` | Python | Files read | Pages | Glyphs | Words | Lines | Seconds |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| macOS arm64, natively | arm64 | 3.13.5 | 104 | 467 | 1103908 | 154208 | 32496 | 74.7 |
+| Linux arm64, container `python:3.13.5-slim` | aarch64 | 3.13.5 | 104 | 467 | 1103908 | 154208 | 32496 | 88.3 |
+| Linux x86_64, container `python:3.13.5-slim`, emulated on an arm64 host | x86_64 | 3.13.5 | 104 | 467 | 1103908 | 154208 | 32496 | 178.3 |
+
+| Compared on all three platforms | Files identical |
+| --- | --- |
+| glyphs, every value of every glyph | 104 of 104 |
+| words | 104 of 104 |
+| lines | 104 of 104 |
+| the gate's tallies | 104 of 104 |
+
+The gate printed these lines on every platform:
+
+```
+104 files, 467 pages: 1103908 glyphs, 154208 words, 32496 lines
+unknown: none
+not given: glyphs not upright 2522 in 37 files, annotations with text in their appearance 48 in 19 files
+left out by PDFium as drawn again: text objects 49 in 1 files, over invisible text 0 in 0 files
+new lines inside one text object: after white space, forward 656 in 29 files, back 8 in 2 files; after another glyph, forward 280 in 11 files, back 0 in 0 files
+PDFium's own count of characters: equal in 104 of 104 files; not compared: 0 pages
+```
+
+No file failed. On every page the glyphs hold PDFium's characters one after
+another, and none is left over; no value of a glyph is unknown. Seconds are
+the time the gate script took to read the corpus.
+
+A run on three platforms before (#78) found one glyph whose direction
+differed in its last bit between macOS and Linux: it came from the C
+library's `atan2`. Since then a glyph's direction, and the vector along it
+that words and lines take, are computed in decimal arithmetic and rounded
+once, the same on every platform; with that, the directions of two other
+glyphs changed by a bit on every platform, and no word or line changed.
+
+### What the rule set is known to get wrong, counted on the corpus
+
+The kinds are those that "Glyphs, words and lines" in
+`docs/conventions.md` names under "Known to go wrong" and "Not given". The
+new lines are counted where they begin inside one text object, PDFium's, one
+for each operator that shows text, which draws one run along one baseline. The gate does not tell a line split wrongly
+from a column set apart rightly, so each count of new lines is the most that
+can be wrong inside one text object; new lines between two text objects are
+not counted.
+
+| Known to go wrong, or not given | Counted on the corpus |
+| --- | --- |
+| a space that `Tw` widens by 0.8 of the size or more; a run of spaces PDFium gives as one character, with a gap as wide after it; words a `TJ` spaces as far apart after a space | new lines inside one text object after white space, forward: 656 in 29 files |
+| a space 0.8 of the size wide or more at the next character's origin | new lines inside one text object after white space, back: 8 in 2 files |
+| letters that `Tc` spaces by 0.8 of the size or more; words a `TJ` spaces as far apart | new lines inside one text object after another glyph, forward: 280 in 11 files; after another glyph, back: none |
+| text drawn again where PDFium leaves it out | 49 text objects that paint, in 1 file, none of them over invisible text. Characters left out of a text object that keeps others are not counted: PDFium gives no count of a text object's characters |
+| not given: words and lines of text that is not upright | 2522 glyphs in 37 files |
+| not given: text in annotation appearances | 48 annotations in 19 files |
+
+What makes the gaps was measured with the scripts of #76 (third comment).
+With every `Tw` set to 0, 579 of the 656 new lines after white space,
+forward, remain; with the numbers of every `TJ` dropped, 551; with `Tw` and
+`Tc` at 0 and the numbers of `TJ` dropped, 366. 298 of the 656 gaps are a
+whole number of the white space's width. Of the 280 new lines after another
+glyph, forward, 1 remains with the numbers of every `TJ` dropped. Looked at
+by eye, these lines hold words of justified paragraphs, and fields and
+columns of forms set apart.
+
+| Part of the gate in `ROADMAP.md` | Shown by |
+| --- | --- |
+| constructed cases pin every rule of the rule set | `tests/test_text_rules.py`, every rule and threshold of "Glyphs, words and lines" on characters given directly. `tests/test_text_cases.py`, `test_what_every_text_case_holds` over the 31 cases of `cases.TEXT`, each drawn by a content stream and read through PDFium: PDFium's own space, content order, a ligature, a line-end hyphen; a gap of 0.1375 and of 0.15, of 0.7875 and of 0.8; a step back of 0.7875 and of 0.8; a baseline 0.7875 up and down, and 0.8 up and down; a step along and a step across in units of the later glyph's size; a space that ends a word and moves the pen; horizontal scaling; a glyph not upright passed over; upright within one degree and as the page is shown; invisible text; a line of white space alone; text off the page; and what is known to go wrong, with what is right beside it: a space `Tw` widens by 0.9 and by 0.7, a wide space at the next origin, letters `Tc` spaces by 0.8 and by 0.7, words a `TJ` spaces by 0.8, a run of spaces |
+| checked apart from pdfacts | `test_the_ink_lies_in_the_words`: in 26 of the cases every glyph that paints is in a word; rendered by PDFium, every dark pixel lies in a word's box, within a pixel, and every word's box holds one |
+| glyph, word and line facts of every corpus file identical on three platforms | the run above: 104 of 104 files for glyphs, words and lines, and for the gate's counts; `tests/test_text_angles.py` for the angles, worked out apart from pdfacts with exact rational arithmetic |
+| what the rule set is known to get wrong, listed with counts from the corpus | the table above |
+
+The tests ran with `python3 tools/checks.py --all` on `f36993a`, the commit
+the gate ran on: 2376 tests on macOS arm64, and 2375 on Linux arm64
+and on Linux x86_64, where one test that needs macOS is skipped. The commit
+that records the run changes documents only.
 
 ## What the engines provide
 
