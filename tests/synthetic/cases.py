@@ -1062,3 +1062,276 @@ GRAPHICS: dict[str, Callable[[], Drawing]] = {
     "an image in an appearance": an_image_in_an_appearance,
     "paths and images in drawing order": paths_and_images_in_drawing_order,
 }
+
+
+# --- The text a page holds (the M4a gate) ----------------------------------------
+#
+# Each case is a page of 400 x 300 and the text it holds, as written. Font /F1
+# is 1000 thousandths wide for every character, ascent 800, descent -200,
+# metrics PDFium takes from the file; /F2 is the same font with a /ToUnicode
+# that maps code 0x41 to "fi". At size 10 a glyph is 10 wide and its box runs
+# from 2 below its baseline to 8 above. Steps are in units of the size, and
+# every position and step written is exact in binary, so that PDFium's floats
+# hold it.
+TEXT_FONT = (
+    b"<< /Type /Font /Subtype /TrueType /BaseFont /Gate /FirstChar 32 /LastChar 126 /Widths ["
+    + b" ".join([b"1000"] * 95)
+    + b"] /Encoding /WinAnsiEncoding /FontDescriptor 6 0 R"
+)
+TEXT_DESCRIPTOR = (
+    b"<< /Type /FontDescriptor /FontName /Gate /Flags 32 /FontBBox [0 -200 1000 800]"
+    b" /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 >>"
+)
+LIGATURE_MAP = stream(
+    b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /Gate def"
+    b" 1 begincodespacerange <00> <FF> endcodespacerange"
+    b" 1 beginbfchar <41> <00660069> endbfchar"
+    b" endcmap CMapName currentdict /CMap defineresource pop end end"
+)
+
+
+@dataclass(frozen=True)
+class WrittenText:
+    """A one-page file of text and what it holds as written: the text of each
+    glyph in content order, and the words of each line, each with its box in
+    user space where the case gives one."""
+
+    data: bytes
+    glyphs: tuple[str, ...]
+    lines: tuple[tuple[tuple[str, Box | None], ...], ...]
+    # Every glyph that paints lies in the box of a word: the dark pixels of a
+    # rendering lie in the words' boxes, and each word's box holds some.
+    inked: bool = True
+
+
+def _text_file(content: bytes, page: bytes) -> bytes:
+    return build(
+        {
+            1: b"<< /Type /Catalog /Pages 2 0 R >>",
+            2: b"<< /Type /Pages /Kids [4 0 R] /Count 1 >>",
+            3: stream(content),
+            4: b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Contents 3 0 R"
+            b" /Resources << /Font << /F1 5 0 R /F2 7 0 R >> >> " + page + b">>",
+            5: TEXT_FONT + b" >>",
+            6: TEXT_DESCRIPTOR,
+            7: TEXT_FONT + b" /ToUnicode 8 0 R >>",
+            8: LIGATURE_MAP,
+        },
+        1,
+    )
+
+
+def _written(
+    content: bytes,
+    glyphs: str | tuple[str, ...],
+    *lines: tuple[tuple[str, Box | None], ...],
+    page: bytes = b"",
+    inked: bool = True,
+) -> WrittenText:
+    return WrittenText(_text_file(content, page), tuple(glyphs), lines, inked)
+
+
+def _word(text: str, x: float, y: float = 200, size: float = 10) -> tuple[str, Box]:
+    """A word of glyphs 1000 wide from (x, y) at `size`, with its box."""
+    return (text, (x, y - 0.2 * size, x + len(text) * size, y + 0.8 * size))
+
+
+def _span(text: str, x0: float, x1: float, y0: float = 198, y1: float = 208) -> tuple[str, Box]:
+    """A word with the box from (x0, y0) to (x1, y1)."""
+    return (text, (x0, y0, x1, y1))
+
+
+def _two_words(x: float, y: float = 200, size: float = 10) -> bytes:
+    """ "AB" at size 10 from (100, 200), ending at 120; then "CD" at `size` from (x, y)."""
+    return b"BT /F1 10 Tf 100 200 Td (AB) Tj ET BT /F1 %s Tf %s %s Td (CD) Tj ET" % (
+        number_text(size),
+        number_text(x),
+        number_text(y),
+    )
+
+
+TEXT: dict[str, Callable[[], WrittenText]] = {
+    # The glyphs.
+    # "CD" begins 5 after "AB" ends: PDFium adds a space between, of its own.
+    "PDFium's own space is no glyph": partial(
+        _written, _two_words(125), "ABCD", (_word("AB", 100), _word("CD", 125))
+    ),
+    # PDFium's text page puts A and B first, in order of x. In content order C
+    # and D come first, and the step back from 220 to 100 begins a line.
+    "glyphs in content order": partial(
+        _written,
+        b"BT /F1 10 Tf 200 200 Td (CD) Tj ET BT /F1 10 Tf 100 200 Td (AB) Tj ET",
+        "CDAB",
+        (_word("CD", 200),),
+        (_word("AB", 100),),
+    ),
+    # One code, two characters at one origin.
+    "a ligature PDFium expands is one glyph": partial(
+        _written, b"BT /F2 10 Tf 100 200 Td (A) Tj ET", ("fi",), (_span("fi", 100, 110),)
+    ),
+    "a line-end hyphen": partial(
+        _written,
+        b"BT /F1 10 Tf 100 200 Td (Hyphen-) Tj 0 -14 Td (ated) Tj ET",
+        "Hyphen\x02ated",
+        (_word("Hyphen-", 100),),
+        (_word("ated", 100, 186),),
+    ),
+    # A step along the baseline, from the end of B at 120 to the origin of C.
+    "a gap of 0.1375 is within a word": partial(
+        _written, _two_words(121.375), "ABCD", (_span("ABCD", 100, 141.375),)
+    ),
+    "a gap of 0.15 ends a word": partial(
+        _written, _two_words(121.5), "ABCD", (_word("AB", 100), _word("CD", 121.5))
+    ),
+    "a gap of 0.7875 ends a word": partial(
+        _written, _two_words(127.875), "ABCD", (_word("AB", 100), _word("CD", 127.875))
+    ),
+    "a gap of 0.8 begins a line": partial(
+        _written, _two_words(128), "ABCD", (_word("AB", 100),), (_word("CD", 128),)
+    ),
+    "a step back of 0.7875 is within a word": partial(
+        _written, _two_words(112.125), "ABCD", (_span("ABCD", 100, 132.125),)
+    ),
+    "a step back of 0.8 begins a line": partial(
+        _written, _two_words(112), "ABCD", (_word("AB", 100),), (_word("CD", 112),)
+    ),
+    # A step across the baseline, C at the end of B.
+    "a baseline 0.7875 up is the line's": partial(
+        _written, _two_words(120, 207.875), "ABCD", (_span("ABCD", 100, 140, 198, 215.875),)
+    ),
+    "a baseline 0.7875 down is the line's": partial(
+        _written, _two_words(120, 192.125), "ABCD", (_span("ABCD", 100, 140, 190.125, 208),)
+    ),
+    "a baseline 0.8 up begins a line": partial(
+        _written, _two_words(120, 208), "ABCD", (_word("AB", 100),), (_word("CD", 120, 208),)
+    ),
+    "a baseline 0.8 down begins a line": partial(
+        _written, _two_words(120, 192), "ABCD", (_word("AB", 100),), (_word("CD", 120, 192),)
+    ),
+    # "CD" at size 20 begins 2.875 after "AB" ends: 0.14375 of its own size, a
+    # step within the word; of the size of B, 10, it would be 0.2875.
+    "a step along in units of the later glyph's size": partial(
+        _written, _two_words(122.875, size=20), "ABCD", (_span("ABCD", 100, 162.875, 196, 216),)
+    ),
+    # "CD" at size 20 begins at the end of B, 15 above its baseline: 0.75 of
+    # its own size, on the line; of the size of B, 10, it would be 1.5.
+    "a step across in units of the later glyph's size": partial(
+        _written, _two_words(120, 215, size=20), "ABCD", (_span("ABCD", 100, 160, 198, 231),)
+    ),
+    # The space's box runs from 120 to 130, where C begins.
+    "a space ends a word and moves the pen": partial(
+        _written,
+        b"BT /F1 10 Tf 100 200 Td (AB CD) Tj ET",
+        "AB CD",
+        (_word("AB", 100), _word("CD", 130)),
+    ),
+    # At 50 Tz a glyph is 5 wide; "CD" begins 1.375 after "AB" ends: 0.1375 of
+    # the size, 10, a step within the word; of the width as scaled, 0.275.
+    "horizontal scaling leaves the size": partial(
+        _written,
+        b"BT /F1 10 Tf 50 Tz 100 200 Td (AB) Tj 11.375 0 Td (CD) Tj ET",
+        "ABCD",
+        (_span("ABCD", 100, 121.375),),
+    ),
+    # X runs up the page: no pen moves to its end, and C, 0.1375 after B,
+    # stays in the word.
+    "a glyph that is not upright is passed over": partial(
+        _written,
+        b"BT /F1 10 Tf 100 200 Td (AB) Tj ET BT /F1 10 Tf 0 1 -1 0 300 100 Tm (X) Tj ET"
+        b" BT /F1 10 Tf 121.375 200 Td (CD) Tj ET",
+        "ABXCD",
+        (_span("ABCD", 100, 141.375),),
+        inked=False,
+    ),
+    # "AB" turned by 0.9 degrees, upright; "CD" by 1.1 degrees, in no line.
+    # The matrices hold the cosine and sine of each angle.
+    "upright within one degree": partial(
+        _written,
+        b"BT /F1 10 Tf 0.9998766324816606 0.015707317311820675 -0.015707317311820675"
+        b" 0.9998766324816606 100 200 Tm (AB) Tj ET"
+        b" BT /F1 10 Tf 0.9998157121216442 0.01919744239968967 -0.01919744239968967"
+        b" 0.9998157121216442 100 100 Tm (CD) Tj ET",
+        "ABCD",
+        (("AB", None),),
+        inked=False,
+    ),
+    # Turned by 90 degrees for showing: "AB" runs up user space, (x, y) to
+    # (100 - y, 100 + x), and reads left to right; "CD" runs up as shown.
+    "upright as the page is shown": partial(
+        _written,
+        b"BT /F1 10 Tf 0 1 -1 0 100 100 Tm (AB) Tj ET BT /F1 10 Tf 100 250 Td (CD) Tj ET",
+        "ABCD",
+        (_span("AB", 92, 102, 100, 120),),
+        page=b"/Rotate 90 ",
+        inked=False,
+    ),
+    "invisible text is given": partial(
+        _written,
+        b"BT /F1 10 Tf 3 Tr 100 200 Td (AB) Tj ET",
+        "AB",
+        (_word("AB", 100),),
+        inked=False,
+    ),
+    # PDFium gives the two spaces as one character, at the first one's origin;
+    # a text object of one space it leaves out.
+    "a line of white space alone is none": partial(
+        _written,
+        b"BT /F1 10 Tf 100 200 Td (AB) Tj ET BT /F1 10 Tf 100 150 Td (  ) Tj ET",
+        "AB ",
+        (_word("AB", 100),),
+    ),
+    "text off the page is given": partial(
+        _written,
+        b"BT /F1 10 Tf 500 200 Td (AB) Tj ET",
+        "AB",
+        (_word("AB", 500),),
+        inked=False,
+    ),
+    # Known to go wrong (docs/conventions.md): the box of a space does not hold
+    # Tw. At 9 Tw the step from the space's end at 120 to B is 0.9.
+    "a space Tw widens by 0.9: two lines": partial(
+        _written,
+        b"BT /F1 10 Tf 9 Tw 100 200 Td (A B) Tj ET",
+        "A B",
+        (_word("A", 100),),
+        (_word("B", 129),),
+    ),
+    "a space Tw widens by 0.7: one line": partial(
+        _written,
+        b"BT /F1 10 Tf 7 Tw 100 200 Td (A B) Tj ET",
+        "A B",
+        (_word("A", 100), _word("B", 127)),
+    ),
+    # The space is drawn at 110, its box ends at 120; the TJ moves B back to
+    # 110: a step back of 1.
+    "a wide space at the next origin: two lines": partial(
+        _written,
+        b"BT /F1 10 Tf 100 200 Td [(A ) 1000 (B)] TJ ET",
+        "A B",
+        (_word("A", 100),),
+        (_word("B", 110),),
+    ),
+    "letters Tc spaces by 0.8: a line each": partial(
+        _written,
+        b"BT /F1 10 Tf 8 Tc 100 200 Td (ABC) Tj ET",
+        "ABC",
+        (_word("A", 100),),
+        (_word("B", 118),),
+        (_word("C", 136),),
+    ),
+    "letters Tc spaces by 0.7: one line": partial(
+        _written,
+        b"BT /F1 10 Tf 7 Tc 100 200 Td (ABC) Tj ET",
+        "ABC",
+        (_word("A", 100), _word("B", 117), _word("C", 134)),
+    ),
+    # A gap of 0.8 that TJ makes begins a line: right for columns, wrong for
+    # the words of justified text.
+    "words TJ spaces by 0.8: two lines": partial(
+        _written,
+        b"BT /F1 10 Tf 100 200 Td [(AB) -800 (CD)] TJ ET",
+        "ABCD",
+        (_word("AB", 100),),
+        (_word("CD", 128),),
+    ),
+}
