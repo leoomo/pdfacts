@@ -218,6 +218,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     seconds = round(time.perf_counter() - started, 1)
 
     receipt = {
+        "gate": "m1",
         "environment": {
             "commit": arguments.commit,
             "date": datetime.now(UTC).isoformat(timespec="seconds"),

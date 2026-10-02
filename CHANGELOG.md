@@ -237,6 +237,11 @@ may break callers.
   text unknown where a form lies deeper than PDFium reads forms; the
   characters count against `max_items_per_page`; the text drawn again that
   PDFium leaves out of its text page, the first drawing kept.
+- "Glyphs, words and lines", what is known to go wrong: words a `TJ` spaces
+  0.8 of the size or more apart begin new lines, and so does the glyph after
+  a run of spaces that PDFium gives as one character, where the gap the
+  others leave is 0.8 of the size or more (decision of the maintainer,
+  2026-10-02).
 
 ### Corrected
 
