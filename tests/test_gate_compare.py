@@ -1,11 +1,12 @@
 """The comparison of gate receipts: what it refuses and what it reports.
 
-The receipts are built here in the shape of section 2.3 of the #14 handover;
-no test reads a receipt from disk that some other tool wrote.
+The receipts are built here in the shapes bench/gates/m1.py and m4a.py
+write; no test reads a receipt from disk that some other tool wrote.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -16,6 +17,10 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "bench" / "gates"))
 
 import compare  # noqa: E402
+import m1  # noqa: E402
+import m4a  # noqa: E402
+
+from synthetic import cases  # noqa: E402
 
 ENGINE_INFO = {
     "font_policy": "embedded-only",
@@ -42,9 +47,30 @@ def file_entry(**changes) -> dict:
     return entry
 
 
+def m4a_entry(**changes) -> dict:
+    entry = {
+        "breaks": {"after white space forward": 1},
+        "glyph_count": 3,
+        "glyphs": "2" * 64,
+        "known": {"glyphs not upright": 0, "left out": 1},
+        "line_count": 1,
+        "lines": "4" * 64,
+        "page_count": 2,
+        "pages_not_compared": 0,
+        "pdfium_differences": [],
+        "unknown": {},
+        "word_count": 2,
+        "words": "3" * 64,
+    }
+    entry.update(changes)
+    return entry
+
+
 def receipt(**changes) -> dict:
-    """A fresh receipt with two files, `a.pdf` and `b.pdf`, and changes applied."""
+    """A fresh receipt of the M1 gate with two files, `a.pdf` and `b.pdf`, and
+    changes applied."""
     data = {
+        "gate": "m1",
         "environment": {
             "commit": "0" * 40,
             "date": "2026-09-29T08:15:00+00:00",
@@ -60,6 +86,11 @@ def receipt(**changes) -> dict:
     }
     data.update(changes)
     return data
+
+
+def m4a_receipt(**changes) -> dict:
+    """A fresh receipt of the M4a gate with two files, and changes applied."""
+    return receipt(gate="m4a", files={"a.pdf": m4a_entry(), "b.pdf": m4a_entry()}, **changes)
 
 
 def run(tmp_path, capsys, *receipts):
@@ -221,6 +252,21 @@ def _cross_check_failed_not_a_list(data):
     return data
 
 
+def _without_gate(data):
+    del data["gate"]
+    return data
+
+
+def _a_gate_not_known(data):
+    data["gate"] = "m2"
+    return data
+
+
+def _a_gate_not_a_string(data):
+    data["gate"] = ["m1"]
+    return data
+
+
 @pytest.mark.parametrize(
     "mangle",
     [
@@ -231,6 +277,9 @@ def _cross_check_failed_not_a_list(data):
         _without_platform,
         _page_count_as_text,
         _cross_check_failed_not_a_list,
+        _without_gate,
+        _a_gate_not_known,
+        _a_gate_not_a_string,
     ],
     ids=[
         "a json list",
@@ -240,6 +289,9 @@ def _cross_check_failed_not_a_list(data):
         "without platform",
         "page_count as text",
         "cross_check_failed not a list",
+        "without gate",
+        "a gate not known",
+        "a gate not a string",
     ],
 )
 def test_not_a_receipt(tmp_path, capsys, mangle):
@@ -250,3 +302,184 @@ def test_not_a_receipt(tmp_path, capsys, mangle):
 def test_not_json(tmp_path, capsys):
     status, _ = run(tmp_path, capsys, receipt(), "{")
     assert status == 2
+
+
+def test_the_numbers_of_each_receipt(tmp_path, capsys):
+    first, second = receipt(), m4a_receipt()
+    first["files"]["b.pdf"]["cross_check_failed"] = [0, 1]
+    second["files"]["b.pdf"]["pdfium_differences"] = ["1"]
+    _, captured = run(tmp_path, capsys, first, receipt())
+    assert "  2 files processed, 0 errors, 4 pages, 6 glyphs, 0 warnings, 21.3 s" in captured.out
+    assert "  pages whose cross-check failed: b.pdf: 0, 1" in captured.out
+    _, captured = run(tmp_path, capsys, second, m4a_receipt())
+    assert (
+        "  2 files processed, 0 errors, 4 pages, 6 glyphs, 4 words, 2 lines,"
+        " 0 pages not compared, 21.3 s" in captured.out
+    )
+    assert "  pages whose characters differ from PDFium's: b.pdf: 1" in captured.out
+
+
+def test_identical_receipts_of_the_m4a_gate(tmp_path, capsys):
+    status, captured = run(tmp_path, capsys, m4a_receipt(), m4a_receipt(), m4a_receipt())
+    assert status == 0
+    lines = captured.out.splitlines()
+    assert "| file | glyphs | words | lines | tallies |" in lines
+    assert row(["a.pdf", "identical", "identical", "identical", "identical"]) in lines
+    for column in ("glyphs", "words", "lines", "tallies"):
+        assert f"{column}: identical in 2 of 2 files" in captured.out
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "column"),
+    [
+        ("glyphs", "5" * 64, "glyphs"),
+        ("words", "5" * 64, "words"),
+        ("lines", "5" * 64, "lines"),
+        ("known", {"glyphs not upright": 1, "left out": 1}, "tallies"),
+        ("breaks", {"after white space forward": 2}, "tallies"),
+        ("unknown", {"glyph box unreadable": 1}, "tallies"),
+        ("pdfium_differences", ["1"], "tallies"),
+        ("pages_not_compared", 1, "tallies"),
+    ],
+    ids=[
+        "glyphs",
+        "words",
+        "lines",
+        "known",
+        "breaks",
+        "unknown",
+        "pdfium_differences",
+        "pages_not_compared",
+    ],
+)
+def test_a_column_of_the_m4a_gate_differs(tmp_path, capsys, key, value, column):
+    receipts = m4a_receipt(), m4a_receipt(), m4a_receipt()
+    receipts[2]["files"]["b.pdf"][key] = value
+    status, captured = run(tmp_path, capsys, *receipts)
+    assert status == 1
+    cells = ["identical"] * 4
+    cells[["glyphs", "words", "lines", "tallies"].index(column)] = "differs"
+    assert row(["b.pdf", *cells]) in captured.out
+    assert row(["a.pdf", "identical", "identical", "identical", "identical"]) in captured.out
+
+
+def test_receipts_of_a_gate_not_known(tmp_path, capsys):
+    status, captured = run(tmp_path, capsys, receipt(gate="m2"), receipt(gate="m2"))
+    assert status == 2
+    assert "no gate is called 'm2'" in captured.err
+
+
+def test_receipts_of_two_gates(tmp_path, capsys):
+    status, captured = run(tmp_path, capsys, receipt(), m4a_receipt())
+    assert status == 2
+    assert "m4a" in captured.err
+
+
+def _m4a_without_words(data):
+    del data["files"]["a.pdf"]["words"]
+    return data
+
+
+def _m4a_words_not_a_string(data):
+    data["files"]["a.pdf"]["words"] = 3
+    return data
+
+
+def _m4a_word_count_as_text(data):
+    data["files"]["a.pdf"]["word_count"] = "2"
+    return data
+
+
+def _m4a_known_not_a_dictionary(data):
+    data["files"]["a.pdf"]["known"] = [1]
+    return data
+
+
+def _m4a_a_count_not_an_int(data):
+    data["files"]["a.pdf"]["breaks"]["after white space forward"] = "1"
+    return data
+
+
+def _m4a_differences_as_ints(data):
+    data["files"]["a.pdf"]["pdfium_differences"] = [0]
+    return data
+
+
+def _m4a_without_pages_not_compared(data):
+    del data["files"]["a.pdf"]["pages_not_compared"]
+    return data
+
+
+def _m4a_pages_not_compared_as_text(data):
+    data["files"]["a.pdf"]["pages_not_compared"] = "0"
+    return data
+
+
+def _m4a_unknown_not_a_dictionary(data):
+    data["files"]["a.pdf"]["unknown"] = None
+    return data
+
+
+def _m4a_lines_not_a_string(data):
+    data["files"]["a.pdf"]["lines"] = 4
+    return data
+
+
+@pytest.mark.parametrize(
+    "mangle",
+    [
+        _m4a_without_words,
+        _m4a_words_not_a_string,
+        _m4a_word_count_as_text,
+        _m4a_known_not_a_dictionary,
+        _m4a_a_count_not_an_int,
+        _m4a_differences_as_ints,
+        _m4a_without_pages_not_compared,
+        _m4a_pages_not_compared_as_text,
+        _m4a_unknown_not_a_dictionary,
+        _m4a_lines_not_a_string,
+    ],
+    ids=[
+        "without words",
+        "words not a string",
+        "word_count as text",
+        "known not a dictionary",
+        "a count not an int",
+        "pdfium_differences as ints",
+        "without pages_not_compared",
+        "pages_not_compared as text",
+        "unknown not a dictionary",
+        "lines not a string",
+    ],
+)
+def test_not_a_receipt_of_the_m4a_gate(tmp_path, capsys, mangle):
+    status, _ = run(tmp_path, capsys, m4a_receipt(), mangle(m4a_receipt()))
+    assert status == 2
+
+
+@pytest.mark.parametrize("name", ["m1", "m4a"])
+def test_the_receipts_a_gate_writes(tmp_path, capsys, monkeypatch, name):
+    """The gate run twice over a corpus of one file: compare.py takes both
+    receipts, and every cell is identical."""
+    data = cases.TEXT["a space ends a word and moves the pen"]().data
+    folder = tmp_path / "bench" / "corpus"
+    (folder / "files").mkdir(parents=True)
+    (folder / "files" / "a.pdf").write_bytes(data)
+    manifest = folder / "manifest.csv"
+    manifest.write_text(
+        f"id,file,sha256\n01,a.pdf,{hashlib.sha256(data).hexdigest()}\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(m1, "ROOT", tmp_path)
+    monkeypatch.setattr(m4a, "MANIFEST", manifest)
+    gate = {"m1": m1, "m4a": m4a}[name]
+    paths = []
+    for number in range(2):
+        out = tmp_path / f"{name}-{number}.json"
+        arguments = ["--commit", "0" * 40, "--out", str(out), "--corpus", str(folder / "files")]
+        assert gate.main(arguments) == 0
+        paths.append(str(out))
+    capsys.readouterr()
+    assert compare.main(paths) == 0
+    output = capsys.readouterr().out
+    for label, _ in compare.GATES[name].columns:
+        assert f"{label}: identical in 1 of 1 files" in output
