@@ -1325,13 +1325,22 @@ TEXT: dict[str, Callable[[], WrittenText]] = {
         "ABC",
         (_word("A", 100), _word("B", 117), _word("C", 134)),
     ),
-    # A gap of 0.8 that TJ makes begins a line: right for columns, wrong for
-    # the words of justified text.
+    # Known to go wrong as well: a gap of 0.8 that a TJ makes begins a line,
+    # right for columns, wrong for the words of justified text.
     "words TJ spaces by 0.8: two lines": partial(
         _written,
         b"BT /F1 10 Tf 100 200 Td [(AB) -800 (CD)] TJ ET",
         "ABCD",
         (_word("AB", 100),),
         (_word("CD", 128),),
+    ),
+    # PDFium gives the two spaces as one character at 120, its box to 130: C
+    # at 140 is a step of 1, though the content draws one line.
+    "a run of spaces PDFium gives as one: two lines": partial(
+        _written,
+        b"BT /F1 10 Tf 100 200 Td (AB  CD) Tj ET",
+        "AB CD",
+        (_word("AB", 100),),
+        (_word("CD", 140),),
     ),
 }

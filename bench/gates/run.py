@@ -1,12 +1,13 @@
-"""Run the M1 gate on three platforms and write one receipt per platform.
+"""Run a gate on three platforms and write one receipt per platform.
 
-The host (macOS) runs in a fresh copy of the working tree, Linux arm64 and
-Linux x86_64 in the containers of tools/checks.py, over the same snapshot of
-the tree. The corpus is not part of the snapshot: each run places it with
+The gate is one compare.py knows, m1 or m4a: bench/gates/<gate>.py. The host
+(macOS) runs in a fresh copy of the working tree, Linux arm64 and Linux
+x86_64 in the containers of tools/checks.py, over the same snapshot of the
+tree. The corpus is not part of the snapshot: each run places it with
 bench/corpus/fetch.py --from, from a read-only source, checking every hash.
 The receipts name the commit and go to bench/out/. Standard library only.
 
-    python3 bench/gates/run.py
+    python3 bench/gates/run.py GATE
 
 Exit status 0 when the host and both containers returned 0, 1 otherwise, 2
 when the run was refused (uncommitted changes, an incomplete corpus).
@@ -31,6 +32,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 
+from compare import GATES  # noqa: E402
+
 from checks import (  # noqa: E402
     CONTAINER_IMAGES,
     LINUX_ARCHITECTURES,
@@ -44,12 +47,12 @@ OUT = ROOT / "bench" / "out"
 CORPUS = ROOT / "bench" / "corpus" / "files"
 
 
-def host_receipt() -> str:
-    return f"m1-{platform.system().lower()}-{platform.machine().lower()}.json"
+def host_receipt(gate: str) -> str:
+    return f"{gate}-{platform.system().lower()}-{platform.machine().lower()}.json"
 
 
-def container_receipt(architecture: str) -> str:
-    return f"m1-linux-{architecture}.json"
+def container_receipt(gate: str, architecture: str) -> str:
+    return f"{gate}-linux-{architecture}.json"
 
 
 def verify_corpus() -> bool:
@@ -60,7 +63,9 @@ def verify_corpus() -> bool:
     return result.returncode == 0
 
 
-def container_command(architecture: str, *, commit: str, corpus: Path, out: Path) -> list[str]:
+def container_command(
+    gate: str, architecture: str, *, commit: str, corpus: Path, out: Path
+) -> list[str]:
     inside = "; ".join(
         [
             "set -e",
@@ -71,8 +76,8 @@ def container_command(architecture: str, *, commit: str, corpus: Path, out: Path
             "cd /work",
             "uv sync --locked",
             "uv run --locked python bench/corpus/fetch.py --verify-only --from /corpus",
-            "uv run --locked python bench/gates/m1.py --commit "
-            f"{commit} --out /out/{container_receipt(architecture)}",
+            f"uv run --locked python bench/gates/{gate}.py --commit "
+            f"{commit} --out /out/{container_receipt(gate, architecture)}",
         ]
     )
     return [
@@ -98,9 +103,9 @@ def container_command(architecture: str, *, commit: str, corpus: Path, out: Path
 
 
 def run_container(
-    snapshot: bytes, architecture: str, *, commit: str, corpus: Path, out: Path
+    snapshot: bytes, gate: str, architecture: str, *, commit: str, corpus: Path, out: Path
 ) -> int:
-    command = container_command(architecture, commit=commit, corpus=corpus, out=out)
+    command = container_command(gate, architecture, commit=commit, corpus=corpus, out=out)
     try:
         return subprocess.run(command, input=snapshot, cwd=ROOT).returncode
     except OSError as error:
@@ -108,7 +113,7 @@ def run_container(
         return 1
 
 
-def run_host(snapshot: bytes, *, commit: str, corpus: Path, out: Path) -> int:
+def run_host(snapshot: bytes, gate: str, *, commit: str, corpus: Path, out: Path) -> int:
     with tempfile.TemporaryDirectory(prefix="pdfacts-gate-") as folder:
         with tarfile.open(fileobj=io.BytesIO(snapshot)) as archive:
             archive.extractall(folder, filter="data")
@@ -129,11 +134,11 @@ def run_host(snapshot: bytes, *, commit: str, corpus: Path, out: Path) -> int:
                 "run",
                 "--locked",
                 "python",
-                "bench/gates/m1.py",
+                f"bench/gates/{gate}.py",
                 "--commit",
                 commit,
                 "--out",
-                str(out / host_receipt()),
+                str(out / host_receipt(gate)),
             ],
         ]
         for step in steps:
@@ -144,9 +149,11 @@ def run_host(snapshot: bytes, *, commit: str, corpus: Path, out: Path) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    # No options to give: the parser only answers --help and refuses the rest,
-    # so a stray argument cannot start a full run.
-    argparse.ArgumentParser(description=__doc__.splitlines()[0]).parse_args(argv)
+    # The gate and nothing else: the parser answers --help and refuses the
+    # rest, so a stray argument cannot start a full run.
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("gate", choices=sorted(GATES))
+    gate = parser.parse_args(argv).gate
     state = tree_state(ROOT)
     print(f"gate on {state.describe()}", flush=True)
     if state.changes:
@@ -166,15 +173,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     runs: list[tuple[str, Path, Callable[[], int]]] = [
         (
             "the host",
-            OUT / host_receipt(),
-            partial(run_host, snapshot, commit=commit, corpus=CORPUS, out=OUT),
+            OUT / host_receipt(gate),
+            partial(run_host, snapshot, gate, commit=commit, corpus=CORPUS, out=OUT),
         ),
         *[
             (
                 architecture,
-                OUT / container_receipt(architecture),
+                OUT / container_receipt(gate, architecture),
                 partial(
-                    run_container, snapshot, architecture, commit=commit, corpus=CORPUS, out=OUT
+                    run_container,
+                    snapshot,
+                    gate,
+                    architecture,
+                    commit=commit,
+                    corpus=CORPUS,
+                    out=OUT,
                 ),
             )
             for architecture in LINUX_ARCHITECTURES
