@@ -501,7 +501,7 @@ class Document:
             found = Unknown(
                 UnknownReason.UNREADABLE,
                 f"QPDF cannot read a content stream of page {index}, or warns that it"
-                " misread an object of the file",
+                " misread an object of the file, or reads a name without bytes in one",
             )
         if isinstance(found, Unknown):
             raise LimitUncheckedError(limit="max_forms_per_page", allowed=limit, reason=found)
