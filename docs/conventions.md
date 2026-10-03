@@ -374,6 +374,17 @@ the encoding stated. Reason: 59 appearance states in the corpus are
 Latin-1 bytes and no valid UTF-8; PDFium decodes every name as a text
 string, which garbles UTF-8; filling a form writes the exact bytes back.
 
+A name that writes a `#` not followed by two hexadecimal digits is not a name
+ISO 32000-2 allows (7.3.5), and has no bytes: QPDF holds a NUL in place of the
+`#`, and PDFium reads the two characters after it as hexadecimal digits, one
+that is none as 0, and keeps a `#` among the name's last two characters
+(measured). A value that is such a name is unknown, invalid in the file. Where
+one of an annotation's appearance states is such a name, which appearance
+PDFium draws is not known, since it may select that state, and the
+annotation's graphics are unknown ("Paths and images"); where its `/Subtype`
+is such a name and PDFium draws it, no graphics of the page are known, as
+where it has none.
+
 ### Fields and widgets
 
 `pdfacts.widgets(document, page_index)` returns the widgets of one page,
@@ -394,7 +405,8 @@ compared within 0.001 plus a millionth of the larger magnitude, and its flag
 field is signed, so an integer `/F` is compared as written, modulo 2^32, and
 an absent one as 0. Texts are compared after
 deleting U+0000, U+FFFD and lone surrogates, `/AS` only for names of at most
-85 bytes (PDFium keeps 255 bytes of a name's syntax). The cross-reference
+85 bytes (PDFium keeps 255 bytes of a name's syntax), and no name without bytes
+("Text strings and names"). The cross-reference
 itself is not checked; the object-stream check of `open()` secures what
 PDFium cannot see, and the cross-reference remains a known gap (see "Object
 identity").

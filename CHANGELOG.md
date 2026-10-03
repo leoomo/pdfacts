@@ -251,6 +251,12 @@ may break callers.
   refused once another page was read, as a colour can become unknown, since
   QPDF warns of an object it mis-read only when it reads it (decisions of the
   maintainer, 2026-10-02).
+- "Text strings and names": a name with a `#` not followed by two hexadecimal
+  digits has no bytes; a value that is such a name is unknown, and so are the
+  graphics of an annotation one of whose appearance states is such a name,
+  and every graphic of a page where PDFium draws an annotation whose
+  `/Subtype` is such a name. "Fields and widgets": no name without bytes is
+  compared with PDFium's.
 
 ### Corrected
 
@@ -271,6 +277,13 @@ may break callers.
   baseline, rounded once. Words and lines took the vector along the baseline
   from the C library's `sin` and `cos`. Both are now computed in decimal
   arithmetic and rounded once, the same on every platform.
+- A name with a `#` not followed by two hexadecimal digits, which QPDF reads
+  with a warning, made `widgets()` and `fields()` fail with `EngineError`
+  wherever it was a value they read, and `paths()` and `images()` where it was
+  an annotation's `/Subtype`. Others, such as `/T#4#31` or one that ends in
+  `#` and a hexadecimal digit, were read as bytes neither engine reads, and so
+  was an appearance state named so. Such a name is now an unknown value,
+  invalid in the file.
 
 ## 0.0.1
 

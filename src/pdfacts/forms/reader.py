@@ -38,6 +38,10 @@ def _invalid(detail: str) -> Unknown:
     return Unknown(_INVALID, detail)
 
 
+# A name the file writes that has no bytes (Written, "invalid name").
+_STRAY = "a name with a # not followed by two hexadecimal digits"
+
+
 def _unreadable(detail: str) -> Unknown:
     return Unknown(_UNREADABLE, detail)
 
@@ -333,6 +337,8 @@ def _field_facts(chain: list[FieldEntry] | tuple[FieldEntry, ...]) -> dict:
                 type_ = FieldType.LIST_BOX
         else:
             type_ = _invalid("the /FT of the field is not one of the known names")
+    elif type_written is not None and type_written.kind == "invalid name":
+        type_ = _invalid(f"the /FT of the field is {_STRAY}")
     elif type_written is not None:
         type_ = _invalid("the /FT of the field is not a name")
     facts["type"] = type_
@@ -396,6 +402,8 @@ def _value(chain, key: bytes, type_) -> object:
     if type_ in (FieldType.CHECKBOX, FieldType.RADIO):
         if kind == "name":
             return decode_name(written.data)
+        if kind == "invalid name":
+            return _invalid(f"the value of the field is {_STRAY}")
         return _invalid("the value of the field is not a name")
     if type_ is FieldType.PUSHBUTTON:
         return _invalid("a pushbutton has no value")
@@ -506,6 +514,8 @@ def _states(entry: WidgetEntry) -> tuple | None | Unknown:
         return _invalid("the /AP of the widget is not usable")
     if entry.states is None:
         return None
+    if None in entry.states:
+        return _invalid(f"a key of the widget's /AP /N is {_STRAY}")
     names = [decode_name(key) for key in entry.states]
     ordered = tuple(sorted(names, key=lambda name: name.raw))
     return ordered
@@ -516,6 +526,8 @@ def _state(written: Written | None) -> object:
         return None
     if written.kind == "name":
         return decode_name(written.data)
+    if written.kind == "invalid name":
+        return _invalid(f"the /AS of the widget is {_STRAY}")
     return _invalid("the /AS of the widget is not a name")
 
 
@@ -556,6 +568,8 @@ def _border(entry: WidgetEntry) -> BorderStyle | None | Unknown:
             return _invalid("the width of the border is negative")
     style = None
     if style_written is not None:
+        if style_written.kind == "invalid name":
+            return _invalid(f"the style of the border is {_STRAY}")
         if style_written.kind != "name":
             return _invalid("the style of the border is not a name")
         style = decode_name(style_written.data)
