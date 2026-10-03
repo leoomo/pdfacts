@@ -475,7 +475,13 @@ def test_entries_of_the_dictionary_as_written(old, new, expected, misread):
 
 def test_the_encryption_where_qpdf_cannot_read_a_stream():
     """The encryption is read where the objects are not: /Length 15 of the
-    RC4 stream becomes 10, the same number of bytes."""
+    RC4 stream becomes 20, the same number of bytes. Too long, not too short:
+    QPDF then reads past the data into the file's own text and finds no
+    endstream after it. Shortened, the encrypted bytes, which follow from
+    QPDF's file identifier and so from the clock, stood before endstream, and
+    where they began with a %, after white space or not, QPDF read the rest of
+    the line as a comment and found endstream: about one encryption in 250
+    (measured, PR #89 and PR #90)."""
     data = encrypt(
         page_file(b"4 0 R", {4: stream(BODY)}),
         user="",
@@ -485,7 +491,7 @@ def test_the_encryption_where_qpdf_cannot_read_a_stream():
         compress=False,
     )
     assert data.count(b"/Length 15") == 1
-    found = structure(data.replace(b"/Length 15", b"/Length 10"))
+    found = structure(data.replace(b"/Length 15", b"/Length 20"))
     assert (found.misread, found.objects, found.pages) == (True, None, None)
     assert (found.encryption.r, found.encryption.stream_method) == (4, "rc4")
 
