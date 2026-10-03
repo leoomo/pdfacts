@@ -19,11 +19,16 @@ from types import MappingProxyType
 import pikepdf
 
 from pdfacts.backends.protocols import (
+    Action,
+    ActionPlace,
+    ActionTrigger,
+    ActiveContent,
     AnnotationAppearance,
     AnnotationEntry,
     Box,
     ContentsForm,
     ContentStreamLength,
+    EmbeddedFile,
     EncryptionEntries,
     EngineFailure,
     FailureKind,
@@ -206,7 +211,7 @@ class _Input(io.BytesIO):
 
 class QpdfDocument:
     """A document opened by QPDF with recovery switched off: an ObjectReader, an
-    AppearanceReader and a StructureReader.
+    AppearanceReader, a StructureReader and an ActiveContentReader.
 
     It holds the native handles; no method returns a pikepdf object. Values are
     reported as the file writes them: nothing is normalized, and whether a
@@ -221,7 +226,8 @@ class QpdfDocument:
     from the view QPDF walked, the values from a view nothing walks. When the
     pages QPDF found are not, index by index, the objects the file's page tree
     lists, no page has values: its object at an index may not be the file's.
-    The structure is read from a third view (structure()).
+    The structure and the active content are each read from a view of their
+    own (structure(), active_content()).
     """
 
     def __init__(
@@ -443,31 +449,14 @@ class QpdfDocument:
         known (as page_object()).
         """
         self._check_open()
-        sources: list[_Input] = []
-        try:
-            with _translated():
-                pdf = _opened(
-                    self._data,
-                    self._password,
-                    sources,
-                    attempt_recovery=False,
-                    inherit_page_attributes=False,
-                )
-                try:
-                    kinds = Counter(_object_kind(obj) for obj in pdf.objects)
-                    encryption = _encryption_entries(pdf) if pdf.is_encrypted else None
-                    pages = None
-                    if self._pages_as_written:
-                        pages = tuple(
-                            _page_contents(pdf.get_object(objgen)) for objgen in self._pages
-                        )
-                    # Taken after the reading, so that they hold what it raised.
-                    warnings = tuple(str(message) for message in pdf.get_warnings())
-                finally:
-                    pdf.close()
-        finally:
-            for source in sources:
-                source.close()
+        with self._own_view() as pdf:
+            kinds = Counter(_object_kind(obj) for obj in pdf.objects)
+            encryption = _encryption_entries(pdf) if pdf.is_encrypted else None
+            pages = None
+            if self._pages_as_written:
+                pages = tuple(_page_contents(pdf.get_object(objgen)) for objgen in self._pages)
+            # Taken after the reading, so that they hold what it raised.
+            warnings = tuple(str(message) for message in pdf.get_warnings())
         if any(not _countable(message) for message in warnings):
             return FileStructure(
                 misread=True, objects=None, encryption=encryption, pages=None, warnings=warnings
@@ -483,6 +472,70 @@ class QpdfDocument:
         return FileStructure(
             misread=False, objects=objects, encryption=encryption, pages=pages, warnings=warnings
         )
+
+    def active_content(self) -> ActiveContent:
+        """The file's actions and the entries that name them, its XFA and its
+        embedded files.
+
+        Read from a view of its own, as structure(), every object read: an
+        action is looked for where no entry names it too, in the objects, so
+        not in the trailer of a cross-reference table. The entries are those of
+        ISO 32000-2, 12.6.3; a page's are read from the page object the file's
+        page tree lists, and where the pages QPDF found are not those objects,
+        no action is known. Where QPDF warned that it mis-read an object,
+        nothing here is.
+        """
+        self._check_open()
+        with self._own_view() as pdf:
+            found, files, streams = _scan(pdf)
+            walked = _ActionWalk(pdf).walked(self._pages, found) if self._pages_as_written else None
+            xfa = _xfa(pdf.Root)
+            # Taken after the reading, so that they hold what it raised.
+            warnings = tuple(str(message) for message in pdf.get_warnings())
+        if any(not _countable(message) for message in warnings):
+            return ActiveContent(
+                misread=True,
+                actions=None,
+                sequences=None,
+                triggers=None,
+                xfa=None,
+                embedded_files=None,
+                embedded_streams=None,
+                warnings=warnings,
+            )
+        actions, sequences, triggers = walked if walked is not None else (None, None, None)
+        return ActiveContent(
+            misread=False,
+            actions=actions,
+            sequences=sequences,
+            triggers=triggers,
+            xfa=xfa,
+            embedded_files=files,
+            embedded_streams=streams,
+            warnings=warnings,
+        )
+
+    @contextmanager
+    def _own_view(self) -> Iterator[pikepdf.Pdf]:
+        """A view of the file for one call, closed after it, QPDF's recovery
+        off as open() reads; its warnings stay its own (structure())."""
+        sources: list[_Input] = []
+        try:
+            with _translated():
+                pdf = _opened(
+                    self._data,
+                    self._password,
+                    sources,
+                    attempt_recovery=False,
+                    inherit_page_attributes=False,
+                )
+                try:
+                    yield pdf
+                finally:
+                    pdf.close()
+        finally:
+            for source in sources:
+                source.close()
 
     def appearances(self, index: int) -> tuple[AnnotationAppearance, ...]:
         """Each entry of the page's /Annots with the normal appearance PDFium would draw.
@@ -2116,6 +2169,469 @@ def _name_entry(value: object, key: str) -> bytes | str | None:
         return None
     data = _name_bytes(value)
     return data if data is not None else f"{key} is {_STRAY_NAME}"
+
+
+# The action types of ISO 32000-2, Table 201, as the bytes of their names. A
+# dictionary whose /S names one, or whose /Type is /Action, is taken for an
+# action wherever it is written. Names are compared as bytes: pikepdf decodes a
+# name as UTF-8 to give it as a str, and raises for a name of other bytes.
+_ACTION_TYPES = frozenset(
+    (
+        b"/GoTo",
+        b"/GoToR",
+        b"/GoToE",
+        b"/GoToDp",
+        b"/Launch",
+        b"/Thread",
+        b"/URI",
+        b"/Sound",
+        b"/Movie",
+        b"/Hide",
+        b"/Named",
+        b"/SubmitForm",
+        b"/ResetForm",
+        b"/ImportData",
+        b"/SetOCGState",
+        b"/Rendition",
+        b"/Trans",
+        b"/GoTo3DView",
+        b"/JavaScript",
+        b"/RichMediaExecute",
+    )
+)
+# The page and the annotation's index of an entry on no page (ActionTrigger).
+_NOWHERE: tuple[None, None] = (None, None)
+
+# The events of each place's /AA (ISO 32000-2, Tables 197 to 200), in the order
+# of their keys. A field that is a widget annotation too holds its events and
+# the annotation's in one /AA; the two sets share no key.
+_DOCUMENT_EVENTS = ("/DP", "/DS", "/WC", "/WP", "/WS")
+_PAGE_EVENTS = ("/C", "/O")
+_ANNOTATION_EVENTS = ("/Bl", "/D", "/E", "/Fo", "/PC", "/PI", "/PO", "/PV", "/U", "/X")
+_FIELD_EVENTS = ("/C", "/F", "/K", "/V")
+
+# Where a value is written: an object, and the keys and indices that lead to the
+# value from it, each step paired with the path before it: () for the object
+# itself, ((), "/A") for its /A, (((), "/A"), "/Next") for the /Next of that.
+# Paired, a path costs one tuple per step however deep the value is written;
+# two paths of the same steps are equal.
+type _Path = tuple[()] | tuple[_Path, str | int]
+type _At = tuple[tuple[int, int], _Path]
+
+
+def _objgen(obj: pikepdf.Object) -> tuple[int, int]:
+    return (int(obj.objgen[0]), int(obj.objgen[1]))
+
+
+def _at(value: pikepdf.Object, holder: _At, step: str | int) -> _At:
+    """Where `value`, found at `step` of what is written at `holder`, is written."""
+    if value.is_indirect:
+        return (_objgen(value), ())
+    return (holder[0], (holder[1], step))
+
+
+def _dictionaries_of(array: pikepdf.Array, array_at: _At) -> list[tuple[pikepdf.Object, _At]]:
+    """The dictionaries in the array, a stream read as its dictionary
+    (_dict_of), in order, each with where it is written."""
+    return [
+        (item, _at(item, array_at, index))
+        for index, item in enumerate(array)
+        if _dict_of(item) is not None
+    ]
+
+
+def _looks_like_action(dictionary: pikepdf.Dictionary) -> bool:
+    kind = dictionary.get("/S")
+    if isinstance(kind, pikepdf.Name) and bytes(kind) in _ACTION_TYPES:
+        return True
+    written = dictionary.get("/Type")
+    return isinstance(written, pikepdf.Name) and bytes(written) == b"/Action"
+
+
+def _scan(
+    pdf: pikepdf.Pdf,
+) -> tuple[
+    list[tuple[pikepdf.Object, _At]],
+    tuple[EmbeddedFile, ...],
+    tuple[tuple[tuple[int, int], ...], ...],
+]:
+    """Every dictionary that looks like an action, and every file specification
+    whose /EF is a dictionary, in object order: each object and the values
+    written in it, depth first, a stream read as its dictionary; and the
+    streams of each /EF. What waits to be read is one entry per level, so it
+    grows with how deep a value is written, not with how many values are
+    written beside it."""
+    actions: list[tuple[pikepdf.Object, _At]] = []
+    files: list[EmbeddedFile] = []
+    # The streams of each /EF, and the index of each by where it is written:
+    # one that several file specifications name is read once.
+    streams: list[tuple[tuple[int, int], ...]] = []
+    indices: dict[_At, int] = {}
+
+    def looked_at(value: pikepdf.Object, dictionary: pikepdf.Object, where: _At) -> None:
+        if isinstance(dictionary, pikepdf.Dictionary):
+            if _looks_like_action(dictionary):
+                actions.append((value, where))
+            embedded = dictionary.get("/EF")
+            if _dict_of(embedded) is not None:
+                embedded_at = _at(embedded, where, "/EF")
+                if embedded_at not in indices:
+                    indices[embedded_at] = len(streams)
+                    streams.append(_embedded_streams(embedded))
+                files.append(EmbeddedFile(specification=where[0], streams=indices[embedded_at]))
+
+    for obj in pdf.objects:
+        if isinstance(obj, pikepdf.Stream):
+            at = (_objgen(obj), ())
+            looked_at(obj, obj.stream_dict, at)
+            stack = [_written_in(obj.stream_dict, at)]
+        elif isinstance(obj, (pikepdf.Dictionary, pikepdf.Array)):
+            at = (_objgen(obj), ())
+            looked_at(obj, obj, at)
+            stack = [_written_in(obj, at)]
+        else:
+            continue
+        while stack:
+            found = next(stack[-1], None)
+            if found is None:
+                stack.pop()
+                continue
+            value, where = found
+            looked_at(value, value, where)
+            stack.append(_written_in(value, where))
+    return actions, tuple(files), tuple(streams)
+
+
+def _written_in(value: pikepdf.Object, at: _At) -> Iterator[tuple[pikepdf.Object, _At]]:
+    """The dictionaries and arrays written directly in `value`, in order, each
+    taken when it is asked for."""
+    steps = iter(value) if isinstance(value, pikepdf.Dictionary) else range(len(value))
+    for step in steps:
+        item = value[step]
+        if isinstance(item, (pikepdf.Dictionary, pikepdf.Array)) and not item.is_indirect:
+            yield item, (at[0], (at[1], step))
+
+
+def _embedded_streams(embedded: pikepdf.Object) -> tuple[tuple[int, int], ...]:
+    """The streams /EF names, in the order of their keys, each once."""
+    streams: dict[tuple[int, int], None] = {}
+    for _key, value in embedded.items():
+        if isinstance(value, pikepdf.Stream):
+            streams.setdefault(_objgen(value))
+    return tuple(streams)
+
+
+def _following(item: pikepdf.Object, at: _At, key: str) -> list[tuple[pikepdf.Object, _At]]:
+    """The dictionary, or stream, the key of `item` names, if any."""
+    value = item.get(key)
+    return [(value, _at(value, at, key))] if _dict_of(value) is not None else []
+
+
+class _ActionWalk:
+    """The actions of a file and the entries that name them (ActiveContent).
+
+    Each action is listed once, where it is first reached, and named by its
+    index; an entry, or a /Next, that reaches it again names that index.
+    Each entry, each field and each annotation is listed once, an /AA gives
+    no more than its place's events, an array that several dictionaries
+    name is read once as each kind of list, and a /Next that several actions
+    name is listed once and named by its index. So what is listed, and the
+    time it takes, grow with the objects QPDF reads, those an object stream
+    holds included, whatever they share, and so does what a caller makes of
+    it entry by entry.
+    """
+
+    def __init__(self, pdf: pikepdf.Pdf) -> None:
+        self._pdf = pdf
+        self._index: dict[_At, int] = {}
+        self._kinds: list[bytes | None] = []
+        self._written: list[tuple[int, int]] = []
+        # For each action, where its /Next is written, if it names any.
+        self._next: list[_At | None] = []
+        # For each /Next, where the actions it names are written.
+        self._following: dict[_At, list[_At]] = {}
+        # The arrays read, for each kind of list on its own: an array that is
+        # a page's /Annots and a name tree's /Kids is read as each. And the
+        # annotations listed, with the page and the index each is listed at.
+        self._annots: set[_At] = set()
+        self._fields_read: set[_At] = set()
+        self._name_kids: set[_At] = set()
+        self._names: set[_At] = set()
+        self._listed: dict[_At, tuple[int, int]] = {}
+        self._triggers: list[ActionTrigger] = []
+
+    def walked(
+        self,
+        pages: tuple[tuple[int, int], ...],
+        found: list[tuple[pikepdf.Object, _At]],
+    ) -> tuple[tuple[Action, ...], tuple[tuple[int, ...], ...], tuple[ActionTrigger, ...]]:
+        root = self._pdf.Root
+        if not root.is_indirect:
+            # PDFium opens no such file (measured), so open() never reads one.
+            raise EngineFailure(FailureKind.OTHER, "the trailer's /Root is not a reference")
+        root_at = (_objgen(root), ())
+        open_action = root.get("/OpenAction")
+        self._trigger(
+            ActionPlace.DOCUMENT,
+            root_at,
+            _NOWHERE,
+            b"OpenAction",
+            open_action,
+            root_at,
+            "/OpenAction",
+        )
+        self._additional(root, root_at, ActionPlace.DOCUMENT, _NOWHERE, _DOCUMENT_EVENTS)
+        self._document_javascript(root, root_at)
+        widgets: list[tuple[pikepdf.Object, _At]] = []
+        for index, objgen in enumerate(pages):
+            page = self._pdf.get_object(objgen)
+            page_at = (objgen, ())
+            self._additional(page, page_at, ActionPlace.PAGE, (index, None), _PAGE_EVENTS)
+            for annotation, at, position in self._annotations(page, page_at, index):
+                subtype = annotation.get("/Subtype")
+                subtype = bytes(subtype) if isinstance(subtype, pikepdf.Name) else None
+                # A Movie annotation's /A is a flag or a movie activation
+                # dictionary, no action (ISO 32000-1, Table 186).
+                if subtype != b"/Movie":
+                    self._trigger(
+                        ActionPlace.ANNOTATION,
+                        at,
+                        (index, position),
+                        b"A",
+                        annotation.get("/A"),
+                        at,
+                        "/A",
+                    )
+                self._additional(
+                    annotation, at, ActionPlace.ANNOTATION, (index, position), _ANNOTATION_EVENTS
+                )
+                if subtype == b"/Widget":
+                    widgets.append((annotation, at))
+        for field, at in self._fields(root, root_at, widgets):
+            where = self._listed.get(at, _NOWHERE)
+            self._additional(field, at, ActionPlace.FIELD, where, _FIELD_EVENTS)
+            if at not in self._listed:
+                self._additional(field, at, ActionPlace.ANNOTATION, _NOWHERE, _ANNOTATION_EVENTS)
+        self._outline(root, root_at)
+        for dictionary, at in found:
+            self._action(dictionary, at)
+        sequence = {where: number for number, where in enumerate(self._following)}
+        sequences = tuple(
+            tuple(self._index[at] for at in listed) for listed in self._following.values()
+        )
+        actions = tuple(
+            Action(kind=kind, written_in=written, next=sequence[where] if where else None)
+            for kind, written, where in zip(self._kinds, self._written, self._next, strict=True)
+        )
+        return actions, sequences, tuple(self._triggers)
+
+    def _action(self, dictionary: pikepdf.Object, at: _At) -> int:
+        """The index of the action written at `at`; one not listed yet is listed,
+        and those its /Next names after it, depth first."""
+        stack = [(dictionary, at)]
+        while stack:
+            action, where = stack.pop()
+            if where in self._index:
+                continue
+            self._index[where] = len(self._kinds)
+            kind = action.get("/S")
+            self._kinds.append(_name_bytes(kind) if isinstance(kind, pikepdf.Name) else None)
+            self._written.append(where[0])
+            value = action.get("/Next")
+            if _dict_of(value) is None and not isinstance(value, pikepdf.Array):
+                self._next.append(None)
+                continue
+            next_at = _at(value, where, "/Next")
+            self._next.append(next_at)
+            if next_at not in self._following:
+                named = (
+                    [(value, next_at)]
+                    if _dict_of(value) is not None
+                    else _dictionaries_of(value, next_at)
+                )
+                self._following[next_at] = [named_at for _, named_at in named]
+                stack.extend(reversed(named))
+        return self._index[at]
+
+    def _trigger(
+        self,
+        place: ActionPlace,
+        owner: _At,
+        where: tuple[int | None, int | None],
+        event: bytes | None,
+        value: object,
+        holder: _At,
+        step: str | int,
+    ) -> None:
+        """The entry of `owner`, where its value is a dictionary or a stream,
+        written at `step` of what is written at `holder`; `where` is the page
+        and the annotation's index in its /Annots (ActionTrigger)."""
+        if _dict_of(value) is None:
+            return
+        at = _at(value, holder, step)
+        self._triggers.append(
+            ActionTrigger(
+                place=place,
+                owner=owner[0],
+                page=where[0],
+                annotation=where[1],
+                event=event,
+                action=self._action(value, at),
+            )
+        )
+
+    def _additional(
+        self,
+        owner: pikepdf.Object,
+        owner_at: _At,
+        place: ActionPlace,
+        where: tuple[int | None, int | None],
+        events: tuple[str, ...],
+    ) -> None:
+        """The events of the owner's /AA that are its place's, in the order of
+        their keys; each is looked up, so an /AA of many other keys costs no
+        more."""
+        additional = owner.get("/AA")
+        if _dict_of(additional) is None:
+            return
+        additional_at = _at(additional, owner_at, "/AA")
+        for key in events:
+            value = additional.get(key)
+            self._trigger(place, owner_at, where, key[1:].encode(), value, additional_at, key)
+
+    def _unread(
+        self, owner: pikepdf.Object, owner_at: _At, key: str, read: set[_At]
+    ) -> list[tuple[pikepdf.Object, _At]]:
+        """The dictionaries of the array the owner's key names, if that array
+        is not in `read`, the arrays read as the same kind of list: one that
+        several dictionaries name is read once, with the first."""
+        array = owner.get(key)
+        if not isinstance(array, pikepdf.Array):
+            return []
+        array_at = _at(array, owner_at, key)
+        if array_at in read:
+            return []
+        read.add(array_at)
+        return _dictionaries_of(array, array_at)
+
+    def _document_javascript(self, root: pikepdf.Object, root_at: _At) -> None:
+        """The values of the JavaScript name tree: each node's /Names, then its
+        /Kids, depth first; an array reached again is not read again, so an
+        entry is listed once, with the first node that names it, and a node
+        reached again adds nothing."""
+        names = root.get("/Names")
+        if _dict_of(names) is None:
+            return
+        stack = _following(names, _at(names, root_at, "/Names"), "/JavaScript")
+        while stack:
+            node, node_at = stack.pop()
+            entries = node.get("/Names")
+            if isinstance(entries, pikepdf.Array):
+                entries_at = _at(entries, node_at, "/Names")
+                if entries_at not in self._names:
+                    self._names.add(entries_at)
+                    for index in range(1, len(entries), 2):
+                        self._trigger(
+                            ActionPlace.DOCUMENT_JAVASCRIPT,
+                            node_at,
+                            _NOWHERE,
+                            None,
+                            entries[index],
+                            entries_at,
+                            index,
+                        )
+            stack.extend(reversed(self._unread(node, node_at, "/Kids", self._name_kids)))
+
+    def _annotations(
+        self, page: pikepdf.Object, page_at: _At, page_index: int
+    ) -> list[tuple[pikepdf.Object, _At, int]]:
+        """The page's annotations not listed before, each with its index in
+        the page's /Annots: each is listed once, with the first page that
+        lists it."""
+        listed = page.get("/Annots")
+        if not isinstance(listed, pikepdf.Array):
+            return []
+        listed_at = _at(listed, page_at, "/Annots")
+        if listed_at in self._annots:
+            return []
+        self._annots.add(listed_at)
+        found = []
+        for position, annotation in enumerate(listed):
+            if _dict_of(annotation) is None:
+                continue
+            at = _at(annotation, listed_at, position)
+            if at not in self._listed:
+                self._listed[at] = (page_index, position)
+                found.append((annotation, at, position))
+        return found
+
+    def _fields(
+        self, root: pikepdf.Object, root_at: _At, widgets: list[tuple[pikepdf.Object, _At]]
+    ) -> list[tuple[pikepdf.Object, _At]]:
+        """The fields, each once: the dictionaries of /AcroForm's /Fields and of
+        their /Kids, depth first; then those of its /CO not among them, whose
+        C MuPDF runs (read); then the widget annotations the pages list, which
+        PDFium takes for fields once a page is loaded (measured); then the
+        /Parent of each of these, and of that."""
+        found: list[tuple[pikepdf.Object, _At]] = []
+        seen: set[_At] = set()
+
+        def add(field: pikepdf.Object, at: _At) -> None:
+            if at not in seen:
+                seen.add(at)
+                found.append((field, at))
+
+        acroform = root.get("/AcroForm")
+        if _dict_of(acroform) is not None:
+            acroform_at = _at(acroform, root_at, "/AcroForm")
+            stack = list(
+                reversed(self._unread(acroform, acroform_at, "/Fields", self._fields_read))
+            )
+            while stack:
+                field, at = stack.pop()
+                add(field, at)
+                stack.extend(reversed(self._unread(field, at, "/Kids", self._fields_read)))
+            for field, at in self._unread(acroform, acroform_at, "/CO", self._fields_read):
+                add(field, at)
+        for widget, at in widgets:
+            add(widget, at)
+        index = 0
+        while index < len(found):
+            field, at = found[index]
+            index += 1
+            for parent, parent_at in _following(field, at, "/Parent"):
+                add(parent, parent_at)
+        return found
+
+    def _outline(self, root: pikepdf.Object, root_at: _At) -> None:
+        """Each outline item's /A: an item, its /First and the items after it,
+        then its /Next, depth first; an item reached again is not read again."""
+        outlines = root.get("/Outlines")
+        if _dict_of(outlines) is None:
+            return
+        stack = _following(outlines, _at(outlines, root_at, "/Outlines"), "/First")
+        seen: set[_At] = set()
+        while stack:
+            item, at = stack.pop()
+            if at in seen:
+                continue
+            seen.add(at)
+            self._trigger(ActionPlace.OUTLINE_ITEM, at, _NOWHERE, b"A", item.get("/A"), at, "/A")
+            stack.extend(_following(item, at, "/Next"))
+            stack.extend(_following(item, at, "/First"))
+
+
+def _xfa(root: pikepdf.Dictionary) -> tuple[tuple[int, int], ...] | None:
+    """The streams of /AcroForm's /XFA: itself, or those of its array, in order."""
+    acroform = root.get("/AcroForm")
+    if _dict_of(acroform) is None or "/XFA" not in acroform:
+        return None
+    value = acroform.get("/XFA")
+    if isinstance(value, pikepdf.Stream):
+        return (_objgen(value),)
+    if isinstance(value, pikepdf.Array):
+        return tuple(_objgen(item) for item in value if isinstance(item, pikepdf.Stream))
+    return ()
 
 
 def _integer(value: object) -> int | None:
