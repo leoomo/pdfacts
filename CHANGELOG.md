@@ -284,6 +284,13 @@ may break callers.
   `#` and a hexadecimal digit, were read as bytes neither engine reads, and so
   was an appearance state named so. Such a name is now an unknown value,
   invalid in the file.
+- A name with a `#` not followed by two hexadecimal digits in a content stream,
+  where the count behind `max_forms_per_page` or the check that decides whether
+  colours are known read it, was read as QPDF holds it, which PDFium does not:
+  QPDF's warning about it names no object, so the page stayed countable and its
+  colours known. Such a name now leaves the page uncountable
+  (`LimitUncheckedError` where `max_forms_per_page` is set) and its colours
+  unknown, as a mis-read object does.
 
 ## 0.0.1
 

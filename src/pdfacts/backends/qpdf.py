@@ -1153,6 +1153,20 @@ def _converted(value: object, depth: int, kept: _Kept) -> Written:
 _STRAY_NAME = "a name with a # not followed by two hexadecimal digits"
 
 
+def _content_name(name: pikepdf.Name) -> pikepdf.Name:
+    """A name an operator of a content stream takes, checked to have bytes.
+
+    A name without bytes (_name_bytes: QPDF holds a NUL in place of the #,
+    PDFium reads it otherwise) is not taken: _CannotCount, since what the
+    engines make of the stream may then differ, as of an object QPDF mis-reads
+    (issue #62's rule). QPDF's warning about it names no object and no offset
+    (measured), so that rule does not see it by itself.
+    """
+    if b"\x00" in bytes(name):
+        raise _CannotCount(f"{_STRAY_NAME} in a content stream")
+    return name
+
+
 def _name_bytes(name: pikepdf.Name) -> bytes | None:
     """The bytes of a name, without its slash, #xx resolved.
 
@@ -1792,7 +1806,7 @@ class _ParsedStreams:
                 continue
             name = operands[-at]
             if isinstance(name, pikepdf.Name):
-                found.append((op, name))
+                found.append((op, _content_name(name)))
         if key is not None:
             self._instructions[key] = found
         return found
@@ -1962,6 +1976,7 @@ def _pattern_in(owner, context: _Context, depth: int, seen: dict[tuple, bool]) -
         name = operands[-1] if operands else None
         if not isinstance(name, pikepdf.Name):
             continue
+        name = _content_name(name)
         op = str(operator)
         if op in ("scn", "SCN"):
             return True
