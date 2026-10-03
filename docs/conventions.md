@@ -273,7 +273,7 @@ annotation's facts unknown, `invalid-in-file`.
 
 | Value | Where it is unknown |
 | --- | --- |
-| fill and stroke colour | where the content, or a form it draws, selects a pattern colour space or sets a pattern colour (PDFium then reports a colour of its own), where QPDF cannot read that content or warns that it misread an object of the file, and where PDFium gives no colour. QPDF's warnings gather as it reads the file, so a colour known at first can be unknown once another page was read |
+| fill and stroke colour | where the content, or a form it draws, selects a pattern colour space or sets a pattern colour (PDFium then reports a colour of its own), where QPDF cannot read that content or warns that it misread an object of the file, where the pattern check reads a name without bytes from the content ("Text strings and names"; measured, 2026-10-03), and where PDFium gives no colour. QPDF's warnings gather as it reads the file, so a colour known at first can be unknown once another page was read |
 | line width, dash | where the transform does not scale every direction alike: its two scales differ by more than a thousandth, or the cosine of the angle between its two directions exceeds about a thousandth; elsewhere they are given in user space, scaled by the geometric mean of the two scales. A negative width or dash length and a dash of zeros are `invalid-in-file`; a transform that makes every dash length 0 leaves the dash unknown |
 | points | where a point is not finite in user space, `invalid-in-file` |
 | cap, join, draw mode, points, matrix | where PDFium gives none |
@@ -645,8 +645,13 @@ streams failed, the engines count different pages, the pages QPDF found are
 not the file's, it cannot read one of the content streams, its parser warns
 that it mis-read an object — any warning that names an object and its offset;
 a name with a `#00`, an integer beyond 64 bits, a wrong or missing `/Length`,
-a broken hex string (measured, 2026-10-01) — or the two engines read an
-object differently, the entry of an object stream whose body is a stream
+a broken hex string (measured, 2026-10-01) — a name without bytes ("Text
+strings and names") that the name operand of `Do`, `gs`, `scn`, `SCN` or
+`Tf` of a content stream writes, refused as a mis-read object is: QPDF's
+warning about it names the content stream and an offset, not in the form that
+names an object, and where `/Contents` is an array no warning reaches the
+document (measured, 2026-10-03) — or the two engines read an object
+differently, the entry of an object stream whose body is a stream
 object, which QPDF reads as a dictionary and PDFium parses as a stream
 (measured, 2026-10-01), a set limit makes `open()` or the page fail with
 `LimitUncheckedError`. QPDF warns of an object it mis-read only when it reads
@@ -657,9 +662,10 @@ opened would end that, but it costs time and memory with the size of every
 object once decoded, many times that size (measured, 2026-10-02: a 4 MB array
 takes about 270 MB more), and the objects of an object stream may be
 compressed, so that `max_bytes` does not bound it; so QPDF reads what the
-pages read. The warnings that name no object and no offset stay
-countable — the page-tree repairs of the walked view, the recoveries of a
-content stream — and the corpus gives none of the refusing ones at all. The count reads
+pages read. The warnings that do not name an object and its offset in that
+form stay countable — the page-tree repairs of the walked view, the recoveries
+of a content stream — and the corpus gives none of the refusing ones at all; a
+name without bytes is refused for itself, not for its warning. The count reads
 every entry of the page's `/Annots`, also where `max_items_per_page` would
 refuse the page's annotations. It may add QPDF's warnings about content
 streams to the document's warnings, and pikepdf warns of content that ends
