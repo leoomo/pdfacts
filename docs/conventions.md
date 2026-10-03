@@ -601,6 +601,15 @@ The number of objects `max_objects` checks is the larger of the trailer's
 of these whatever `/Size` says, with a warning where `/Size` is not one more
 than the highest object number (measured).
 
+A known gap (measured, 2026-10-03): for the check of object streams ("Object
+identity"), `open()` decodes every object stream the cross-reference names
+whole, before `max_objects` is checked. That takes memory with their decoded
+size, about three times it: a 98 KB file whose one object stream decodes to
+100 MB made `open()` take about 310 MB more at its peak. The objects of an
+object stream may be compressed, so `max_bytes` does not bound this; a
+separate process per document is the guard, as for the time and memory of an
+engine call (below).
+
 Time and memory cannot be enforced from inside a running engine call. They are
 the caller's responsibility; a separate process per document is the
 recommended way.
