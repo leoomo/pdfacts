@@ -1161,8 +1161,9 @@ def _content_name(name: pikepdf.Name) -> pikepdf.Name:
     A name without bytes (_name_bytes: QPDF holds a NUL in place of the #,
     PDFium reads it otherwise) is not taken: _CannotCount, since what the
     engines make of the stream may then differ, as of an object QPDF mis-reads
-    (issue #62's rule). QPDF's warning about it names no object and no offset
-    (measured), so that rule does not see it by itself.
+    (issue #62's rule). QPDF's warning about it names the content stream and an
+    offset, not an object in the form that rule looks for (measured), so that
+    rule does not see it by itself.
     """
     if _name_bytes(name) is None:
         raise _CannotCount(f"{_STRAY_NAME} in a content stream")
@@ -1553,8 +1554,9 @@ def _countable(message: str) -> bool:
 
 
 class _CannotCount(Exception):
-    """Raised where the two engines read an object differently, or a content
-    stream names an object without bytes (_content_name), so counting ends."""
+    """Raised where the two engines read an object differently, or an operator
+    of a content stream takes a name without bytes (_content_name), so
+    counting ends."""
 
 
 def _dict_of(value: object):
