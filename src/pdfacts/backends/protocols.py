@@ -90,7 +90,10 @@ class Written:
     kind: str
     # "string" and "name": bytes (a name without its slash, #xx resolved);
     # "integer": int; "real": a finite float; "boolean": bool; "null": None;
-    # "array": tuple[Written, ...]; "dictionary", "stream", "other": None.
+    # "array": tuple[Written, ...]; "dictionary", "stream", "other": None;
+    # "invalid name": None, a name with a # not followed by two hexadecimal
+    # digits (ISO 32000-2, 7.3.5), which has no bytes: QPDF holds a NUL in
+    # place of the #, and PDFium reads it otherwise (measured).
     data: bytes | int | float | bool | tuple[Written, ...] | None
 
 
@@ -103,8 +106,10 @@ class AnnotationEntry:
     object_number: int | None
     generation: int | None
     dictionary: bool
-    # /Subtype as name bytes; None when absent, not a name, or no dictionary.
-    subtype: bytes | None
+    # /Subtype as name bytes; None when absent, not a name, or no dictionary;
+    # a str saying why where it is a name without bytes (Written, "invalid
+    # name").
+    subtype: bytes | str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,9 +152,10 @@ class WidgetEntry:
     annotation: AnnotationEntry
     # Of b"Rect", b"F", b"AS", b"MK/BC", b"MK/BG", b"BS/W", b"BS/S": those present.
     entries: Mapping[bytes, Written]
-    # Keys of /AP /N in the dictionary's order, when /N is a dictionary; None
+    # Keys of /AP /N in the dictionary's order, when /N is a dictionary, None
+    # for a key that is a name without bytes (Written, "invalid name"); None
     # when /AP or /N is absent or /N is a stream.
-    states: tuple[bytes, ...] | None
+    states: tuple[bytes | None, ...] | None
     states_invalid: bool  # /AP is not a dictionary, or /N is neither a dictionary nor a stream
     mk_invalid: bool  # /MK is present and not a dictionary
     bs_invalid: bool  # /BS is present and not a dictionary

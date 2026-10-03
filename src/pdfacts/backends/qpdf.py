@@ -1102,8 +1102,8 @@ class _Kept:
         self.fields: dict[tuple[int, int], FieldEntry] = {}
         self.kids: dict[tuple[int, int], Kids] = {}
         self.direct_kids: dict[tuple[int, int], Kids] = {}
-        self.n_states: dict[tuple[int, int], tuple[bytes, ...]] = {}
-        self.ap_n_states: dict[tuple[int, int], tuple[bytes, ...]] = {}
+        self.n_states: dict[tuple[int, int], tuple[bytes | None, ...]] = {}
+        self.ap_n_states: dict[tuple[int, int], tuple[bytes | None, ...]] = {}
         self.mk: dict[tuple[int, int], dict[bytes, Written]] = {}
         self.bs: dict[tuple[int, int], dict[bytes, Written]] = {}
         self.widgets: dict[tuple[int, int], WidgetEntry] = {}
@@ -1136,7 +1136,8 @@ def _converted(value: object, depth: int, kept: _Kept) -> Written:
     if isinstance(value, pikepdf.String):
         return Written("string", bytes(value))
     if isinstance(value, pikepdf.Name):
-        return Written("name", _name_bytes(value))
+        data = _name_bytes(value)
+        return Written("name", data) if data is not None else Written("invalid name", None)
     if isinstance(value, pikepdf.Array):
         if depth >= 2:
             return Written("other", None)
@@ -1148,23 +1149,34 @@ def _converted(value: object, depth: int, kept: _Kept) -> Written:
     return Written("other", None)
 
 
-def _name_bytes(name: pikepdf.Name) -> bytes:
-    """The bytes of a name: unparse() without its slash, #xx resolved."""
-    syntax = name.unparse(resolved=True)
-    out = bytearray()
-    at = 1
-    while at < len(syntax):
-        if syntax[at : at + 1] == b"#":
-            out.append(int(syntax[at + 1 : at + 3], 16))
-            at += 3
-        else:
-            out.append(syntax[at])
-            at += 1
-    return bytes(out)
+# A name without bytes (_name_bytes), in the reasons given for it.
+_STRAY_NAME = "a name with a # not followed by two hexadecimal digits"
 
 
-def _key_bytes(key: str) -> bytes:
-    """The bytes of a key of /AP /N, without its slash."""
+def _name_bytes(name: pikepdf.Name) -> bytes | None:
+    """The bytes of a name, without its slash, #xx resolved.
+
+    None where the name writes a # not followed by two hexadecimal digits,
+    which ISO 32000-2 (7.3.5) does not allow: QPDF holds such a # as a NUL,
+    resolves what follows it, and warns; PDFium reads the two characters
+    after it as hexadecimal digits, one that is none as 0, and keeps a #
+    among the last two characters (measured), so the name has no bytes. A
+    name holds no NUL otherwise: QPDF refuses #00. unparse() writes the NUL
+    back as a #, which can then read as an escape, as in #4#31.
+    """
+    data = bytes(name)
+    return None if b"\x00" in data else data[1:]
+
+
+def _key_bytes(key: str) -> bytes | None:
+    """The bytes of a key of /AP /N, without its slash.
+
+    None where the key writes a # not followed by two hexadecimal digits
+    (_name_bytes), which pikepdf gives as a NUL (measured): a name holds no
+    NUL otherwise, since QPDF refuses one.
+    """
+    if "\x00" in key:
+        return None
     return key.encode("utf-8", "surrogateescape")[1:]
 
 
@@ -1257,7 +1269,7 @@ def _sub_entries(
     return _taken(source, names, kept)
 
 
-def _states(n: pikepdf.Dictionary, ap: pikepdf.Dictionary, kept: _Kept) -> tuple[bytes, ...]:
+def _states(n: pikepdf.Dictionary, ap: pikepdf.Dictionary, kept: _Kept) -> tuple[bytes | None, ...]:
     """The keys of an /N dictionary in QPDF's order; converted once per role."""
     if n.is_indirect:
         store, key = kept.n_states, n.objgen
@@ -1288,7 +1300,7 @@ def _widget_entry(
     if not bs_invalid and bs is not None:
         entries.update(_sub_entries(bs, _BS_KEYS, kept.bs, kept))
     ap = dictionary.get("/AP")
-    states: tuple[bytes, ...] | None = None
+    states: tuple[bytes | None, ...] | None = None
     states_invalid = False
     if ap is not None:
         if not isinstance(ap, pikepdf.Dictionary):
@@ -1823,7 +1835,7 @@ def _annotation_entry(position: int, item: object) -> AnnotationEntry:
         objgen[0] if objgen else None,
         objgen[1] if objgen else None,
         dictionary,
-        _name_bytes(subtype) if isinstance(subtype, pikepdf.Name) else None,
+        _name_entry(subtype, "/Subtype"),
     )
 
 
@@ -1845,6 +1857,9 @@ def _selected_appearance(annot: pikepdf.Dictionary) -> pikepdf.Stream | str | No
     # items(), not get() with a key: a key that is no UTF-8 comes with surrogate
     # escapes, and get() refuses it.
     states = {_key_bytes(key): value for key, value in normal.items()}
+    if None in states:
+        # PDFium reads such a key otherwise, and may select it (_name_bytes).
+        return f"a key of /AP /N is {_STRAY_NAME}"
     wanted = _state_text(annot.get("/AS"), "/AS")
     if not wanted:
         wanted = _state_text(annot.get("/V"), "/V")
@@ -1869,13 +1884,11 @@ def _state_text(value: object, where: str) -> bytes | str:
     wrapped to PDFium's 32 bits — 2147483648 names the state -2147483648
     (measured, issue G2) — and 5.0 names the state 5, but a real number's own
     spelling QPDF cannot tell. A str where QPDF cannot tell at all: a name
-    whose bytes it cannot read (a stray #), or a real number.
+    without bytes (_name_bytes), or a real number.
     """
     if isinstance(value, pikepdf.Name):
-        try:
-            return _name_bytes(value)
-        except ValueError:
-            return f"{where} is a name QPDF cannot read"
+        data = _name_bytes(value)
+        return data if data is not None else f"{where} is {_STRAY_NAME}"
     if isinstance(value, pikepdf.String):
         return bytes(value)
     if isinstance(value, bool):
@@ -2076,14 +2089,12 @@ def _encryption_entries(pdf: pikepdf.Pdf) -> EncryptionEntries:
 
 
 def _name_entry(value: object, key: str) -> bytes | str | None:
-    """The bytes of a name; None for anything else; a str where QPDF cannot
-    tell its bytes, a name with a stray # (as _state_text)."""
+    """The bytes of a name; None for anything else; a str where the name has
+    no bytes (_name_bytes)."""
     if not isinstance(value, pikepdf.Name):
         return None
-    try:
-        return _name_bytes(value)
-    except ValueError:
-        return f"{key} is a name QPDF cannot read"
+    data = _name_bytes(value)
+    return data if data is not None else f"{key} is {_STRAY_NAME}"
 
 
 def _integer(value: object) -> int | None:
