@@ -257,12 +257,14 @@ may break callers.
   and every graphic of a page where PDFium draws an annotation whose
   `/Subtype` is such a name. "Fields and widgets": no name without bytes is
   compared with PDFium's.
-- "Limits", "Paths and images": a name without bytes that the name operand of
-  `Do`, `gs`, `scn`, `SCN` or `Tf` of a content stream writes leaves the
-  page's form count refused and its colours unknown, as a mis-read object;
-  QPDF's warning about it names the content stream and an offset, and where
-  `/Contents` is an array no warning reaches the document (asked for by the
-  maintainer in the prompt of 2026-10-03).
+- "Limits", "Paths and images": a name without bytes in a content stream
+  leaves the page's form count refused where the count takes it, as the name
+  operand of `Do`, `gs`, `scn`, `SCN` or `Tf`, and its colours unknown where
+  the pattern check takes it, as the name operand of `Do`, `scn`, `SCN`, `cs`
+  or `CS`, as a mis-read object does; QPDF's warning about it names the
+  content stream and an offset, and where `/Contents` is an array no warning
+  reaches the document (asked for by the maintainer in the prompt of
+  2026-10-03).
 
 ### Corrected
 

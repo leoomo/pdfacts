@@ -5,9 +5,9 @@ A name whose # is not followed by two hexadecimal digits has no bytes
 (docs/conventions.md, "Text strings and names"): QPDF holds a NUL in place of
 the #, PDFium reads the name otherwise, and QPDF's warning about it names the
 content stream and an offset, not an object in the form issue #62's rule looks
-for, so the warning does not refuse the page by itself. The
-count and the check take such names from the streams they parse, and what the
-engines make of the stream may differ.
+for, so the warning does not refuse the page by itself. The count and the
+check take such names from the streams they parse, and what the engines make
+of the stream may differ.
 
 Files are built with the byte-level builder; the values expected follow from
 what is written (AGENTS.md, rule 2), and from what the engines were measured
