@@ -265,10 +265,10 @@ may break callers.
   content stream and an offset, and where `/Contents` is an array no warning
   reaches the document (asked for by the maintainer in the prompt of
   2026-10-03).
-- "Limits": a known gap stated: `open()` decodes every object stream whole
-  before `max_objects` is checked, in memory about three times their decoded
-  size, which `max_bytes` does not bound (decision of the maintainer,
-  2026-10-03).
+- "Limits": a known gap stated: `open()` decodes the object streams whole
+  before `max_objects` is checked, in memory about three times the decoded
+  size of the largest, which `max_bytes` does not bound (decision of the
+  maintainer, 2026-10-03).
 
 ### Corrected
 
