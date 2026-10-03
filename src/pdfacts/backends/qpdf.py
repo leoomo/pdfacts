@@ -555,7 +555,8 @@ class QpdfDocument:
 
         A pattern colour is set by scn or SCN with a name; PDFium gives no
         colour for it that pdfacts can use (issue G2). None where QPDF cannot
-        read the content.
+        read the content, or a name an operator of it names has no bytes
+        (_content_name).
         """
         self._check_open()
         objgen = self._annotated_page(index)
@@ -597,7 +598,8 @@ class QpdfDocument:
         about an object it mis-read, or an object the two engines read
         differently (measured, 2026-10-01: a stream-object body inside an
         object stream, which QPDF reads as a dictionary and PDFium parses as
-        a stream). A FORMAT failure as page_object() gives one.
+        a stream); a name without bytes that an operator of a content stream
+        names (_content_name). A FORMAT failure as page_object() gives one.
         """
         objgen = self._annotated_page(index)
         with _translated():
@@ -1162,7 +1164,7 @@ def _content_name(name: pikepdf.Name) -> pikepdf.Name:
     (issue #62's rule). QPDF's warning about it names no object and no offset
     (measured), so that rule does not see it by itself.
     """
-    if b"\x00" in bytes(name):
+    if _name_bytes(name) is None:
         raise _CannotCount(f"{_STRAY_NAME} in a content stream")
     return name
 
@@ -1551,7 +1553,8 @@ def _countable(message: str) -> bool:
 
 
 class _CannotCount(Exception):
-    """Raised where the two engines read an object differently, so counting ends."""
+    """Raised where the two engines read an object differently, or a content
+    stream names an object without bytes (_content_name), so counting ends."""
 
 
 def _dict_of(value: object):
@@ -1932,7 +1935,8 @@ def _appearance(stream: pikepdf.Stream, page: _Context, kept: _Kept) -> Selected
 def _uses_pattern(owner, context: _Context) -> bool | None:
     """Whether the content `owner()` gives, or a form it draws, sets a pattern colour.
 
-    None where QPDF cannot read one of them.
+    None where QPDF cannot read one of them, or a name an operator of one
+    names has no bytes (_content_name).
     """
     try:
         return _pattern_in(owner(), context, 0, {})

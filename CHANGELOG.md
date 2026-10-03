@@ -287,10 +287,17 @@ may break callers.
 - A name with a `#` not followed by two hexadecimal digits in a content stream,
   where the count behind `max_forms_per_page` or the check that decides whether
   colours are known read it, was read as QPDF holds it, which PDFium does not:
-  QPDF's warning about it names no object, so the page stayed countable and its
-  colours known. Such a name now leaves the page uncountable
-  (`LimitUncheckedError` where `max_forms_per_page` is set) and its colours
-  unknown, as a mis-read object does.
+  QPDF's warning about it names no object, so the page stayed countable and
+  the check behind the colours still answered it — for `scn` and `SCN` it
+  answered unknown colours even before. Such a name now leaves the page
+  uncountable (`LimitUncheckedError` where `max_forms_per_page` is set) and
+  the check unanswered, its colours unknown, as a mis-read object does.
+- "Limits", "Paths and images": a name without bytes that the name operand of
+  `Do`, `gs`, `scn`, `SCN` or `Tf` of a content stream writes leaves the
+  page's form count refused and its colours unknown, as a mis-read object;
+  QPDF's warning about it names the content stream and an offset, and where
+  `/Contents` is an array no warning reaches the document (asked for by the
+  maintainer in the prompt of 2026-10-03).
 
 ## 0.0.1
 
