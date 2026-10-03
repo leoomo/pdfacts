@@ -555,7 +555,8 @@ class QpdfDocument:
 
         A pattern colour is set by scn or SCN with a name; PDFium gives no
         colour for it that pdfacts can use (issue G2). None where QPDF cannot
-        read the content.
+        read the content, or a name an operator of it names has no bytes
+        (_content_name).
         """
         self._check_open()
         objgen = self._annotated_page(index)
@@ -597,7 +598,8 @@ class QpdfDocument:
         about an object it mis-read, or an object the two engines read
         differently (measured, 2026-10-01: a stream-object body inside an
         object stream, which QPDF reads as a dictionary and PDFium parses as
-        a stream). A FORMAT failure as page_object() gives one.
+        a stream); a name without bytes that an operator of a content stream
+        names (_content_name). A FORMAT failure as page_object() gives one.
         """
         objgen = self._annotated_page(index)
         with _translated():
@@ -1153,6 +1155,21 @@ def _converted(value: object, depth: int, kept: _Kept) -> Written:
 _STRAY_NAME = "a name with a # not followed by two hexadecimal digits"
 
 
+def _content_name(name: pikepdf.Name) -> pikepdf.Name:
+    """A name an operator of a content stream takes, checked to have bytes.
+
+    A name without bytes (_name_bytes: QPDF holds a NUL in place of the #,
+    PDFium reads it otherwise) is not taken: _CannotCount, since what the
+    engines make of the stream may then differ, as of an object QPDF mis-reads
+    (issue #62's rule). QPDF's warning about it names the content stream and an
+    offset, not an object in the form that rule looks for (measured), so that
+    rule does not see it by itself.
+    """
+    if _name_bytes(name) is None:
+        raise _CannotCount(f"{_STRAY_NAME} in a content stream")
+    return name
+
+
 def _name_bytes(name: pikepdf.Name) -> bytes | None:
     """The bytes of a name, without its slash, #xx resolved.
 
@@ -1537,7 +1554,9 @@ def _countable(message: str) -> bool:
 
 
 class _CannotCount(Exception):
-    """Raised where the two engines read an object differently, so counting ends."""
+    """Raised where the two engines read an object differently, or an operator
+    of a content stream takes a name without bytes (_content_name), so
+    counting ends."""
 
 
 def _dict_of(value: object):
@@ -1792,7 +1811,7 @@ class _ParsedStreams:
                 continue
             name = operands[-at]
             if isinstance(name, pikepdf.Name):
-                found.append((op, name))
+                found.append((op, _content_name(name)))
         if key is not None:
             self._instructions[key] = found
         return found
@@ -1918,7 +1937,8 @@ def _appearance(stream: pikepdf.Stream, page: _Context, kept: _Kept) -> Selected
 def _uses_pattern(owner, context: _Context) -> bool | None:
     """Whether the content `owner()` gives, or a form it draws, sets a pattern colour.
 
-    None where QPDF cannot read one of them.
+    None where QPDF cannot read one of them, or a name an operator of one
+    names has no bytes (_content_name).
     """
     try:
         return _pattern_in(owner(), context, 0, {})
@@ -1962,6 +1982,7 @@ def _pattern_in(owner, context: _Context, depth: int, seen: dict[tuple, bool]) -
         name = operands[-1] if operands else None
         if not isinstance(name, pikepdf.Name):
             continue
+        name = _content_name(name)
         op = str(operator)
         if op in ("scn", "SCN"):
             return True

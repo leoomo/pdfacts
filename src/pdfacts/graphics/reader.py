@@ -337,7 +337,7 @@ def _colour_known(uses_pattern: bool | None) -> Unknown | None:
         return Unknown(
             _UNREADABLE,
             "QPDF cannot read the content, or warns that it misread an object of the file,"
-            " to see whether a pattern colour is set",
+            " or reads a name without bytes in it, to see whether a pattern colour is set",
         )
     if uses_pattern:
         return Unknown(
