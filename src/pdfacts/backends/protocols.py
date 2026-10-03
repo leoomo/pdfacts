@@ -565,10 +565,135 @@ class FileStructure:
     warnings: tuple[str, ...]
 
 
+class ActionPlace(StrEnum):
+    """Where an entry names an action to run (ISO 32000-2, 12.6.3)."""
+
+    # The catalog's /OpenAction, and the events WC, WS, DS, WP and DP of its
+    # /AA.
+    DOCUMENT = "document"
+    # An entry of the catalog's JavaScript name tree, run when the document
+    # opens.
+    DOCUMENT_JAVASCRIPT = "document javascript"
+    # The events O and C of a page's /AA.
+    PAGE = "page"
+    # An annotation's /A, but a Movie annotation's, which is no action, and the
+    # events E, X, D, U, Fo, Bl, PO, PC, PV and PI of its /AA; also those
+    # events in the /AA of a field no page lists, which MuPDF reads for the
+    # field's widgets, if it has any, through /Parent.
+    ANNOTATION = "annotation"
+    # The events K, F, V and C of a field's /AA. The fields: the dictionaries
+    # of /AcroForm's /Fields and of their /Kids; those of its /CO, whose C
+    # MuPDF runs; the widget annotations the pages list, which PDFium takes
+    # for fields once a page is loaded; and the /Parent of each, and of that.
+    # PDFium reads a field's events from the nearest /AA up its /Parent,
+    # MuPDF each event from the nearest /AA that holds it (measured): an
+    # entry is listed where it is written.
+    FIELD = "field"
+    # An outline item's /A.
+    OUTLINE_ITEM = "outline item"
+
+
+@dataclass(frozen=True, slots=True)
+class Action:
+    """An action dictionary (ISO 32000-2, 12.6.2), or a stream read as its
+    dictionary."""
+
+    # /S: the bytes of the name; None where /S is absent or not a name. QPDF
+    # reads a name without bytes only with a warning that it mis-read the
+    # object (measured), which leaves ActiveContent unknown.
+    kind: bytes | None
+    # The object the dictionary is written in: its own, or the object that
+    # holds it.
+    written_in: tuple[int, int]
+    # The actions its /Next names, as an index into ActiveContent.sequences;
+    # None where /Next names none. Actions whose /Next is the same give the
+    # same index.
+    next: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class ActionTrigger:
+    """An entry that names an action to run."""
+
+    place: ActionPlace
+    # The object the dictionary that holds the entry is written in, as
+    # Action.written_in: that of the catalog, a page, an annotation, a field,
+    # an outline item or a node of the name tree, or of the object that holds
+    # it.
+    owner: tuple[int, int]
+    # For PAGE, the page's index. For ANNOTATION, and for FIELD where the field
+    # is an annotation a page lists, the index of the first page that lists
+    # it; None otherwise.
+    page: int | None
+    # Where `page` is an annotation's, its index in that page's /Annots, which
+    # with the page identifies it ("Object identity"); None otherwise.
+    annotation: int | None
+    # The entry's key: OpenAction, A, or an event of its place's /AA, as
+    # Action.kind; None for an entry of the name tree, whose key is a string.
+    event: bytes | None
+    # The action the entry names, as an index into ActiveContent.actions.
+    action: int
+
+
+@dataclass(frozen=True, slots=True)
+class EmbeddedFile:
+    """A file specification whose /EF names its embedded file streams."""
+
+    # The object the file specification is written in.
+    specification: tuple[int, int]
+    # The streams its /EF names, as an index into
+    # ActiveContent.embedded_streams. File specifications whose /EF is the same
+    # give the same index.
+    streams: int
+
+
+@dataclass(frozen=True, slots=True)
+class ActiveContent:
+    """A file's actions, its XFA and its embedded files, through QPDF.
+
+    A stream is read as its dictionary wherever a dictionary is read.
+    """
+
+    # As FileStructure.misread.
+    misread: bool
+    # Every action, each once: those the triggers name, each followed by those
+    # its /Next names, depth first; then those no trigger reaches, in object
+    # order. None where `misread`, or where the pages QPDF found are not the
+    # objects the file's page tree lists.
+    actions: tuple[Action, ...] | None
+    # The actions each /Next names, in order, as indices into `actions`: one
+    # entry for each /Next as it is written, so that what several actions
+    # share is listed once, in the order the actions are listed. None where
+    # `actions` is.
+    sequences: tuple[tuple[int, ...], ...] | None
+    # Every entry that names an action, each once: the catalog's, the name
+    # tree's, each page's followed by its annotations', the fields' (each
+    # field's events, then, for a field no page lists, an annotation's events
+    # in its /AA), the outline's. None where `actions` is.
+    triggers: tuple[ActionTrigger, ...] | None
+    # The streams of /AcroForm's /XFA, in order; None where `misread`, or where
+    # /AcroForm has no /XFA.
+    xfa: tuple[tuple[int, int], ...] | None
+    # In object order; None where `misread`.
+    embedded_files: tuple[EmbeddedFile, ...] | None
+    # The streams each /EF names, in the order of their keys, each once: one
+    # entry for each /EF as it is written, in the order the file
+    # specifications are listed. None where `misread`.
+    embedded_streams: tuple[tuple[tuple[int, int], ...], ...] | None
+    # What QPDF warned of while it read these, in the order it warned.
+    warnings: tuple[str, ...]
+
+
 class StructureReader(Protocol):
     """What the inspection asks QPDF of a file's structure."""
 
     def structure(self) -> FileStructure: ...
+
+
+class ActiveContentReader(Protocol):
+    """What the inspection asks QPDF of a file's active content."""
+
+    def active_content(self) -> ActiveContent: ...
 
 
 class ObjectReader(Protocol):
