@@ -479,8 +479,9 @@ def test_the_encryption_where_qpdf_cannot_read_a_stream():
     QPDF then reads past the data into the file's own text and finds no
     endstream after it. Shortened, the encrypted bytes, which follow from
     QPDF's file identifier and so from the clock, stood before endstream, and
-    where the first of them was %, QPDF read the rest of the line as a comment
-    and found endstream: 17 of 4000 encryptions (measured, PR #89)."""
+    where they began with a %, after white space or not, QPDF read the rest of
+    the line as a comment and found endstream: about one encryption in 250
+    (measured, PR #89 and PR #90)."""
     data = encrypt(
         page_file(b"4 0 R", {4: stream(BODY)}),
         user="",
