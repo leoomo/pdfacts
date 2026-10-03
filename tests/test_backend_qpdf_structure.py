@@ -434,7 +434,11 @@ def test_a_method_for_strings_of_its_own():
         (
             b"/EncryptMetadata false",
             b"/SubFilter /Abcde#zzij",
-            {"encrypt_metadata": None, "sub_filter": "/SubFilter is a name QPDF cannot read"},
+            {
+                "encrypt_metadata": None,
+                "sub_filter": "/SubFilter is a name with a # not followed by two "
+                "hexadecimal digits",
+            },
             True,
         ),
     ],

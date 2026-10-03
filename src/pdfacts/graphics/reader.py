@@ -202,13 +202,22 @@ def _annotation(
     """The graphics of one annotation's appearance, checked and placed on the page.
 
     None, or why none of the page's graphics are known: PDFium draws an
-    annotation that has no /Subtype to name it by in a reference.
+    annotation that has no /Subtype to name it by in a reference, or one whose
+    /Subtype is a name without bytes.
     """
     selected = entry.appearance
     drawn = drawing is not None and (
         bool(drawing.drawing.objects) or drawing.appearance_text != "" or drawing.drawing.too_deep
     )
-    if not entry.annotation.subtype:
+    subtype = entry.annotation.subtype
+    if isinstance(subtype, str):
+        if drawn:
+            return Unknown(
+                _INVALID,
+                f"PDFium draws annotation {entry.annotation.index} of the page, whose {subtype}",
+            )
+        return None
+    if not subtype:
         if drawn:
             return Unknown(
                 _INVALID,
@@ -219,7 +228,7 @@ def _annotation(
     annotation = AnnotationRef(
         page_index=out.page_index,
         annotation_index=entry.annotation.index,
-        kind=decode_name(entry.annotation.subtype).text,
+        kind=decode_name(subtype).text,
         object_number=entry.annotation.object_number,
         generation=entry.annotation.generation,
     )
