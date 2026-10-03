@@ -3,8 +3,9 @@ pattern check refuse it, as issue #62's rule refuses an object QPDF mis-reads.
 
 A name whose # is not followed by two hexadecimal digits has no bytes
 (docs/conventions.md, "Text strings and names"): QPDF holds a NUL in place of
-the #, PDFium reads the name otherwise, and QPDF's warning about it names no
-object and no offset, so the warning does not refuse the page by itself. The
+the #, PDFium reads the name otherwise, and QPDF's warning about it names the
+content stream and an offset, not an object in the form issue #62's rule looks
+for, so the warning does not refuse the page by itself. The
 count and the check take such names from the streams they parse, and what the
 engines make of the stream may differ.
 

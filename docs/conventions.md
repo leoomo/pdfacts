@@ -662,9 +662,10 @@ opened would end that, but it costs time and memory with the size of every
 object once decoded, many times that size (measured, 2026-10-02: a 4 MB array
 takes about 270 MB more), and the objects of an object stream may be
 compressed, so that `max_bytes` does not bound it; so QPDF reads what the
-pages read. The warnings that name no object and no offset stay
-countable, except the name without bytes above — the page-tree repairs of
-the walked view, the recoveries of a content stream — and the corpus gives none of the refusing ones at all. The count reads
+pages read. The warnings that name no object and its offset in that form stay
+countable — the page-tree repairs of the walked view, the recoveries of a
+content stream — and the corpus gives none of the refusing ones at all; a
+name without bytes is refused for itself, not for its warning. The count reads
 every entry of the page's `/Annots`, also where `max_items_per_page` would
 refuse the page's annotations. It may add QPDF's warnings about content
 streams to the document's warnings, and pikepdf warns of content that ends

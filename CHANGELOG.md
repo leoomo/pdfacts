@@ -257,6 +257,12 @@ may break callers.
   and every graphic of a page where PDFium draws an annotation whose
   `/Subtype` is such a name. "Fields and widgets": no name without bytes is
   compared with PDFium's.
+- "Limits", "Paths and images": a name without bytes that the name operand of
+  `Do`, `gs`, `scn`, `SCN` or `Tf` of a content stream writes leaves the
+  page's form count refused and its colours unknown, as a mis-read object;
+  QPDF's warning about it names the content stream and an offset, and where
+  `/Contents` is an array no warning reaches the document (asked for by the
+  maintainer in the prompt of 2026-10-03).
 
 ### Corrected
 
@@ -284,20 +290,15 @@ may break callers.
   `#` and a hexadecimal digit, were read as bytes neither engine reads, and so
   was an appearance state named so. Such a name is now an unknown value,
   invalid in the file.
-- A name with a `#` not followed by two hexadecimal digits in a content stream,
-  where the count behind `max_forms_per_page` or the check that decides whether
-  colours are known read it, was read as QPDF holds it, which PDFium does not:
-  QPDF's warning about it names no object, so the page stayed countable and
-  the check behind the colours still answered it — for `scn` and `SCN` it
-  answered unknown colours even before. Such a name now leaves the page
-  uncountable (`LimitUncheckedError` where `max_forms_per_page` is set) and
-  the check unanswered, its colours unknown, as a mis-read object does.
-- "Limits", "Paths and images": a name without bytes that the name operand of
-  `Do`, `gs`, `scn`, `SCN` or `Tf` of a content stream writes leaves the
-  page's form count refused and its colours unknown, as a mis-read object;
-  QPDF's warning about it names the content stream and an offset, and where
-  `/Contents` is an array no warning reaches the document (asked for by the
-  maintainer in the prompt of 2026-10-03).
+- A name with a `#` not followed by two hexadecimal digits in a content
+  stream, where the count behind `max_forms_per_page` or the check that
+  decides whether colours are known read it, was read as QPDF holds it, which
+  PDFium does not: QPDF's warning about it names no object in the form issue
+  #62's rule looks for, so the page stayed countable and the check behind the
+  colours still answered it — for `scn` and `SCN` it answered unknown colours
+  even before. Such a name now leaves the page uncountable
+  (`LimitUncheckedError` where `max_forms_per_page` is set) and the check
+  unanswered, its colours unknown, as a mis-read object does.
 
 ## 0.0.1
 
