@@ -131,7 +131,6 @@ may break callers.
   number of objects QPDF's cross-reference holds, which QPDF reads whatever
   `/Size` says: a file whose `/Size` is too small no longer passes.
   `Document.object_count` is still `/Size`.
-
 - open() checks that the engines agree on the encryption: where PDFium reads
   the file as encrypted and QPDF as not, or the two read another revision of
   the security handler, every value from QPDF is unknown, engines-disagree, as
@@ -278,7 +277,6 @@ may break callers.
   before `max_objects` is checked, in memory about three times the decoded
   size of the largest, which `max_bytes` does not bound (decision of the
   maintainer, 2026-10-03).
-
 - "Object identity": a check on open that both engines read the file as
   encrypted, with the same revision of the security handler, or both as not
   (decision of the maintainer, 2026-10-04).
