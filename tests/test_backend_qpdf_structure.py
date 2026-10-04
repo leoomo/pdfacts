@@ -304,28 +304,26 @@ def entry(written: bytes, key: bytes) -> bytes | None:
 @pytest.mark.parametrize(
     ("options", "values"),
     [
-        # (/V, /R, /Length and /EncryptMetadata as written; the key's bits
-        # and QPDF's method for it)
-        ({"R": 2, "aes": False, "metadata": False}, (b"1", b"2", b"40", None, 40, "none")),
-        ({"R": 3, "aes": False, "metadata": False}, (b"2", b"3", b"128", None, 128, "none")),
-        ({"R": 4}, (b"4", b"4", b"128", None, 128, "aes")),
-        ({"R": 4, "aes": False, "metadata": False}, (b"4", b"4", b"128", b"false", 128, "rc4")),
-        ({"R": 4, "metadata": False}, (b"4", b"4", b"128", b"false", 128, "aes")),
-        ({"R": 6}, (b"5", b"6", b"256", None, 256, "aesv3")),
+        # (/V, /R, /Length and /EncryptMetadata as written; the key's bits)
+        ({"R": 2, "aes": False, "metadata": False}, (b"1", b"2", b"40", None, 40)),
+        ({"R": 3, "aes": False, "metadata": False}, (b"2", b"3", b"128", None, 128)),
+        ({"R": 4}, (b"4", b"4", b"128", None, 128)),
+        ({"R": 4, "aes": False, "metadata": False}, (b"4", b"4", b"128", b"false", 128)),
+        ({"R": 4, "metadata": False}, (b"4", b"4", b"128", b"false", 128)),
+        ({"R": 6}, (b"5", b"6", b"256", None, 256)),
     ],
     ids=["R2", "R3", "R4 AES", "R4 RC4", "R4 metadata in the clear", "R6"],
 )
 def test_the_encryption_as_written_and_as_qpdf_makes_it(options, values):
     """The standard security handler (ISO 32000-2, 7.6.4): the key has the
-    bits /Length gives, /V 1 always 40; a handler of /V 1 or 2 names no
-    method, which QPDF answers with "none", /V 4 names AES or RC4 in its
-    crypt filter, /V 5 AES-256. /P is as written: from the permissions chosen
-    (Table 22) where the revision is 3 or more; revision 2 ignores bits 9 to
-    12, so what pikepdf writes there is not of the construction."""
+    bits /Length gives, /V 1 always 40, /V 5 256. /P is as written: from the
+    permissions chosen (Table 22) where the revision is 3 or more; revision 2
+    ignores bits 9 to 12, so what pikepdf writes there is not of the
+    construction."""
     data = encrypt(
         page_file(b"4 0 R", {4: stream(BODY)}), user="", owner="o", allow=ALLOW, **options
     )
-    v, r, length_written, metadata, bits, method = values
+    v, r, length_written, metadata, bits = values
     written = encryption_dictionary(data)
     assert [entry(written, key) for key in (b"/V", b"/R", b"/EncryptMetadata")] == [
         v,
@@ -344,7 +342,6 @@ def test_the_encryption_as_written_and_as_qpdf_makes_it(options, values):
     assert (entries.length_invalid, entries.encrypt_metadata_invalid) == (False, False)
     assert entries.p == p
     assert entries.key_bits == bits
-    assert (entries.stream_method, entries.string_method, entries.file_method) == (method,) * 3
 
 
 @pytest.mark.parametrize(
@@ -397,21 +394,6 @@ def test_a_key_length_the_dictionary_does_not_write():
     entries = found.encryption
     assert (entries.length, entries.length_invalid, entries.key_bits) == (None, False, 40)
     assert found.warnings == ()
-
-
-def test_a_method_for_strings_of_its_own():
-    """/StrF names a crypt filter /CF does not define, which QPDF answers with
-    "unknown"; /StmF stays AES, and with no /EFF so do embedded files (ISO
-    32000-2, Table 20, /EFF's default)."""
-    data = encrypt(page_file(b"4 0 R", {4: stream(BODY)}), user="", owner="o", compress=False)
-    assert data.count(b"/StrF /StdCF") == 1 and b"/EFF" not in data
-    found = structure(data.replace(b"/StrF /StdCF", b"/StrF /StdCG"))
-    entries = found.encryption
-    assert (entries.stream_method, entries.string_method, entries.file_method) == (
-        "aes",
-        "unknown",
-        "aes",
-    )
 
 
 @pytest.mark.parametrize(
@@ -493,7 +475,7 @@ def test_the_encryption_where_qpdf_cannot_read_a_stream():
     assert data.count(b"/Length 15") == 1
     found = structure(data.replace(b"/Length 15", b"/Length 20"))
     assert (found.misread, found.objects, found.pages) == (True, None, None)
-    assert (found.encryption.r, found.encryption.stream_method) == (4, "rc4")
+    assert found.encryption.r == 4
 
 
 def test_closed():
