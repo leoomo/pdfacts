@@ -663,6 +663,37 @@ A limit that could not be checked does not count as passed; that is why
 
 `MemoryError` is never caught and never wrapped.
 
+A password is given to both engines as PDFium takes it (decision of the
+maintainer, 2026-10-04): first as the UTF-8 of its text; where that does not
+open the file and the text is not ASCII, as PDFium converts it for the file's
+revision, and QPDF is given the same bytes, which count only where the file's
+`/R` and `/V` are both of the revisions they are for (measured). Converted
+bytes that hold a NUL where it counts, in their first 32 below revision 5,
+are not given to QPDF, which reads a password up to its first NUL: they would
+open a file whose password is what precedes the NUL, which PDFium refuses
+(measured). From revision 5 on, QPDF takes the first 127
+bytes of a password and PDFium all of them, so no longer password, text or
+converted, counts there (measured).
+
+| Revision | Converted to |
+| --- | --- |
+| 2, 3, 4, where a password is bytes | the low byte of each character's code: a Latin-1 letter stays as it is, and a character beyond Latin-1 stands for another, so `€uro` opens a file whose password is `¬uro`, and not one whose password is `€uro` written in PDFDocEncoding |
+| 5, 6, where a password is UTF-8 | its UTF-8 bytes read as Latin-1 and written as UTF-8 again: `pässwörd` also opens a file whose password is `pÃ¤sswÃ¶rd` |
+
+Four known gaps (measured). Where one of a file's passwords is the UTF-8 of
+the text given and the other the bytes PDFium converts it to, PDFium can
+match the owner password where QPDF matches the user password, so that the
+inspection reports the user password matched. From revision 5 on, a file
+whose password is longer than 127 bytes opens in PDFium alone. Below revision
+5, a file whose password bytes hold a NUL, which pikepdf does not write,
+opens in PDFium given a text whose low bytes they are, and not in QPDF
+(measured at revision 2). In
+these two, every value from QPDF is unknown, `decrypt()` refuses the file,
+and `recover()` the password. A file whose `/V` and `/R` disagree, one below
+5 and the other not, QPDF reads by `/V` and PDFium by `/R`: QPDF can open it
+given a text that PDFium refuses, and `recover()` then raises
+`RecoveryFailedError`.
+
 Errors can be pickled with their attributes and their notes, so that they
 cross process boundaries intact.
 
@@ -773,9 +804,7 @@ has to hold those bytes.
 
 Either password decrypts the file: the user password, which is empty where a
 file sets only an owner password and then need not be given, or the owner
-password. A known gap (measured): at revisions 2 to 4, QPDF does not take a
-password outside ASCII as `open()` gives it, where PDFium does; every value
-from QPDF is then unknown, and `decrypt()` refuses the file.
+password; how a password is given to the engines, "Errors" states.
 
 The permissions, the bits of `/P`, are not enforced: the inspection reports
 them ("Inspection"), and the result has none, since it is not encrypted
