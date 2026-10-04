@@ -331,6 +331,17 @@ class QpdfDocument:
         self._check_open()
         return self._objects_as_written
 
+    def security_handler_revision(self) -> int | None:
+        """/R of the security handler; None where QPDF reads the file as not
+        encrypted. QPDF takes /Encrypt from the newest trailer only, so an
+        update whose trailer leaves it out hides the encryption from QPDF
+        (measured)."""
+        self._check_open()
+        with _translated():
+            if not self._unwalked.is_encrypted:
+                return None
+            return int(self._unwalked.encryption.R)
+
     def cross_reference_count(self) -> int:
         """The objects QPDF's cross-reference holds, in use or in an object stream.
 

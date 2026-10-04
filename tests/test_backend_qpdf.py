@@ -598,6 +598,7 @@ def test_after_close_every_method_fails_and_close_does_nothing(monkeypatch):
     calls = [
         document_.page_count,
         document_.object_count,
+        document_.security_handler_revision,
         lambda: document_.page_object(0),
         document_.warnings,
     ]
@@ -745,6 +746,7 @@ def test_it_implements_the_object_reader():
         "page_count",
         "object_count",
         "objects_as_written",
+        "security_handler_revision",
         "cross_reference_count",
         "page_object",
         "parsed_streams",
