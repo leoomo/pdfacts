@@ -108,7 +108,6 @@ may break callers.
   through PDFium and made into glyphs, words and lines by the rules of
   "Glyphs, words and lines"; unknown as a whole where a form lies deeper
   than PDFium reads forms. The capability `TEXT`.
-
 - `inspect(document)`, in the package `pdfacts.inspection`: what QPDF reads of
   the file's structure and its active content, every object read, as the
   convention "Inspection" states. The fact types `Inspection`, `ObjectCounts`,
@@ -288,7 +287,6 @@ may break callers.
 - "Object identity": a check on open that both engines read the file as
   encrypted, with the same revision of the security handler, or both as not
   (decision of the maintainer, 2026-10-04).
-
 - "Inspection": what `inspect()` reads and how, with no limit of its own
   (decision of the maintainer, 2026-10-03); permissions reported, not
   enforced. `docs/architecture.md`: the feature package is `inspection/`, so
