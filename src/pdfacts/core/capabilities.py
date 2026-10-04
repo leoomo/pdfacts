@@ -22,6 +22,7 @@ class Capability(StrEnum):
     GRAPHICS = "graphics"
     TEXT = "text"
     INSPECTION = "inspection"
+    DECRYPTION = "decryption"
     FONT_POLICY_EMBEDDED_ONLY = "font-policy-embedded-only"
     FONT_POLICY_HOST = "font-policy-host"
 
@@ -38,6 +39,7 @@ _TABLE: Mapping[Capability, bool] = MappingProxyType(
         Capability.GRAPHICS: True,
         Capability.TEXT: True,
         Capability.INSPECTION: True,
+        Capability.DECRYPTION: True,
         Capability.FONT_POLICY_EMBEDDED_ONLY: True,
         Capability.FONT_POLICY_HOST: False,
     }

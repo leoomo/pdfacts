@@ -13,12 +13,14 @@ from pdfacts import (
     ClosedError,
     ConfigurationError,
     DamagedFileError,
+    DecryptionFailedError,
     EmptyInputError,
     EngineError,
     InputError,
     LimitError,
     LimitExceededError,
     LimitUncheckedError,
+    NotEncryptedError,
     NotPdfError,
     PasswordRequiredError,
     PdfactsError,
@@ -39,6 +41,8 @@ HIERARCHY = [
     (LimitExceededError, LimitError),
     (LimitUncheckedError, LimitError),
     (RecoveryFailedError, PdfactsError),
+    (NotEncryptedError, PdfactsError),
+    (DecryptionFailedError, PdfactsError),
     (UnsupportedError, PdfactsError),
     (ClosedError, PdfactsError),
     (ConfigurationError, PdfactsError),
@@ -62,6 +66,8 @@ INSTANCES = [
         {"limit": "max_objects", "allowed": 1000, "reason": UNREADABLE},
     ),
     (RecoveryFailedError(detail="no pages left"), {"detail": "no pages left"}),
+    (NotEncryptedError(), {}),
+    (DecryptionFailedError(detail="another page count"), {"detail": "another page count"}),
     (
         UnsupportedError(capability=Capability.FONT_POLICY_HOST),
         {"capability": Capability.FONT_POLICY_HOST},
@@ -143,6 +149,7 @@ def test_a_limit_error_needs_its_limit_and_allowed_value():
     [
         DamagedFileError(detail=""),
         RecoveryFailedError(detail=""),
+        DecryptionFailedError(detail=""),
         EngineError(engine="qpdf", detail=""),
     ],
     ids=lambda e: type(e).__name__,
@@ -221,6 +228,7 @@ def test_the_arguments_of_an_error_survive_pickling_as_they_are(error):
     [
         lambda: DamagedFileError(detail=None),
         lambda: RecoveryFailedError(detail=3),
+        lambda: DecryptionFailedError(detail=3),
         lambda: EngineError(engine="qpdf", detail=None),
     ],
 )
