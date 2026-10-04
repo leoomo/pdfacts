@@ -1068,8 +1068,12 @@ def test_max_render_pixels_applies_to_the_renderings():
 
 @pytest.mark.parametrize(
     "box, side",
-    [(b"[0 0 8192 8192]", 8192), (b"[0 0 3000000000 0.001]", 3000000000)],
-    ids=["8192 by 8192 units", "3,000,000,000 by 0.001 units"],
+    [
+        (b"[0 0 8192 8192]", 8192),
+        (b"[0 0 3000000000 0.001]", 3000000000),
+        (b"[0 0 3000000000 0.00000000000001]", 3000000000),
+    ],
+    ids=["8192 by 8192 units", "3,000,000,000 by 0.001 units", "3,000,000,000 by 10^-14 units"],
 )
 def test_a_large_page_is_rendered_at_a_lower_scale(box, side):
     """At most 2^22 pixels: (w s + 1)(h s + 1) = 2^22, so the page is fewer by

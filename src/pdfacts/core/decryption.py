@@ -301,12 +301,15 @@ def _annotation_views(access: FeatureAccess, index: int) -> tuple[AnnotationView
 def _scale(geometry: PageGeometry) -> float:
     """1, or the scale s at which (width s + 1)(height s + 1) is CHECK_PIXELS:
     each side rounds up by less than a pixel, so the page is at most that
-    many pixels, however long and thin it is."""
+    many pixels, however long and thin it is. The root is written so that
+    nothing is subtracted: for a page of 10^-14 units the usual form loses
+    every digit to cancellation and gives 0 (review of #99)."""
     width, height = geometry.width, geometry.height
     if math.ceil(width) * math.ceil(height) <= CHECK_PIXELS:
         return 1.0
     area, sides = width * height, width + height
-    return (math.sqrt(sides * sides + 4 * area * (CHECK_PIXELS - 1)) - sides) / (2 * area)
+    root = math.sqrt(sides * sides + 4 * area * (CHECK_PIXELS - 1))
+    return 2 * (CHECK_PIXELS - 1) / (sides + root)
 
 
 def _decryption_error(failure: EngineFailure) -> Exception:
