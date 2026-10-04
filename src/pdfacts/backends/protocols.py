@@ -84,6 +84,32 @@ class RecoveredBytes:
 
 
 @dataclass(frozen=True, slots=True)
+class DecryptedBytes:
+    """An encrypted file as QPDF reads it, written anew without encryption."""
+
+    data: bytes = field(repr=False)
+    # What QPDF reported while it read the file and wrote it.
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class DecryptedOtherwise:
+    """An object the document refers to that QPDF and PDFium decrypt otherwise."""
+
+    # The object it is written in; for a direct one, the indirect object that
+    # holds it, None where the trailer holds it.
+    objgen: tuple[int, int] | None
+    # "crypt filter": a stream whose /Filter names /Crypt and whose
+    # /DecodeParms give the filter's /Name; "cross-reference":
+    # a stream /Type /XRef; "signature": a dictionary with a /Contents that
+    # PDFium takes for a signature and QPDF does not; "metadata": the catalog's
+    # /Metadata, under /EncryptMetadata false, not a stream /Type /Metadata
+    # with /Subtype /XML at /V 4 or more; "trailer": an object the trailer
+    # holds directly that holds a string.
+    kind: str
+
+
+@dataclass(frozen=True, slots=True)
 class Written:
     """A value as the file writes it."""
 

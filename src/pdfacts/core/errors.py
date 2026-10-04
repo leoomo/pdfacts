@@ -124,6 +124,18 @@ class RecoveryFailedError(PdfactsError):
         super().__init__(_with_detail("the file could not be recovered", detail), detail=detail)
 
 
+class NotEncryptedError(PdfactsError):
+    def __init__(self) -> None:
+        super().__init__("the file is not encrypted: there is nothing to decrypt")
+
+
+class DecryptionFailedError(PdfactsError):
+    detail: str
+
+    def __init__(self, *, detail: str) -> None:
+        super().__init__(_with_detail("the file could not be decrypted", detail), detail=detail)
+
+
 class UnsupportedError(PdfactsError):
     capability: Capability
 

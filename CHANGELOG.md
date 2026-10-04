@@ -115,6 +115,11 @@ may break callers.
   `Encryption`, `CryptFilter`, `Permissions`, `CryptMethod`, `ActiveContent`,
   `Action`, `ActionTrigger`, `ActionPlace` and `EmbeddedFile`, and the
   reference `ObjectRef`. The capability `INSPECTION`.
+- `decrypt(data, *, password=None, limits=None)`: an encrypted file written
+  anew by QPDF without encryption and checked against the input, as the
+  convention "Decryption" states. It returns `Decryption`; the errors
+  `NotEncryptedError` and `DecryptionFailedError`. The capability
+  `DECRYPTION`.
 
 ### Changed
 
@@ -294,6 +299,11 @@ may break callers.
   maintainer, 2026-10-03). "Object identity": the inspection is the exception
   to the check before a value from QPDF is used for a page or an annotation
   (decision of the maintainer, 2026-10-04).
+- "Decryption": what `decrypt()` refuses, the crypt filters and the objects
+  the engines decrypt otherwise among them, and what it checks: each page's
+  geometry, annotation dictionaries, characters and rendering (decisions of
+  the maintainer, 2026-10-02 and 2026-10-04); permissions not enforced.
+  "Errors": `NotEncryptedError` and `DecryptionFailedError`.
 
 ### Corrected
 
