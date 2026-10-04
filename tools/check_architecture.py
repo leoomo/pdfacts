@@ -32,7 +32,7 @@ FEATURE_PACKAGES = {
     "graphics",
     "annotations",
     "forms",
-    "inspect",
+    "inspection",
     "edit",
     "render",
     "content",

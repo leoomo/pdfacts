@@ -470,7 +470,9 @@ class ContentStreamLength:
 
     QPDF, its recovery off as open() reads, reads a stream only where /Length
     is an integer that leads to endstream; any other it reads as null and
-    warns that it mis-read the object (FileStructure.misread).
+    warns that it mis-read the object (FileStructure.misread). A /Length
+    below 0 it reads as 0, warning of no mis-read object (measured): the
+    length is then that integer, as written.
     """
 
     object_number: int
@@ -508,18 +510,31 @@ class ObjectCounts:
 
 
 @dataclass(frozen=True, slots=True)
+class CryptFilterEntry:
+    """A crypt filter of the encryption dictionary's /CF, as written."""
+
+    # The filter's key in /CF, as EncryptionEntries.filter gives a name.
+    name: bytes | str
+    # /CFM, as EncryptionEntries.filter; a str saying why also where the
+    # filter is no dictionary.
+    method: bytes | str | None
+
+
+@dataclass(frozen=True, slots=True)
 class EncryptionEntries:
     """A file's encryption as QPDF reads it.
 
-    The dictionary's entries as written, None where absent or of another
-    type; QPDF opens no file whose /V, /R or /P is absent or of another type
-    (measured). And what QPDF's security handler makes of them. A handler of
-    /V 1 or 2 names no method: it is RC4 by the standard, and QPDF answers
-    "none".
+    The dictionary's entries as written, None where absent; QPDF opens no
+    file whose /V, /R or /P is absent or of another type (measured). And the
+    length of the key QPDF's security handler derives, and the passwords it
+    matched. QPDF's names for the methods are not given: it names /Identity
+    and no /CFM alike, and RC4 of /V 1 and 2 "none" (measured); the methods
+    follow from the entries (inspection.report).
     """
 
-    # The bytes of the names; a str saying why where QPDF cannot tell them, a
-    # name with a stray #.
+    # The bytes of the names; None where absent; a str saying why where the
+    # entry is no name, or a name QPDF cannot tell the bytes of, one with a
+    # stray #.
     filter: bytes | str | None
     sub_filter: bytes | str | None
     v: int | None
@@ -532,16 +547,22 @@ class EncryptionEntries:
     encrypt_metadata: bool | None
     # True when the key is there and holds anything but a boolean.
     encrypt_metadata_invalid: bool
-    # QPDF's: the key's length in bits, and the methods for streams, strings
-    # and embedded files, each "none", "unknown", "rc4", "aes" or "aesv3".
+    # QPDF's: the key's length in bits.
     key_bits: int
-    stream_method: str
-    string_method: str
-    file_method: str
     # Whether the password given matched the user's, and whether it matched
     # the owner's; both where the two passwords are the same.
     user_password_matched: bool
     owner_password_matched: bool
+    # The object the encryption dictionary is written in; None where the
+    # trailer holds it directly.
+    dictionary: tuple[int, int] | None
+    # /StmF, /StrF and /EFF, as `filter`.
+    stream_filter: bytes | str | None
+    string_filter: bytes | str | None
+    file_filter: bytes | str | None
+    # The crypt filters /CF defines, in the order of their keys' bytes; a str
+    # saying why where /CF is no dictionary.
+    crypt_filters: tuple[CryptFilterEntry, ...] | str
 
 
 @dataclass(frozen=True, slots=True)
@@ -563,6 +584,9 @@ class FileStructure:
     pages: tuple[PageContents, ...] | None
     # What QPDF warned of while it read these, in the order it warned.
     warnings: tuple[str, ...]
+    # The page objects the file's page tree lists, in page order, read
+    # without reading the pages; None where `pages` is.
+    page_objects: tuple[tuple[int, int], ...] | None
 
 
 class ActionPlace(StrEnum):
@@ -598,10 +622,11 @@ class Action:
     """An action dictionary (ISO 32000-2, 12.6.2), or a stream read as its
     dictionary."""
 
-    # /S: the bytes of the name; None where /S is absent or not a name. QPDF
-    # reads a name without bytes only with a warning that it mis-read the
-    # object (measured), which leaves ActiveContent unknown.
-    kind: bytes | None
+    # /S: the bytes of the name; None where /S is absent; a str saying why
+    # where it is no name. QPDF reads a name without bytes only with a warning
+    # that it mis-read the object (measured), which leaves ActiveContent
+    # unknown.
+    kind: bytes | str | None
     # The object the dictionary is written in: its own, or the object that
     # holds it.
     written_in: tuple[int, int]
@@ -672,8 +697,9 @@ class ActiveContent:
     # in its /AA), the outline's. None where `actions` is.
     triggers: tuple[ActionTrigger, ...] | None
     # The streams of /AcroForm's /XFA, in order; None where `misread`, or where
-    # /AcroForm has no /XFA.
-    xfa: tuple[tuple[int, int], ...] | None
+    # /AcroForm has no /XFA; a str saying why where /XFA is neither a stream
+    # nor an array.
+    xfa: tuple[tuple[int, int], ...] | str | None
     # In object order; None where `misread`.
     embedded_files: tuple[EmbeddedFile, ...] | None
     # The streams each /EF names, in the order of their keys, each once: one

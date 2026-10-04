@@ -10,7 +10,7 @@ callers
    |
 public interface      open / Page / facts / forms / inspect / edit session
    |
-feature packages      text, graphics, annotations, forms, inspect, edit, render
+feature packages      text, graphics, annotations, forms, inspection, edit, render
 core                  geometry, object references, errors, limits,
                       capabilities, runtime, digest
    |
@@ -49,7 +49,7 @@ src/pdfacts/
   graphics/      paths, images, reader
   annotations/   model, reader            later: ops, appearance
   forms/         model, reader            later: fill
-  inspect/       report, active_content
+  inspection/    report, active_content
   edit/          session, operations
   render/
   content/       content-stream tokens and graphics state

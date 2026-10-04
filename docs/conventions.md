@@ -334,6 +334,11 @@ When a check fails, the values that depend on it are unknown and the reason is
 stated. Facts read through PDFium are returned as usual, except paths and
 images, whose appearances cannot be checked without QPDF ("Paths and images").
 
+The inspection is an exception to the check before a value from QPDF is used
+for a page or an annotation: it reads through QPDF alone, and gives the pages
+and the page and annotation index of an entry as QPDF reads them, unchecked
+("Inspection"; decision of the maintainer, 2026-10-04).
+
 No PDFium call gives an object number, so the check of the object streams is
 made on QPDF's side alone. Measured: all 104 corpus files pass it; 93 of them
 use object streams. All 104 pass the check of the encryption too; 14 of them
@@ -439,6 +444,165 @@ of it whose check passed.
 Entries of a page's `/Annots` are counted before any is read, against the
 `max_items_per_page` limit; the deadline is checked when `widgets()` or
 `fields()` begins.
+
+## Inspection
+
+`inspect(document)` reports what QPDF reads of the file's structure and its
+active content: the trailer's `/Size`, the objects by kind, each page's
+`/Contents` with the `/Length` each of its streams writes, the encryption, and
+the actions, the XFA and the embedded files. Every value is read through QPDF,
+with its recovery off as `open()` reads ("Damaged files"); none through
+PDFium.
+
+The inspection reads every object of the file, those an object stream holds
+included, from views of its own, opened for the call and closed after it, and
+of the pages nothing but their objects, so that it changes no other answer of
+the document. Its time and memory grow with what those objects hold as
+decompressed. `max_bytes` bounds the file, not what its streams decompress to;
+`max_objects` bounds the objects the cross-reference lists, not the direct
+objects one of them holds; `max_items_per_page` does not apply. One object can
+hold hundreds of thousands (measured on macOS arm64, in several runs: a file
+of 7 kB whose one object, in an object stream, holds an array of 320,000
+dictionaries took 5 to 16 s; one of 28 kB whose one object holds a million
+actions so, 18 to 43 s, the process then holding 0.9 to 1.1 GB). The deadline
+is checked when `inspect()` begins, and again before it reads every object a
+second time for the active content; a separate process per document is the
+guard, as for an engine call ("Limits"). The inspection has no limit of its
+own (decision of the maintainer, 2026-10-03).
+
+Where every value from QPDF is unknown ("Object identity"), every part of the
+inspection is, with the same reason, and it has no warnings. Where QPDF
+warned, reading every object, that it mis-read one, a warning that names an
+object and its offset ("Limits"), the object counts, the pages and the active
+content are unknown, unreadable: QPDF reads such an object as null and drops a
+key whose value it reads as null, so a page's `/Contents` or an action can
+look absent. The encryption is given where QPDF found it, but an entry of it
+that QPDF finds absent is then unknown, unreadable, for it may be one QPDF
+dropped; so are the crypt filters of `/CF`, and a method that rests on an
+entry or a crypt filter QPDF does not find. Whether the file is encrypted at
+all is checked against PDFium when it is opened: QPDF drops the trailer's
+`/Encrypt` where it reads the dictionary as null, and PDFium may decrypt the
+file all the same; the engines then disagree, and every value from QPDF is
+unknown (measured). Where the pages QPDF found are not the objects the file's
+page tree lists, the pages are unknown, unreadable, and so are the actions and
+the entries that name them, which are listed in the order of the pages. A
+page, and the page and annotation index of an entry, are as QPDF reads the
+page tree and each page's `/Annots`: the inspection reads through QPDF alone,
+and checks none of them against PDFium as a value from QPDF is checked before
+it is used for a page or an annotation ("Object identity", which names this
+exception). The warnings QPDF gave while it read are given each once, in the
+order it gave them.
+
+A page names what its `/Contents` names by an index: a stream or an indirect
+array that several pages name is listed once, and a stream that an array names
+many times is read once, so that what the file shares is not multiplied
+(measured: 100 pages naming one array of 20,000 entries, a file of 2 kB, took
+6.2 s listed for each page, 0.2 s listed once). A content stream's `/Length`
+is given as written, an integer that leads to `endstream` (QPDF reads no
+other); one below 0, which QPDF reads as 0, warning of no mis-read object, is
+unknown, invalid (measured); in an encrypted file it is the length of the
+encrypted data, which with AES holds 16 bytes of initialization vector and 1
+to 16 bytes of padding (81 of the corpus's 948 content streams).
+
+The encryption is the dictionary's entries as written, named by its object
+(none where the trailer holds it directly), with the crypt filters `/CF`
+defines, in the order of their names' bytes, and the `/CFM` of each, and the
+length of QPDF's key. An entry of another type than ISO 32000-2 gives it (a
+name, `/CF` and each crypt filter a dictionary, a stream not counted as one,
+`/Length` an integer, `/EncryptMetadata` a boolean) is unknown, invalid:
+PDFium reads `/StmF`, `/StrF` or `/CFM` written as a string as the name, QPDF
+as absent, and `/CF` written as a stream as its dictionary, QPDF as none
+(measured). `/V`, `/R` and `/P` are integers, and `/V` is 1, 2, 4 or 5: QPDF
+opens no file otherwise (measured). The permissions are the bits of `/P` as
+ISO 32000-2, Table 22, names them, True where the bit is 1; revision 2 defines
+bits 3 to 6 only, and the others are None there; bit 10, extraction for
+accessibility in ISO 32000-1, is one ISO 32000-2 no longer uses and has
+writers set. They are reported, not enforced. The method of a handler of `/V`
+1 or 2 is RC4, which it uses without crypt filters (Table 20). Of `/V` 4 or 5
+it is that of the crypt filter `/StmF`, `/StrF` or `/EFF` names as written:
+identity where it names `/Identity` or is absent (an absent `/EFF` names what
+`/StmF` names); otherwise as the `/CFM` of the crypt filter `/CF` defines by
+that name gives it (Table 25): RC4 for `/V2`; AES for `/AESV2` and `/AESV3`,
+with a key as long as `/V` makes it, for both engines decrypt either so
+(measured); unknown, invalid, for another name, or where `/CF` defines no such
+filter. `/CFM /None`, its default, leaves the decryption to the security
+handler; the standard security handler defines none, and the engines take such
+a filter differently (measured: PDFium decrypts it as RC4, so a file encrypted
+with RC4 and not one encrypted with AES; QPDF names its method "none" or
+"unknown", and decrypts neither, but one encrypted with AES whose `/CFM` is
+`/None`), so the method is unknown, the engines disagreeing. So is it where
+`/CF` defines a filter by the name `/Identity`: PDFium takes `/Identity` for
+the identity filter, QPDF for that filter (measured). PDFium opens no file
+whose `/StmF` and `/StrF` name different filters (it reads a string written
+there as the name), name a filter other than `/Identity` that `/CF` lacks, or
+are both absent, so `open()` refuses those. Neither engine heeds `/EFF`: each
+decrypts an embedded file with the method of `/StmF` (measured), so where
+`/EFF` names another filter, the engines read embedded files otherwise than
+the method the file gives for them. Whether the user's and the owner's
+password matched is of the password given to `open()`, no password being the
+empty one; both, where the two are the same.
+
+Active content is listed in full, with no verdict: which kinds matter is the
+caller's to decide (decision of the maintainer, 2026-10-02). An action is
+listed once, with its kind (`/S`, a name as "Text strings and names" gives
+names; unknown, invalid, where it is no name) and the object it is written in:
+its own, or the one that holds it. An entry that names an action to run is
+listed once, with its place, the object its dictionary is written in and its
+event, as ISO 32000-2, 12.6.3, names them: the catalog's `/OpenAction` and the
+events WC, WS, DS, WP and DP of its `/AA`; the JavaScript name tree; the
+events O and C of a page's `/AA`; an annotation's `/A`, but a Movie
+annotation's, and the events E, X, D, U, Fo, Bl, PO, PC, PV and PI of its
+`/AA`, with the annotation's page and index; the events K, F, V and C of a
+field's `/AA`; an outline item's `/A`. A key of `/AA` that is no event of its
+place runs nothing and is no entry.
+
+The fields are the dictionaries of `/AcroForm`'s `/Fields` and of their
+`/Kids`, those of its `/CO`, the widget annotations the pages list, and the
+`/Parent` of each: PDFium takes a widget outside `/Fields` for a field once a
+page is loaded, and MuPDF runs the C of each field of `/CO` (measured; read).
+An entry is listed where it is written. PDFium reads a field's events from the
+nearest `/AA` up its `/Parent`, MuPDF each event, an annotation's too, from
+the nearest `/AA` that holds it (measured; read); the listing gives each `/AA`
+where it is written and leaves that reading to the caller. The events of an
+annotation written in a field that no page lists are listed with no page, as
+MuPDF reads them for the field's widgets.
+
+In the active content, a stream is read as its dictionary wherever a
+dictionary is read. PDFium does so for the action of `/OpenAction` and of a
+link's or an outline item's `/A`, and for a page's `/AA`; not for a `/Next`, a
+value of the name tree or an annotation (measured). MuPDF reads every stream
+as its dictionary (read).
+
+An action that no entry names is listed too: every object is read, and a
+dictionary whose `/S` names one of the action types of ISO 32000-2, Table 201,
+or whose `/Type` is `/Action`, is an action wherever it is written (the
+trailer of a cross-reference table, which is no object, aside). In the corpus,
+48 of 1287 actions are such: 47 in objects no path from the trailer reaches,
+one the `/A` of an annotation only the structure tree names. A name is
+compared as its bytes.
+
+Each action, each `/Next` and each `/EF` is listed once and named by its
+index, and each entry once; a value written as an object of its own that many
+dictionaries name, an action's `/S`, an annotation's `/Subtype`, a crypt
+filter or its `/CFM`, is read once: what the file shares is not multiplied,
+however a caller takes the values. The actions come in the order the entries
+reach them, each followed by those its `/Next` names, depth first, then those
+no entry reaches, in object order; the entries in the order: the catalog's,
+the name tree's, each page's followed by its annotations', the fields', the
+outline's.
+
+The XFA is the streams of `/AcroForm`'s `/XFA`, a stream or those of an array;
+unknown, invalid, where it is neither, or an array but not of pairs of a
+packet's name, a string, and its stream (ISO 32000-2, Table 224). An embedded
+file is a stream a file specification's `/EF` names; a stream typed
+`/EmbeddedFile` that none names is not one (each of the corpus's 38 XFA
+streams is so typed).
+
+Not read: a page's presentation steps (`/PresSteps`, ISO 32000-2, 12.4.4.2),
+whose actions are among those no entry names; the related files of a file
+specification's `/RF`. Where the cross-reference makes the engines read one
+object number as different objects ("Object identity", a known gap), the
+inspection gives what QPDF reads.
 
 ## Three answers
 

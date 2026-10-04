@@ -10,7 +10,7 @@ import json
 import math
 import re
 from collections import Counter
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
 from decimal import Decimal
@@ -28,6 +28,7 @@ from pdfacts.backends.protocols import (
     Box,
     ContentsForm,
     ContentStreamLength,
+    CryptFilterEntry,
     EmbeddedFile,
     EncryptionEntries,
     EngineFailure,
@@ -465,12 +466,21 @@ class QpdfDocument:
             encryption = _encryption_entries(pdf) if pdf.is_encrypted else None
             pages = None
             if self._pages_as_written:
-                pages = tuple(_page_contents(pdf.get_object(objgen)) for objgen in self._pages)
+                read: dict[tuple[int, int], PageContents] = {}
+                lengths: dict[tuple[int, int], ContentStreamLength] = {}
+                pages = tuple(
+                    _page_contents(pdf.get_object(objgen), read, lengths) for objgen in self._pages
+                )
             # Taken after the reading, so that they hold what it raised.
             warnings = tuple(str(message) for message in pdf.get_warnings())
         if any(not _countable(message) for message in warnings):
             return FileStructure(
-                misread=True, objects=None, encryption=encryption, pages=None, warnings=warnings
+                misread=True,
+                objects=None,
+                encryption=encryption,
+                pages=None,
+                warnings=warnings,
+                page_objects=None,
             )
         objects = ObjectCounts(
             objects=sum(kinds.values()),
@@ -481,7 +491,12 @@ class QpdfDocument:
             arrays=kinds["array"],
         )
         return FileStructure(
-            misread=False, objects=objects, encryption=encryption, pages=pages, warnings=warnings
+            misread=False,
+            objects=objects,
+            encryption=encryption,
+            pages=pages,
+            warnings=warnings,
+            page_objects=None if pages is None else tuple(self._pages),
         )
 
     def active_content(self) -> ActiveContent:
@@ -498,8 +513,15 @@ class QpdfDocument:
         """
         self._check_open()
         with self._own_view() as pdf:
-            found, files, streams = _scan(pdf)
-            walked = _ActionWalk(pdf).walked(self._pages, found) if self._pages_as_written else None
+            # An action's /S, by the object it is written in where it is one
+            # of its own (_read_once), for the scan and the walk.
+            kinds: dict[tuple[int, int], object] = {}
+            found, files, streams = _scan(pdf, kinds)
+            walked = (
+                _ActionWalk(pdf, kinds).walked(self._pages, found)
+                if self._pages_as_written
+                else None
+            )
             xfa = _xfa(pdf.Root)
             # Taken after the reading, so that they hold what it raised.
             warnings = tuple(str(message) for message in pdf.get_warnings())
@@ -2108,25 +2130,52 @@ def _object_kind(obj: object) -> str:
 _REFERENCE = re.compile(r"\d+ \d+ R")
 
 
-def _page_contents(page: pikepdf.Object) -> PageContents:
-    """What the page writes in /Contents; pikepdf hands out a null as None."""
+def _page_contents(
+    page: pikepdf.Object,
+    read: dict[tuple[int, int], PageContents],
+    lengths: dict[tuple[int, int], ContentStreamLength],
+) -> PageContents:
+    """What the page writes in /Contents; pikepdf hands out a null as None. A
+    stream or an indirect array that several pages name is read once, `read`
+    holding it by its object, and they share the value: pages that name one
+    array of many entries would otherwise cost pages times entries. So is a
+    stream's /Length, `lengths` holding it: an array that names one stream
+    many times would otherwise cost its entries times the stream's
+    dictionary."""
     value = page.get("/Contents")
     if value is None:
         return PageContents(form=ContentsForm.ABSENT, array_object=None, streams=(), others=0)
+    if isinstance(value, (pikepdf.Stream, pikepdf.Array)) and value.is_indirect:
+        objgen = (int(value.objgen[0]), int(value.objgen[1]))
+        if objgen not in read:
+            read[objgen] = _contents_of(value, lengths)
+        return read[objgen]
+    if isinstance(value, pikepdf.Array):
+        return _contents_of(value, lengths)
+    return PageContents(form=ContentsForm.OTHER, array_object=None, streams=(), others=1)
+
+
+def _contents_of(
+    value: pikepdf.Stream | pikepdf.Array, lengths: dict[tuple[int, int], ContentStreamLength]
+) -> PageContents:
+    def length(stream: pikepdf.Stream) -> ContentStreamLength:
+        objgen = (int(stream.objgen[0]), int(stream.objgen[1]))
+        if objgen not in lengths:
+            lengths[objgen] = _stream_length(stream)
+        return lengths[objgen]
+
     if isinstance(value, pikepdf.Stream):
         return PageContents(
-            form=ContentsForm.STREAM, array_object=None, streams=(_stream_length(value),), others=0
+            form=ContentsForm.STREAM, array_object=None, streams=(length(value),), others=0
         )
-    if isinstance(value, pikepdf.Array):
-        streams = tuple(_stream_length(item) for item in value if isinstance(item, pikepdf.Stream))
-        if value.is_indirect:
-            form = ContentsForm.INDIRECT_ARRAY
-            array_object = (int(value.objgen[0]), int(value.objgen[1]))
-        else:
-            form, array_object = ContentsForm.ARRAY, None
-        others = len(value) - len(streams)
-        return PageContents(form=form, array_object=array_object, streams=streams, others=others)
-    return PageContents(form=ContentsForm.OTHER, array_object=None, streams=(), others=1)
+    streams = tuple(length(item) for item in value if isinstance(item, pikepdf.Stream))
+    if value.is_indirect:
+        form = ContentsForm.INDIRECT_ARRAY
+        array_object = (int(value.objgen[0]), int(value.objgen[1]))
+    else:
+        form, array_object = ContentsForm.ARRAY, None
+    others = len(value) - len(streams)
+    return PageContents(form=form, array_object=array_object, streams=streams, others=others)
 
 
 def _stream_length(stream: pikepdf.Stream) -> ContentStreamLength:
@@ -2155,8 +2204,8 @@ def _encryption_entries(pdf: pikepdf.Pdf) -> EncryptionEntries:
     length = dictionary.get("/Length")
     metadata = dictionary.get("/EncryptMetadata")
     return EncryptionEntries(
-        filter=_name_entry(dictionary.get("/Filter"), "/Filter"),
-        sub_filter=_name_entry(dictionary.get("/SubFilter"), "/SubFilter"),
+        filter=_written_name(dictionary.get("/Filter"), "/Filter"),
+        sub_filter=_written_name(dictionary.get("/SubFilter"), "/SubFilter"),
         v=_integer(dictionary.get("/V")),
         r=_integer(dictionary.get("/R")),
         length=_integer(length),
@@ -2165,12 +2214,58 @@ def _encryption_entries(pdf: pikepdf.Pdf) -> EncryptionEntries:
         encrypt_metadata=metadata if isinstance(metadata, bool) else None,
         encrypt_metadata_invalid=metadata is not None and not isinstance(metadata, bool),
         key_bits=int(info.bits),
-        stream_method=info.stream_method.name,
-        string_method=info.string_method.name,
-        file_method=info.file_method.name,
         user_password_matched=bool(pdf.user_password_matched),
         owner_password_matched=bool(pdf.owner_password_matched),
+        dictionary=(int(found.objgen[0]), int(found.objgen[1]))
+        if isinstance(found, pikepdf.Dictionary) and found.is_indirect
+        else None,
+        stream_filter=_written_name(dictionary.get("/StmF"), "/StmF"),
+        string_filter=_written_name(dictionary.get("/StrF"), "/StrF"),
+        file_filter=_written_name(dictionary.get("/EFF"), "/EFF"),
+        crypt_filters=_crypt_filters(dictionary.get("/CF")),
     )
+
+
+def _crypt_filters(defined: object) -> tuple[CryptFilterEntry, ...] | str:
+    """The crypt filters of /CF, in the order of their keys; a str saying why
+    where /CF is no dictionary."""
+    if defined is None:
+        return ()
+    if not isinstance(defined, pikepdf.Dictionary):
+        return "/CF is no dictionary"
+    # A filter's dictionary, and a /CFM, that several keys share are read once
+    # (_read_once).
+    filters: dict[tuple[int, int], object] = {}
+    methods: dict[tuple[int, int], object] = {}
+
+    def method_of(value: object) -> object:
+        if not isinstance(value, pikepdf.Dictionary):
+            return "the crypt filter is no dictionary, so it has no /CFM"
+        return _read_once(value.get("/CFM"), methods, lambda cfm: _written_name(cfm, "/CFM"))
+
+    found = []
+    for key, value in defined.items():
+        name = _key_bytes(key)
+        found.append(
+            CryptFilterEntry(
+                name=name if name is not None else f"a key of /CF is {_STRAY_NAME}",
+                method=_read_once(value, filters, method_of),
+            )
+        )
+    return tuple(found)
+
+
+def _written_name(value: object, key: str) -> bytes | str | None:
+    """An entry that ISO 32000-2 makes a name: its bytes; None where absent; a
+    str saying why where it is no name, or a name without bytes. PDFium reads
+    /StmF, /StrF and /CFM written as a string as the name, QPDF as absent
+    (measured)."""
+    if value is None:
+        return None
+    if not isinstance(value, pikepdf.Name):
+        return f"{key} is no name"
+    data = _name_bytes(value)
+    return data if data is not None else f"{key} is {_STRAY_NAME}"
 
 
 def _name_entry(value: object, key: str) -> bytes | str | None:
@@ -2210,6 +2305,9 @@ _ACTION_TYPES = frozenset(
         b"/RichMediaExecute",
     )
 )
+# The same, as _action_kind gives a name: without its slash.
+_ACTION_KINDS = frozenset(name[1:] for name in _ACTION_TYPES)
+
 # The page and the annotation's index of an entry on no page (ActionTrigger).
 _NOWHERE: tuple[None, None] = (None, None)
 
@@ -2251,16 +2349,41 @@ def _dictionaries_of(array: pikepdf.Array, array_at: _At) -> list[tuple[pikepdf.
     ]
 
 
-def _looks_like_action(dictionary: pikepdf.Dictionary) -> bool:
-    kind = dictionary.get("/S")
-    if isinstance(kind, pikepdf.Name) and bytes(kind) in _ACTION_TYPES:
+def _looks_like_action(
+    dictionary: pikepdf.Dictionary,
+    kinds: dict[tuple[int, int], object],
+    types: dict[tuple[int, int], object],
+) -> bool:
+    if _read_once(dictionary.get("/S"), kinds, _action_kind) in _ACTION_KINDS:
         return True
-    written = dictionary.get("/Type")
-    return isinstance(written, pikepdf.Name) and bytes(written) == b"/Action"
+    return _read_once(dictionary.get("/Type"), types, _names_action) is True
+
+
+def _name_as_written(value: object) -> bytes | None:
+    return bytes(value) if isinstance(value, pikepdf.Name) else None
+
+
+def _names_action(value: object) -> bool:
+    return isinstance(value, pikepdf.Name) and bytes(value) == b"/Action"
+
+
+def _read_once(
+    value: object, read: dict[tuple[int, int], object], reader: Callable[[object], object]
+) -> object:
+    """`reader(value)`; for a value written as an object of its own, read once,
+    `read` holding what it gave by the object. A value many dictionaries
+    share, a long name, would otherwise be read, and copied, for each."""
+    if isinstance(value, pikepdf.Object) and value.is_indirect:
+        objgen = (int(value.objgen[0]), int(value.objgen[1]))
+        if objgen not in read:
+            read[objgen] = reader(value)
+        return read[objgen]
+    return reader(value)
 
 
 def _scan(
     pdf: pikepdf.Pdf,
+    kinds: dict[tuple[int, int], object],
 ) -> tuple[
     list[tuple[pikepdf.Object, _At]],
     tuple[EmbeddedFile, ...],
@@ -2278,10 +2401,11 @@ def _scan(
     # one that several file specifications name is read once.
     streams: list[tuple[tuple[int, int], ...]] = []
     indices: dict[_At, int] = {}
+    types: dict[tuple[int, int], object] = {}
 
     def looked_at(value: pikepdf.Object, dictionary: pikepdf.Object, where: _At) -> None:
         if isinstance(dictionary, pikepdf.Dictionary):
-            if _looks_like_action(dictionary):
+            if _looks_like_action(dictionary, kinds, types):
                 actions.append((value, where))
             embedded = dictionary.get("/EF")
             if _dict_of(embedded) is not None:
@@ -2352,10 +2476,13 @@ class _ActionWalk:
     it entry by entry.
     """
 
-    def __init__(self, pdf: pikepdf.Pdf) -> None:
+    def __init__(self, pdf: pikepdf.Pdf, kinds: dict[tuple[int, int], object]) -> None:
         self._pdf = pdf
+        self._read_kinds = kinds
+        # An annotation's /Subtype, read once where several share one (_read_once).
+        self._read_subtypes: dict[tuple[int, int], object] = {}
         self._index: dict[_At, int] = {}
-        self._kinds: list[bytes | None] = []
+        self._kinds: list[bytes | str | None] = []
         self._written: list[tuple[int, int]] = []
         # For each action, where its /Next is written, if it names any.
         self._next: list[_At | None] = []
@@ -2399,8 +2526,9 @@ class _ActionWalk:
             page_at = (objgen, ())
             self._additional(page, page_at, ActionPlace.PAGE, (index, None), _PAGE_EVENTS)
             for annotation, at, position in self._annotations(page, page_at, index):
-                subtype = annotation.get("/Subtype")
-                subtype = bytes(subtype) if isinstance(subtype, pikepdf.Name) else None
+                subtype = _read_once(
+                    annotation.get("/Subtype"), self._read_subtypes, _name_as_written
+                )
                 # A Movie annotation's /A is a flag or a movie activation
                 # dictionary, no action (ISO 32000-1, Table 186).
                 if subtype != b"/Movie":
@@ -2445,8 +2573,7 @@ class _ActionWalk:
             if where in self._index:
                 continue
             self._index[where] = len(self._kinds)
-            kind = action.get("/S")
-            self._kinds.append(_name_bytes(kind) if isinstance(kind, pikepdf.Name) else None)
+            self._kinds.append(_read_once(action.get("/S"), self._read_kinds, _action_kind))
             self._written.append(where[0])
             value = action.get("/Next")
             if _dict_of(value) is None and not isinstance(value, pikepdf.Array):
@@ -2632,8 +2759,19 @@ class _ActionWalk:
             stack.extend(_following(item, at, "/First"))
 
 
-def _xfa(root: pikepdf.Dictionary) -> tuple[tuple[int, int], ...] | None:
-    """The streams of /AcroForm's /XFA: itself, or those of its array, in order."""
+def _action_kind(value: object) -> bytes | str | None:
+    """An action's /S: the bytes of the name; None where absent; a str saying
+    why where it is no name."""
+    if value is None:
+        return None
+    if not isinstance(value, pikepdf.Name):
+        return "/S of the action is no name"
+    return _name_bytes(value)
+
+
+def _xfa(root: pikepdf.Dictionary) -> tuple[tuple[int, int], ...] | str | None:
+    """The streams of /AcroForm's /XFA: itself, or those of its array, in order;
+    a str saying why where it is neither (ISO 32000-2, Table 224)."""
     acroform = root.get("/AcroForm")
     if _dict_of(acroform) is None or "/XFA" not in acroform:
         return None
@@ -2641,8 +2779,25 @@ def _xfa(root: pikepdf.Dictionary) -> tuple[tuple[int, int], ...] | None:
     if isinstance(value, pikepdf.Stream):
         return (_objgen(value),)
     if isinstance(value, pikepdf.Array):
-        return tuple(_objgen(item) for item in value if isinstance(item, pikepdf.Stream))
-    return ()
+        # Pairs of a packet's name and its stream (ISO 32000-2, Table 224),
+        # read in one pass; a stream named many times gives one value.
+        not_pairs = "/XFA is an array, but not of pairs of a packet's name and its stream"
+        streams: list[tuple[int, int]] = []
+        read: dict[tuple[int, int], tuple[int, int]] = {}
+        position = -1
+        for position, item in enumerate(value):
+            if position % 2 == 0:
+                if not isinstance(item, pikepdf.String):
+                    return not_pairs
+            elif not isinstance(item, pikepdf.Stream):
+                return not_pairs
+            else:
+                objgen = _objgen(item)
+                streams.append(read.setdefault(objgen, objgen))
+        if position % 2 == 0:
+            return not_pairs
+        return tuple(streams)
+    return "/XFA is neither a stream nor an array"
 
 
 def _integer(value: object) -> int | None:

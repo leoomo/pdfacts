@@ -89,6 +89,11 @@ def test_engine_owners_may_import_their_engine(tmp_path):
             "def load():\n    import pdfacts.render\n",
             ("core-isolation", "core/document.py", "pdfacts.render"),
         ),
+        (
+            "core/document.py",
+            "from pdfacts.inspection import report\n",
+            ("core-isolation", "core/document.py", "pdfacts.inspection"),
+        ),
     ],
 )
 def test_each_violation_is_detected(tmp_path, relative, source, expected):
