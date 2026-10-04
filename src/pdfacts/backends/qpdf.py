@@ -2307,7 +2307,6 @@ _ACTION_TYPES = frozenset(
 )
 # The same, as _action_kind gives a name: without its slash.
 _ACTION_KINDS = frozenset(name[1:] for name in _ACTION_TYPES)
-
 # The page and the annotation's index of an entry on no page (ActionTrigger).
 _NOWHERE: tuple[None, None] = (None, None)
 
