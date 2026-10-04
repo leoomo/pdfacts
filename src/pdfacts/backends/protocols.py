@@ -707,6 +707,10 @@ class ObjectReader(Protocol):
         """Whether each compressed object is named once in its stream, at its index."""
         ...
 
+    def security_handler_revision(self) -> int | None:
+        """/R of the security handler; None where the file is read as not encrypted."""
+        ...
+
     def cross_reference_count(self) -> int:
         """The objects the cross-reference holds, which QPDF reads whatever /Size says."""
         ...

@@ -326,6 +326,7 @@ checked at run time:
 | When | Check |
 | --- | --- |
 | on open | both engines report the same number of pages |
+| on open, before the object streams | both engines read the file as encrypted, with the same revision of the security handler (`/R`), or both as not. QPDF takes `/Encrypt` from the newest trailer only, PDFium from the newest trailer that writes it, so an update whose trailer leaves it out hides the encryption from QPDF, which reads the file as not encrypted, or cannot open it where it needs an object stream to find the pages, while PDFium decrypts it (measured). Where this does not hold, every value from QPDF is unknown for the document; the facts read through PDFium are given as usual, though PDFium may be the engine that reads the encryption wrongly, where the cross-reference gives it another encryption dictionary than QPDF (the known gap below; measured). The check compares `/R` only. Where the newest trailer writes `/Encrypt null` or a reference to no object, neither engine decrypts the file: both read the encrypted bytes, `open()` gives the facts of those bytes with nothing to say so, and `recover()` refuses such a file (measured) |
 | on open | every object stream the cross-reference names can be read, and its header names every object once, never object 0, at the index the cross-reference gives. QPDF keeps the last of two objects with one number and finds an object by the number in the header; PDFium takes what sits at the index. Where this does not hold, every value from QPDF is unknown for the document |
 | before a value from QPDF is used for a page or an annotation | the object at the same position is the same in both engines. For a page, PDFium not exposing object numbers, that means the same visible box, within 0.001, and the same rotation. QPDF's visible box is its media box, US letter where it has none it can use, intersected with its crop box, corners in order; its rotation is taken modulo 360, and a value that is not a multiple of 90 counts as 0. For an annotation: PDFium reads a widget at the same index, and the widget's own dictionary agrees: rectangle, flags, /T, /AS, /Parent, /V, /DV, /TU, /FT; the page's annotation counts are equal |
 
@@ -333,18 +334,21 @@ When a check fails, the values that depend on it are unknown and the reason is
 stated. Facts read through PDFium are returned as usual, except paths and
 images, whose appearances cannot be checked without QPDF ("Paths and images").
 
-No PDFium call gives an object number, so the check on open is made on
-QPDF's side alone. Measured: all 104 corpus files pass it; 93 of them use
-object streams.
+No PDFium call gives an object number, so the check of the object streams is
+made on QPDF's side alone. Measured: all 104 corpus files pass it; 93 of them
+use object streams. All 104 pass the check of the encryption too; 14 of them
+are encrypted.
 
 A known gap (measured): the cross-reference itself can make the engines
-resolve one object number to different objects. An object listed twice in
-one section is read by QPDF from the first entry and by PDFium from the
-last; an `/XRefStm` in the oldest section is read by QPDF only. The check
-on open does not see this. Where it happens to a page, QPDF's values of the
-page can describe another object than PDFium's; no corpus file does it.
-`recover()` writes such a file, and a file the check on open refuses, as
-QPDF reads it, without a note.
+resolve one object number to different objects. An object listed twice in one
+section is read by QPDF from the first entry and by PDFium from the last; an
+`/XRefStm` in the oldest section is read by QPDF only. The check of the object
+streams does not see this; those of the encryption and of the page count see
+it only where the engines then read another revision of the security handler
+(`/R`), or another number of pages. Where it happens to a page, QPDF's values
+of the page can describe another object than PDFium's; no corpus file does it.
+`recover()` writes such a file, and a file the check of the object streams
+refuses, as QPDF reads it, without a note.
 
 Reason: a wrong object number is worse than none. A later change to the file
 would address the wrong object.
@@ -651,26 +655,26 @@ upper bound: it parses only the glyphs it shows and the one appearance it
 selects.
 
 Where QPDF cannot count, because it cannot open the file, the check of object
-streams failed, the engines count different pages, the pages QPDF found are
-not the file's, it cannot read one of the content streams, its parser warns
-that it mis-read an object — any warning that names an object and its offset;
-a name with a `#00`, an integer beyond 64 bits, a wrong or missing `/Length`,
-a broken hex string (measured, 2026-10-01) — a name without bytes ("Text
-strings and names") that the name operand of `Do`, `gs`, `scn`, `SCN` or
-`Tf` of a content stream writes, refused as a mis-read object is: QPDF's
-warning about it names the content stream and an offset, not in the form that
-names an object, and where `/Contents` is an array no warning reaches the
-document (measured, 2026-10-03) — or the two engines read an object
-differently, the entry of an object stream whose body is a stream
-object, which QPDF reads as a dictionary and PDFium parses as a stream
-(measured, 2026-10-01), a set limit makes `open()` or the page fail with
-`LimitUncheckedError`. QPDF warns of an object it mis-read only when it reads
-it, and its warnings gather as it reads the file, so a page that could be
-counted at first can be refused once another page was read, as a colour can
-become unknown ("Paths and images"). Reading every object when the file is
-opened would end that, but it costs time and memory with the size of every
-object once decoded, many times that size (measured, 2026-10-02: a 4 MB array
-takes about 270 MB more), and the objects of an object stream may be
+streams failed, the engines read the encryption differently, the engines count
+different pages, the pages QPDF found are not the file's, it cannot read one
+of the content streams, its parser warns that it mis-read an object — any
+warning that names an object and its offset; a name with a `#00`, an integer
+beyond 64 bits, a wrong or missing `/Length`, a broken hex string (measured,
+2026-10-01) — a name without bytes ("Text strings and names") that the name
+operand of `Do`, `gs`, `scn`, `SCN` or `Tf` of a content stream writes,
+refused as a mis-read object is: QPDF's warning about it names the content
+stream and an offset, not in the form that names an object, and where
+`/Contents` is an array no warning reaches the document (measured, 2026-10-03)
+— or the two engines read an object differently, the entry of an object stream
+whose body is a stream object, which QPDF reads as a dictionary and PDFium
+parses as a stream (measured, 2026-10-01), a set limit makes `open()` or the
+page fail with `LimitUncheckedError`. QPDF warns of an object it mis-read only
+when it reads it, and its warnings gather as it reads the file, so a page that
+could be counted at first can be refused once another page was read, as a
+colour can become unknown ("Paths and images"). Reading every object when the
+file is opened would end that, but it costs time and memory with the size of
+every object once decoded, many times that size (measured, 2026-10-02: a 4 MB
+array takes about 270 MB more), and the objects of an object stream may be
 compressed, so that `max_bytes` does not bound it; so QPDF reads what the
 pages read. The warnings that do not name an object and its offset in that
 form stay countable — the page-tree repairs of the walked view, the recoveries
@@ -684,10 +688,9 @@ counted. Counting takes memory with the size of the page's content, up to
 about twice what loading the page takes (measured: 1.2 GB against 0.6 GB for a
 `/Contents` listing one stream 300 times), and time with that size and the
 places a stream without `/Resources` is drawn; the deadline is checked after
-it. A known gap: a page is counted
-before the engines' views of it are compared, and where the two engines read
-different objects (see "Object identity") the count can miss what PDFium
-parses.
+it. A known gap: a page is counted before the engines' views of it are
+compared, and where the two engines read different objects (see "Object
+identity") the count can miss what PDFium parses.
 
 The numbers are passed in by the caller. The library has no built-in defaults.
 

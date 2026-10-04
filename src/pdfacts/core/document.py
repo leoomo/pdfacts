@@ -624,7 +624,8 @@ def open(
                 pdfium.check_pages()
             except EngineFailure as failure:
                 raise _open_error(failure, password) from failure
-            qpdf, qpdf_unknown = _open_qpdf(data, password, page_count)
+            revision = _pdfium_call(pdfium.security_handler_revision)
+            qpdf, qpdf_unknown = _open_qpdf(data, password, page_count, revision)
             object_count = _object_count(qpdf, qpdf_unknown)
             if limits.max_objects is not None:
                 if isinstance(object_count, Unknown):
@@ -699,7 +700,7 @@ def classified(data: bytes, password: str | None, limits: Limits | None) -> Limi
 
 
 def _open_qpdf(
-    data: bytes, password: str | None, page_count: int
+    data: bytes, password: str | None, page_count: int, revision: int | None
 ) -> tuple[QpdfDocument | None, Unknown | None]:
     """QPDF's view of the file, and why its values are unknown if they are.
 
@@ -712,9 +713,17 @@ def _open_qpdf(
         return None, Unknown(
             UnknownReason.UNREADABLE, f"QPDF could not open the file: {failure.detail}"
         )
-    if not _qpdf_call(qpdf.objects_as_written):
-        return qpdf, Unknown(UnknownReason.INVALID, OBJECT_STREAMS)
     try:
+        # First: where the engines read the encryption otherwise, they read
+        # every other value, the object streams too, from other bytes.
+        found = _qpdf_call(qpdf.security_handler_revision)
+        if found != revision:
+            return qpdf, Unknown(
+                UnknownReason.ENGINES_DISAGREE,
+                f"PDFium reads the file as {_encrypted(revision)}, QPDF as {_encrypted(found)}",
+            )
+        if not _qpdf_call(qpdf.objects_as_written):
+            return qpdf, Unknown(UnknownReason.INVALID, OBJECT_STREAMS)
         count = _qpdf_call(qpdf.page_count)
     except BaseException:
         # open() does not know of this document yet, so it would not close it.
@@ -726,6 +735,10 @@ def _open_qpdf(
             UnknownReason.ENGINES_DISAGREE, f"PDFium counts {page_count} pages, QPDF {count}"
         )
     return qpdf, None
+
+
+def _encrypted(revision: int | None) -> str:
+    return "not encrypted" if revision is None else f"encrypted, revision {revision}"
 
 
 def _object_count(qpdf: QpdfDocument | None, unknown: Unknown | None) -> int | Unknown:

@@ -185,6 +185,7 @@ def test_a_failing_close_does_not_hide_why_the_file_was_refused(monkeypatch):
 def every_method_refuses(document: PdfiumDocument) -> None:
     calls = [
         document.page_count,
+        document.security_handler_revision,
         document.check_pages,
         lambda: document.visible_box(0),
         lambda: document.rotation(0),

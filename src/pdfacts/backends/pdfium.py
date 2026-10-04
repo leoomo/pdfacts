@@ -197,6 +197,15 @@ class PdfiumDocument:
         with _translated():
             return len(self._document)
 
+    def security_handler_revision(self) -> int | None:
+        """/R of the security handler; None where PDFium reads the file as not
+        encrypted. PDFium merges the trailers of the file's sections, so it
+        finds /Encrypt in an older one too (measured)."""
+        self._check_open()
+        with _translated():
+            revision = pdfium_c.FPDF_GetSecurityHandlerRevision(self._document.raw)
+        return None if revision == -1 else int(revision)
+
     def check_pages(self) -> None:
         """A FORMAT failure unless PDFium finds a dictionary for every page it counts.
 
