@@ -68,7 +68,7 @@ def active(data: bytes, password: str | None = None) -> ActiveContent:
         document.close()
 
 
-def action(kind: bytes | None, written_in: int, following: int | None = None) -> Action:
+def action(kind: bytes | str | None, written_in: int, following: int | None = None) -> Action:
     """An action; `following` is its /Next as an index into sequences."""
     return Action(kind=kind, written_in=(written_in, 0), next=following)
 
@@ -655,10 +655,11 @@ def test_an_action_two_entries_name():
 
 def test_the_kind_as_written():
     """A dictionary an entry names is listed whatever its /S: absent, a
-    string, a name no action type of ISO 32000-2 has."""
+    string, which is no name, a name no action type of ISO 32000-2 has."""
     entries = b" /OpenAction << /JS (a) >> /AA << /WC << /S (JavaScript) >> /WS << /S /Foo >> >>"
     found = active(one_page(entries))
-    assert found.actions == (action(None, 1), action(None, 1), action(b"Foo", 1))
+    no_name = "/S of the action is no name"
+    assert found.actions == (action(None, 1), action(no_name, 1), action(b"Foo", 1))
 
 
 @pytest.mark.parametrize(
@@ -1040,11 +1041,11 @@ def test_the_order_of_the_entries():
             {5: stream(b"<a/>"), 6: stream(b"<b/>")},
             ((5, 0), (6, 0)),
         ),
-        (b" /AcroForm << /XFA /Foo >>", {}, ()),
+        (b" /AcroForm << /XFA /Foo >>", {}, "/XFA is neither a stream nor an array"),
         (
             b" /AcroForm << /XFA [(a) 5 0 R (b) 6 0 R] >>",
             {5: stream(b"<a/>"), 6: b"(x)"},
-            ((5, 0),),
+            "/XFA is an array, but not of pairs of a packet's name and its stream",
         ),
         (b" /AcroForm 7 0 R", {7: stream(b"", b" /XFA 5 0 R"), 5: stream(b"<xdp/>")}, ((5, 0),)),
     ],
