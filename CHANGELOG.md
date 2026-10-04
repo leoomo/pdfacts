@@ -304,6 +304,13 @@ may break callers.
   geometry, annotation dictionaries, characters and rendering (decisions of
   the maintainer, 2026-10-02 and 2026-10-04); permissions not enforced.
   "Errors": `NotEncryptedError` and `DecryptionFailedError`.
+- "Errors": a password is given to both engines as PDFium takes it, the
+  conversion PDFium makes for the file's revision included, with four known
+  gaps: a user and an owner password in different forms of one text, a
+  password longer than 127 bytes from revision 5 on, password bytes that
+  hold a NUL below revision 5, and a file whose `/V` and `/R` disagree;
+  "Decryption": the known gap of a password outside ASCII is closed
+  (decisions of the maintainer, 2026-10-04).
 
 ### Corrected
 
@@ -340,6 +347,19 @@ may break callers.
   even before. Such a name now leaves the page uncountable
   (`LimitUncheckedError` where `max_forms_per_page` is set) and the check
   unanswered, its colours unknown, as a mis-read object does.
+- A password outside ASCII that PDFium opened a file with did not open it in
+  QPDF where PDFium converted it: QPDF was given only the password's UTF-8
+  bytes. `open()` gave every value from QPDF as unknown, `recover()` refused
+  the password and `decrypt()` the file. QPDF is now given the bytes PDFium
+  converts the password to, at the revisions PDFium converts it for. And from
+  revision 5 on, QPDF opened a file given a password longer than 127 bytes
+  whose first 127 bytes are the file's, which PDFium refuses; `recover()`
+  then raised `RecoveryFailedError`. Such a password no longer counts in
+  QPDF, and `recover()` raises `PasswordRequiredError`; where PDFium opens the
+  file with it, as the owner password where the user password is its first
+  127 bytes, every value from QPDF is now unknown, `decrypt()` refuses the
+  file and `recover()` the password, as the second known gap of "Errors"
+  states.
 
 ## 0.0.1
 

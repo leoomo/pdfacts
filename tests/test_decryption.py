@@ -728,18 +728,11 @@ def test_a_string_in_an_array_of_a_direct_info():
         pdfacts.decrypt(with_info(b"<< /Keywords [(a) (b)] >>"))
 
 
-def test_a_password_outside_ascii_below_revision_6():
-    """QPDF does not take a user password outside ASCII at revision 4, which
-    PDFium takes, so every value from QPDF is unknown for open() (measured; a
-    known gap of open()), and decrypt() refuses the file."""
+def test_a_password_outside_ascii():
+    """A user password outside ASCII at revision 4: both engines take it
+    (docs/conventions.md, "Errors"), and decrypt() decrypts the file."""
     data = encrypt(plain(), user="pässwörd", owner="owner")
-    with pytest.raises(DecryptionFailedError, match="QPDF could not open the file"):
-        pdfacts.decrypt(data, password="pässwörd")
-    assert_built(
-        pdfacts.decrypt(
-            encrypt(plain(), user="pässwörd", owner="owner", R=6), password="pässwörd"
-        ).data
-    )
+    assert_built(pdfacts.decrypt(data, password="pässwörd").data)
 
 
 def test_a_signature_both_engines_read_alike():
