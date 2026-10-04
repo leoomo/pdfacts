@@ -648,6 +648,8 @@ readable under the same names.
 | `LimitExceededError` | `LimitError` | `found` | a limit was exceeded |
 | `LimitUncheckedError` | `LimitError` | `reason` | a limit was set and could not be checked |
 | `RecoveryFailedError` | `PdfactsError` | `detail` | recovery did not produce a usable file |
+| `NotEncryptedError` | `PdfactsError` | - | `decrypt()` was given a file both engines read as not encrypted |
+| `DecryptionFailedError` | `PdfactsError` | `detail` | `decrypt()` refused the file, or its result failed a check |
 | `UnsupportedError` | `PdfactsError` | `capability` | a feature was asked for that this version does not have |
 | `ClosedError` | `PdfactsError` | - | a document or page was used after it was closed |
 | `ConfigurationError` | `PdfactsError` | - | the runtime was configured too late, or twice with different values |
@@ -750,6 +752,97 @@ dictionary for every page. None of them has part of a revision, or a
 60 % opened in PDFium, which rebuilt its table. PDFium looks for `startxref` in
 the last 4096 bytes, so more than about 4 KB of white space after `%%EOF` makes
 it rebuild the table, and the file counts as damaged.
+
+## Decryption
+
+`open()` reads an encrypted file as it is: the engines decrypt what they read.
+Decryption is a separate, explicit step, like recovery ("Damaged files"):
+`decrypt()` has QPDF write the file anew without encryption, checks the result
+against the input, and returns the new bytes for the caller to open.
+
+| Case | Result |
+| --- | --- |
+| the file is encrypted, and the result passes the checks | `Decryption`: the new bytes and their page count |
+| both engines read the file as not encrypted, and nothing below says it may be encrypted | `NotEncryptedError` |
+| `open()` refuses the file, or a page of it is damaged ("Damaged files") | the error of `open()`; `PasswordRequiredError` where a password is needed or wrong |
+| the file is refused, or the result fails a check | `DecryptionFailedError`; never a file that did not pass |
+
+Reason: decryption rewrites the file. The bytes and their hash change, and
+facts read from the decrypted bytes describe the decrypted file, so the caller
+has to hold those bytes.
+
+Either password decrypts the file: the user password, which is empty where a
+file sets only an owner password and then need not be given, or the owner
+password. A known gap (measured): at revisions 2 to 4, QPDF does not take a
+password outside ASCII as `open()` gives it, where PDFium does; every value
+from QPDF is then unknown, and `decrypt()` refuses the file.
+
+The permissions, the bits of `/P`, are not enforced: the inspection reports
+them ("Inspection"), and the result has none, since it is not encrypted
+(decision of the maintainer, 2026-10-02).
+
+The input is opened as `open()` opens it, with its errors and its limits.
+`decrypt()` then refuses a file in these cases, asked in this order:
+
+| Case | Reason |
+| --- | --- |
+| every value from QPDF is unknown for the input, whether or not it is encrypted | the engines read its encryption otherwise, or QPDF does not read the file as PDFium does ("Object identity"); what QPDF would write could not be checked |
+| neither engine reads the file as encrypted, and QPDF finds an encryption dictionary that the catalog does not reach | a newest trailer that writes `/Encrypt null`, or a reference to no object, hides the encryption from both engines (measured); the strings and streams may be encrypted with nothing to decrypt them |
+| neither engine reads the file as encrypted, and QPDF warns that it mis-read an object | the object may be the encryption dictionary: where its object header is broken, neither engine decrypts the file (measured) |
+| a crypt filter that `/StmF`, `/StrF` or `/EFF` names is neither absent, nor `/Identity` where `/CF` defines no filter of that name, nor defined in `/CF` with the `/CFM` `/V2`, `/AESV2` or `/AESV3` | the engines decrypt the others otherwise, or may (decision of the maintainer, 2026-10-04): without `/CFM`, PDFium decrypts with RC4 where QPDF writes the data as it is and reports nothing; with a filter named `/Identity` in `/CF`, QPDF decrypts and PDFium reads the data as written; with `/CFM /None`, QPDF warns that it may decrypt improperly (measured). Both engines decrypt `/AESV2` and `/AESV3` whatever `/R` says (measured) |
+| an object reached from the catalog or `/Info` is one the engines decrypt otherwise: a stream whose `/Filter` names `/Crypt` and whose `/DecodeParms` give a `/Name`; a stream `/Type /XRef`; a dictionary whose `/Contents` is a string, an array or a dictionary, that PDFium takes for a signature, its `/Type` or, without `/Type`, its `/FT` being the name `/Sig` or a string that decrypts to `Sig`, and that QPDF does not, which takes only the name `/Type /Sig` with `/ByteRange`; under `/EncryptMetadata false`, the catalog's `/Metadata`, a string, an array, a dictionary or a stream, unless `/V` is 4 or more and it is a stream `/Type /Metadata` with `/Subtype /XML`; a string in an object the trailer holds directly, a direct `/Info` for one | QPDF takes the crypt filter `/DecodeParms` name, `/Identity` leaving the stream as written, where PDFium does not; QPDF leaves a stream `/Type /XRef` as written, PDFium decrypts it, and a cross-reference stream of the file is found through `startxref`, not referred to; PDFium leaves the `/Contents` of such a dictionary as written, QPDF decrypts it (measured for a string; no function of PDFium reads an array or a dictionary there, and they are refused alike); PDFium leaves the catalog's `/Metadata` as written whatever it is, QPDF only a stream of that type, and below `/V` 4 none, as it ignores `/EncryptMetadata` there; a string the trailer holds directly has no object number to decrypt it by, and QPDF leaves it as written where PDFium decrypts it (measured; decision of the maintainer, 2026-10-04). A `/Crypt` filter without `/Name`, as a corpus file writes on its metadata, both engines read alike (measured) |
+| QPDF reports anything while it reads the file or writes it | it decrypts a stream only when it writes it, and says where it may decrypt improperly |
+
+The checks (decisions of the maintainer, 2026-10-04): the result has to open
+as `open()` opens a file, without a password; both engines have to read it as
+not encrypted; its trailer has to have a usable `/Size`; and neither the
+input nor the result may give a warning. For each page, the result has to give
+what the input gives:
+
+| Compared | Read by |
+| --- | --- |
+| the page's geometry: its visible box, rotation and user unit | both engines, as `open()` reads a page |
+| for each entry of `/Annots`: whether it is a widget, its rectangle, its flags, `/T`, `/AS`, `/V`, `/DV`, `/TU` and `/FT` and their types, and the type of `/Parent` | PDFium |
+| the characters of the page's content, as `glyphs()` reads them: each one's Unicode value, whether PDFium could not map it and whether it is a hyphen, its origin, matrix, font size and loose box, in content order, invisible text too | PDFium |
+| the pixels of the page rendered in RGB, its annotations drawn as PDFium draws them by default | PDFium, at scale 1 where the page is at most 2^22 pixels there, else at the scale at which its width and its height in pixels, each plus one, multiply to 2^22: rounded up, a page of any shape is then at most 2^22 pixels |
+
+A page of the result that is damaged where the input's is not fails the
+checks. Object numbers are not compared: QPDF numbers the objects of the
+result anew. Every page of the 14 encrypted corpus files renders the same,
+pixel for pixel, before and after, and gives the same characters (measured,
+2026-10-04).
+
+Reason for the characters: where AES-encrypted data ends in inconsistent
+padding, PDFium strips the last block by its last byte alone and QPDF strips
+nothing (measured), so the end of a stream decrypts otherwise, and text in
+invisible rendering mode changes where the rendering does not (decision of
+the maintainer, 2026-10-04).
+
+A known gap: the checks compare no other entry of an annotation, such as a
+comment's `/Contents` or a link's `/URI`, and no string or stream that neither
+the characters nor the rendering show, such as the metadata, an embedded
+file, a script or an outline. Where the engines decrypt one of these
+otherwise, as they do damaged AES data, inconsistent padding at its end for
+one, the checks do not see it, nor a difference too small to change a pixel at
+the scale rendered. What
+the engines were found to decrypt otherwise is refused before QPDF writes,
+read as QPDF reads the file: an encryption dictionary that one
+cross-reference section lists twice, of which QPDF reads one and PDFium
+another ("Object identity", a known gap), is not seen (measured).
+
+The limits apply as for `open()`, to the input and to the result, with these
+exceptions: `max_bytes` applies to the input only; `deadline_seconds` counts
+from the start of `decrypt()`, checked as `open()` checks it, once the file is
+written and after each page of the check. `max_items_per_page` holds the
+entries of each page's `/Annots` that the checks read, as PDFium counts them,
+and the page's characters, as `glyphs()` holds them; `max_render_pixels`
+applies to the renderings of the check.
+
+The result keeps the object streams the input has and gets none more; it is
+not linearized, and its XMP metadata is left as it is. Its `/ID` keeps the
+first part of the input's and gets a second made from its content, so the same
+input gives the same bytes, whichever password was given. A signature in the
+input no longer matches the bytes of the result.
 
 ## Limits
 

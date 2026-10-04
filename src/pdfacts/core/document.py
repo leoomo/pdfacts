@@ -26,7 +26,9 @@ from pdfacts.backends.protocols import (
     AnnotationView,
     AppearanceDrawing,
     Box,
+    DecryptedOtherwise,
     Drawing,
+    EncryptionEntries,
     EngineFailure,
     FailureKind,
     FieldTree,
@@ -226,6 +228,26 @@ class FeatureAccess:
         if self._closed:
             raise ClosedError()
         return self._pdfium
+
+    def security_handler_revision(self) -> int | None:
+        """/R as PDFium reads it, None where it reads the file as not encrypted."""
+        return _pdfium_call(self._pdfium_ready().security_handler_revision)
+
+    def lost_encryption(self) -> bool:
+        """Whether QPDF finds an encryption dictionary where it reads no encryption."""
+        return _qpdf_call(self._qpdf_ready().lost_encryption)
+
+    def misread(self) -> bool:
+        """Whether QPDF has warned that it mis-read an object."""
+        return _qpdf_call(self._qpdf_ready().misread)
+
+    def encryption_entries(self) -> EncryptionEntries:
+        """The encryption dictionary as QPDF reads it, where it reads one."""
+        return _qpdf_call(self._qpdf_ready().encryption_entries)
+
+    def decrypted_otherwise(self) -> tuple[DecryptedOtherwise, ...]:
+        """The objects QPDF and PDFium decrypt otherwise, where QPDF reads encryption."""
+        return _qpdf_call(self._qpdf_ready().decrypted_otherwise)
 
     def annotation_count(self, index: int) -> int | None:
         """QPDF's number of entries of the page's /Annots; None if no array."""

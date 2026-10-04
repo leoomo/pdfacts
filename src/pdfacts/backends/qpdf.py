@@ -29,6 +29,8 @@ from pdfacts.backends.protocols import (
     ContentsForm,
     ContentStreamLength,
     CryptFilterEntry,
+    DecryptedBytes,
+    DecryptedOtherwise,
     EmbeddedFile,
     EncryptionEntries,
     EngineFailure,
@@ -342,6 +344,37 @@ class QpdfDocument:
             if not self._unwalked.is_encrypted:
                 return None
             return int(self._unwalked.encryption.R)
+
+    def lost_encryption(self) -> bool:
+        """Whether QPDF reads the file as not encrypted and yet it holds an
+        encryption dictionary (_lost_encryption): one that no trailer QPDF
+        reads names, such as one an update's /Encrypt null hides from both
+        engines (measured). Every object is read."""
+        self._check_open()
+        with _translated():
+            return _lost_encryption(self._unwalked)
+
+    def misread(self) -> bool:
+        """Whether QPDF has warned that it mis-read an object of the file (issue
+        #62's rule), as far as it has read the file."""
+        self._check_open()
+        with _translated():
+            return self._misread()
+
+    def decrypted_otherwise(self) -> tuple[DecryptedOtherwise, ...]:
+        """The objects the document refers to that QPDF and PDFium decrypt
+        otherwise (_decrypted_otherwise); only where QPDF reads the file as
+        encrypted."""
+        self._check_open()
+        with _translated():
+            return _decrypted_otherwise(self._unwalked)
+
+    def encryption_entries(self) -> EncryptionEntries:
+        """The encryption dictionary as written, and QPDF's security handler;
+        only where QPDF reads the file as encrypted."""
+        self._check_open()
+        with _translated():
+            return _encryption_entries(self._unwalked)
 
     def cross_reference_count(self) -> int:
         """The objects QPDF's cross-reference holds, in use or in an object stream.
@@ -912,6 +945,45 @@ def rewrite_recovered(data: bytes, password: str | None) -> RecoveredBytes:
     return RecoveredBytes(data=written.getvalue(), page_count=page_count, warnings=reported)
 
 
+def rewrite_decrypted(data: bytes, password: str | None) -> DecryptedBytes:
+    """The encrypted file `data`, as QPDF reads it with recovery off, written
+    anew without encryption.
+
+    A PASSWORD failure when a password is needed or wrong, a FORMAT failure
+    when QPDF cannot open the file. Object streams are kept as they are and
+    none are generated, nothing is linearized, and the XMP metadata is left
+    as it is, as rewrite_recovered() writes. The /ID of the result keeps the
+    first part of the input's and gets a second made from its content, so
+    that the same input gives the same bytes (measured).
+
+    The warnings are those QPDF gave while it read the file and wrote it: it
+    decrypts streams only when it writes them.
+    """
+    sources: list[_Input] = []
+    try:
+        with _translated():
+            pdf = _opened(
+                data, password, sources, attempt_recovery=False, inherit_page_attributes=False
+            )
+            try:
+                written = io.BytesIO()
+                # As in rewrite_recovered(): _save is what pikepdf's save()
+                # calls to write, without its additions.
+                pdf._save(
+                    written,
+                    encryption=False,
+                    deterministic_id=True,
+                    fix_metadata_version=False,
+                )
+                reported = tuple(str(message) for message in pdf.get_warnings())
+            finally:
+                pdf.close()
+    finally:
+        for source in sources:
+            source.close()
+    return DecryptedBytes(data=written.getvalue(), warnings=reported)
+
+
 def _unfinished() -> EngineFailure:
     return EngineFailure(
         FailureKind.FORMAT,
@@ -1032,6 +1104,107 @@ def _lost_encryption(pdf: pikepdf.Pdf) -> bool:
         return False
     found = {obj.objgen for obj in pdf.objects if _encryption_dictionary(obj)}
     return bool(found - _reachable(pdf.Root))
+
+
+def _decrypted_otherwise(pdf: pikepdf.Pdf) -> tuple[DecryptedOtherwise, ...]:
+    """Each object reached from the catalog and /Info, what QPDF writes, that
+    QPDF and PDFium decrypt otherwise (measured), in the order reached, each
+    object once:
+
+    - a stream whose /Filter names /Crypt and whose /DecodeParms give a
+      /Name: QPDF decrypts it with the filter named, /Identity leaving it as
+      written, where PDFium decrypts it as any stream; without /Name, QPDF too
+      decrypts it as any stream;
+    - a stream /Type /XRef: QPDF leaves it as written, PDFium decrypts it; a
+      cross-reference stream of the file is found through startxref, and
+      nothing refers to it;
+    - a dictionary whose /Contents is a string, an array or a dictionary,
+      that PDFium takes for a signature, its /Type or, without /Type, its /FT
+      the name /Sig or a string that decrypts to Sig, and QPDF does not, which
+      takes only the name /Type /Sig with /ByteRange: PDFium leaves its
+      /Contents as written, QPDF decrypts it;
+    - under /EncryptMetadata false, the catalog's /Metadata, a string, an
+      array, a dictionary or a stream, unless /V is 4 or more and it is a
+      stream /Type /Metadata with /Subtype /XML: PDFium leaves it as written,
+      QPDF decrypts it, and below /V 4 it ignores /EncryptMetadata;
+    - a string in an object the trailer holds directly, a direct /Info for
+      one: it has no object number to decrypt it by, and QPDF leaves it as
+      written where PDFium decrypts it. Such an object is no signature to
+      either engine.
+
+    Every object reached is read.
+    """
+    found: list[DecryptedOtherwise] = []
+    seen: set[tuple[int, int]] = set()
+    sig = pikepdf.Name("/Sig")
+    stack: list[tuple[object, tuple[int, int] | None]] = [
+        (pdf.trailer.get("/Info"), None),
+        (pdf.Root, None),
+    ]
+    while stack:
+        node, holder = stack.pop()
+        if not isinstance(node, pikepdf.Dictionary | pikepdf.Array | pikepdf.Stream):
+            continue
+        if node.is_indirect:
+            objgen = (int(node.objgen[0]), int(node.objgen[1]))
+            if objgen in seen:
+                continue
+            seen.add(objgen)
+            holder = objgen
+        if isinstance(node, pikepdf.Stream):
+            if _crypt_filter_named(node):
+                found.append(DecryptedOtherwise(objgen=holder, kind="crypt filter"))
+            if node.get("/Type") == pikepdf.Name("/XRef"):
+                found.append(DecryptedOtherwise(objgen=holder, kind="cross-reference"))
+        if holder is None and any(isinstance(value, pikepdf.String) for value in _values(node)):
+            found.append(DecryptedOtherwise(objgen=None, kind="trailer"))
+        elif isinstance(node, pikepdf.Dictionary) and not isinstance(node, pikepdf.Stream):
+            kind = node.get("/Type") if "/Type" in node else node.get("/FT")
+            by_pdfium = kind == sig or isinstance(kind, pikepdf.String) and bytes(kind) == b"Sig"
+            by_qpdf = node.get("/Type") == sig and "/ByteRange" in node
+            contents = node.get("/Contents")
+            holds = isinstance(contents, pikepdf.String | pikepdf.Array | pikepdf.Dictionary)
+            if by_pdfium and not by_qpdf and holds:
+                found.append(DecryptedOtherwise(objgen=holder, kind="signature"))
+        stack.extend((value, holder) for value in reversed(_values(node)))
+    encryption = pdf.trailer.get("/Encrypt")
+    metadata = pdf.Root.get("/Metadata")
+    version = encryption.get("/V") if isinstance(encryption, pikepdf.Dictionary) else None
+    if (
+        isinstance(encryption, pikepdf.Dictionary)
+        and encryption.get("/EncryptMetadata") is False
+        and isinstance(
+            metadata, pikepdf.String | pikepdf.Array | pikepdf.Dictionary | pikepdf.Stream
+        )
+        and not (
+            isinstance(version, int)
+            and version >= 4
+            and isinstance(metadata, pikepdf.Stream)
+            and metadata.get("/Type") == pikepdf.Name("/Metadata")
+            and metadata.get("/Subtype") == pikepdf.Name("/XML")
+        )
+    ):
+        # A direct one is named by the catalog that holds it.
+        holder = metadata if metadata.is_indirect else pdf.Root
+        objgen = (int(holder.objgen[0]), int(holder.objgen[1])) if holder.is_indirect else None
+        found.append(DecryptedOtherwise(objgen=objgen, kind="metadata"))
+    return tuple(found)
+
+
+def _crypt_filter_named(stream: pikepdf.Stream) -> bool:
+    """Whether /Filter names /Crypt and some /DecodeParms, a dictionary or one
+    in an array, gives a /Name."""
+    filters = stream.get("/Filter")
+    names = list(filters) if isinstance(filters, pikepdf.Array) else [filters]
+    if pikepdf.Name("/Crypt") not in names:
+        return False
+    parameters = stream.get("/DecodeParms")
+    found = list(parameters) if isinstance(parameters, pikepdf.Array) else [parameters]
+    return any(isinstance(one, pikepdf.Dictionary) and "/Name" in one for one in found)
+
+
+def _values(node: pikepdf.Object) -> list[object]:
+    return list(node) if isinstance(node, pikepdf.Array) else list(node.values())
 
 
 def _reachable(root: pikepdf.Object) -> set[tuple[int, int]]:

@@ -3,18 +3,21 @@
 from pdfacts.annotations.model import Annotation
 from pdfacts.core.bitmap import Bitmap, Colour
 from pdfacts.core.capabilities import Capability, capabilities, require
+from pdfacts.core.decryption import Decryption, decrypt
 from pdfacts.core.document import Document, Page, open
 from pdfacts.core.engines import EngineInfo, engine_info
 from pdfacts.core.errors import (
     ClosedError,
     ConfigurationError,
     DamagedFileError,
+    DecryptionFailedError,
     EmptyInputError,
     EngineError,
     InputError,
     LimitError,
     LimitExceededError,
     LimitUncheckedError,
+    NotEncryptedError,
     NotPdfError,
     PasswordRequiredError,
     PdfactsError,
@@ -99,6 +102,8 @@ __all__ = [
     "CryptMethod",
     "DamagedFileError",
     "Dash",
+    "Decryption",
+    "DecryptionFailedError",
     "DeviceColour",
     "DisplayColour",
     "Document",
@@ -128,6 +133,7 @@ __all__ = [
     "Matrix",
     "Name",
     "NameEncoding",
+    "NotEncryptedError",
     "NotPdfError",
     "ObjectCounts",
     "ObjectRef",
@@ -156,6 +162,7 @@ __all__ = [
     "__version__",
     "capabilities",
     "configure",
+    "decrypt",
     "engine_info",
     "fields",
     "glyphs",
