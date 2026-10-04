@@ -3,7 +3,10 @@
 Every fact that corresponds to a PDF object carries one (docs/architecture.md,
 rule 1). The object number comes from QPDF and is unknown when the engines do
 not agree on the page, or QPDF cannot read it: a wrong object number is worse
-than none (docs/conventions.md, "Object identity").
+than none (docs/conventions.md, "Object identity"). The inspection's
+ObjectRef is the exception: read through QPDF alone, it is not checked
+against PDFium as a page's or an annotation's object is; the checks open()
+makes of the whole file apply to it ("Inspection").
 """
 
 from __future__ import annotations
@@ -98,6 +101,24 @@ class FieldRef:
                 )
             if value < lowest:
                 raise ValueError(f"{name} must be at least {lowest}, not {value}")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ObjectRef:
+    """An object of the file: its number and its generation."""
+
+    object_number: int  # from 1
+    generation: int  # from 0 to 65535 (ISO 32000-2, 7.5.4)
+
+    def __post_init__(self) -> None:
+        for name, lowest in (("object_number", 1), ("generation", 0)):
+            value = getattr(self, name)
+            if not _is_int(value):
+                raise TypeError(f"{name} must be an int, not {type(value).__name__}")
+            if value < lowest:
+                raise ValueError(f"{name} must be at least {lowest}, not {value}")
+        if self.generation > 65535:
+            raise ValueError(f"generation is at most 65535, not {self.generation}")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

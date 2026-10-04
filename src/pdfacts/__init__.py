@@ -24,7 +24,7 @@ from pdfacts.core.errors import (
 from pdfacts.core.geometry import Matrix, PageGeometry, Point, Quad, Rect
 from pdfacts.core.limits import Limits
 from pdfacts.core.recovery import Recovery, recover
-from pdfacts.core.refs import AnnotationRef, FieldRef, GlyphRef, GraphicRef, PageRef
+from pdfacts.core.refs import AnnotationRef, FieldRef, GlyphRef, GraphicRef, ObjectRef, PageRef
 from pdfacts.core.runtime import FontPolicy, configure
 from pdfacts.core.strings import Name, NameEncoding
 from pdfacts.core.values import Unknown, UnknownReason
@@ -51,6 +51,26 @@ from pdfacts.graphics.paths import (
     Subpath,
 )
 from pdfacts.graphics.reader import images, paths
+from pdfacts.inspection.active_content import (
+    Action,
+    ActionPlace,
+    ActionTrigger,
+    ActiveContent,
+    EmbeddedFile,
+)
+from pdfacts.inspection.report import (
+    Contents,
+    ContentsForm,
+    ContentsStream,
+    CryptFilter,
+    CryptMethod,
+    Encryption,
+    Inspection,
+    ObjectCounts,
+    PageContents,
+    Permissions,
+    inspect,
+)
 from pdfacts.text.glyphs import Glyph
 from pdfacts.text.layout import Line, Word
 from pdfacts.text.reader import glyphs, lines, words
@@ -58,6 +78,10 @@ from pdfacts.text.reader import glyphs, lines, words
 __version__ = "0.0.1"
 
 __all__ = [
+    "Action",
+    "ActionPlace",
+    "ActionTrigger",
+    "ActiveContent",
     "Annotation",
     "AnnotationRef",
     "Bitmap",
@@ -68,12 +92,19 @@ __all__ = [
     "Colour",
     "ColourSpace",
     "ConfigurationError",
+    "Contents",
+    "ContentsForm",
+    "ContentsStream",
+    "CryptFilter",
+    "CryptMethod",
     "DamagedFileError",
     "Dash",
     "DeviceColour",
     "DisplayColour",
     "Document",
+    "EmbeddedFile",
     "EmptyInputError",
+    "Encryption",
     "EngineError",
     "EngineInfo",
     "Field",
@@ -86,6 +117,7 @@ __all__ = [
     "GraphicRef",
     "Image",
     "InputError",
+    "Inspection",
     "LimitError",
     "LimitExceededError",
     "LimitUncheckedError",
@@ -97,12 +129,16 @@ __all__ = [
     "Name",
     "NameEncoding",
     "NotPdfError",
+    "ObjectCounts",
+    "ObjectRef",
     "Page",
+    "PageContents",
     "PageGeometry",
     "PageRef",
     "PasswordRequiredError",
     "Path",
     "PdfactsError",
+    "Permissions",
     "Point",
     "Quad",
     "Recovery",
@@ -124,6 +160,7 @@ __all__ = [
     "fields",
     "glyphs",
     "images",
+    "inspect",
     "lines",
     "open",
     "paths",

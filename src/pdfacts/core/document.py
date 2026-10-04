@@ -21,6 +21,7 @@ from types import TracebackType
 
 from pdfacts.backends.pdfium import PdfiumDocument
 from pdfacts.backends.protocols import (
+    ActiveContent,
     AnnotationAppearance,
     AnnotationView,
     AppearanceDrawing,
@@ -29,6 +30,7 @@ from pdfacts.backends.protocols import (
     EngineFailure,
     FailureKind,
     FieldTree,
+    FileStructure,
     PageAnnotations,
     PageObject,
     PageText,
@@ -276,6 +278,14 @@ class FeatureAccess:
     def page_uses_pattern(self, index: int) -> bool | None:
         """Whether QPDF finds a pattern colour set in the page's content."""
         return _qpdf_call(lambda: self._qpdf_ready().page_uses_pattern(index))
+
+    def structure(self) -> FileStructure:
+        """QPDF's objects by kind, encryption and each page's /Contents."""
+        return _qpdf_call(self._qpdf_ready().structure)
+
+    def active_content(self) -> ActiveContent:
+        """QPDF's actions and the entries that name them, XFA, embedded files."""
+        return _qpdf_call(self._qpdf_ready().active_content)
 
     def _close(self) -> None:
         self._closed = True

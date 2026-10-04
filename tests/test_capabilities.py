@@ -18,6 +18,7 @@ def test_the_members_are_exactly_these():
         "FORMS",
         "GRAPHICS",
         "TEXT",
+        "INSPECTION",
         "FONT_POLICY_EMBEDDED_ONLY",
         "FONT_POLICY_HOST",
     ]
@@ -46,6 +47,7 @@ def test_nothing_is_claimed_that_is_not_implemented():
         Capability.FORMS,
         Capability.GRAPHICS,
         Capability.TEXT,
+        Capability.INSPECTION,
         Capability.FONT_POLICY_EMBEDDED_ONLY,
     }
 
