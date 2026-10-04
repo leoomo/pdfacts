@@ -170,8 +170,19 @@ def _opened(
     and quieting it with warnings.catch_warnings would change the warning
     state of the whole process. So the file is opened without a password
     first, and again with it when that fails or the file is encrypted, so
-    that a wrong password is refused. The input the returned document reads
-    from is added to `sources`, for the caller to close.
+    that a wrong password is refused.
+
+    pikepdf gives QPDF the text as UTF-8. Where that does not open the file
+    and the text is not ASCII, QPDF is given the bytes PDFium converts the
+    password to (_password_conversions), which count only where the file's
+    /R and /V are both of the revisions they are for (_revision_below_5).
+    QPDF reads a password up to its first NUL, so converted bytes that hold
+    one where they count, in their first 32 below revision 5, are not given:
+    they would open a file whose password is what precedes it, which PDFium
+    refuses (measured). From revision 5 on QPDF takes the first 127 bytes of
+    a password and PDFium all of them (measured), so no longer password
+    counts there (_LONGEST). The input the returned document reads from is
+    added to `sources`, for the caller to close.
     """
     source = _Input(data)
     try:
@@ -191,7 +202,80 @@ def _opened(
         source.close()
     source = _Input(data)
     sources.append(source)
-    return pikepdf.open(source, password=password, **options)
+    try:
+        pdf = pikepdf.open(source, password=password, **options)
+    except pikepdf.PasswordError as error:
+        if password.isascii():
+            raise
+        refused = error
+    else:
+        if _kept(pdf, lambda opened: _counts(opened, password.encode("utf-8"))):
+            return pdf
+        raise pikepdf.PasswordError(_TOO_LONG)
+    for converted, below_5 in _password_conversions(password):
+        # Below revision 5 a password's first 32 bytes are all that count.
+        if b"\x00" in (converted[:32] if below_5 else converted):
+            continue
+        source = _Input(data)
+        sources.append(source)
+        try:
+            pdf = pikepdf.open(source, password=converted, **options)
+        except pikepdf.PasswordError:
+            continue
+        if _kept(pdf, _fit(converted, below_5)):
+            return pdf
+    raise refused
+
+
+def _fit(converted: bytes, below_5: bool) -> Callable[[pikepdf.Pdf], bool]:
+    """Whether converted bytes that opened a file count for it."""
+    return lambda pdf: _revision_below_5(pdf) == below_5 and _counts(pdf, converted)
+
+
+def _kept(pdf: pikepdf.Pdf, counts: Callable[[pikepdf.Pdf], bool]) -> bool:
+    """Whether the password that opened `pdf` counts; `pdf` is closed where it
+    does not, or where the question raises."""
+    try:
+        if counts(pdf):
+            return True
+    except BaseException:
+        pdf.close()
+        raise
+    pdf.close()
+    return False
+
+
+# From revision 5 on, the most bytes of a password QPDF takes: it cuts a longer
+# one there, which PDFium takes whole (measured).
+_LONGEST = 127
+_TOO_LONG = f"the password is longer than the {_LONGEST} bytes QPDF takes at this revision"
+
+
+def _revision_below_5(pdf: pikepdf.Pdf) -> bool | None:
+    """Whether the file's /R and /V are both below 5, or both from 5 on; None
+    where they disagree: QPDF reads the password by /V, PDFium by /R
+    (measured), and a conversion counts for neither then."""
+    revision, version = int(pdf.encryption.R) < 5, int(pdf.encryption.V) < 5
+    return revision if revision == version else None
+
+
+def _counts(pdf: pikepdf.Pdf, given: bytes) -> bool:
+    """Whether the password `given`, which opened `pdf`, opens it for PDFium too
+    as far as its length tells: below revision 5 any, from it on 127 bytes at
+    most."""
+    return int(pdf.encryption.R) < 5 or len(given) <= _LONGEST
+
+
+def _password_conversions(password: str) -> tuple[tuple[bytes, bool], ...]:
+    """The bytes PDFium, given the text as UTF-8, also tries where they do not
+    open the file, each with whether it is for revisions below 5 (measured):
+    there, where a password is bytes, the low byte of each character's code,
+    the Latin-1 of a Latin-1 letter; from revision 5 on, where it is UTF-8,
+    the UTF-8 bytes read as Latin-1 and written as UTF-8 again. Of an ASCII
+    password both are its UTF-8 bytes."""
+    low = bytes(ord(character) & 0xFF for character in password)
+    again = password.encode("utf-8").decode("latin-1").encode("utf-8")
+    return ((low, True), (again, False))
 
 
 def _check_index(index: int, count: int) -> None:

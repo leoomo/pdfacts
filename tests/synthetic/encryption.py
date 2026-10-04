@@ -19,7 +19,7 @@ import pikepdf
 def encrypt(
     data: bytes,
     *,
-    user: str,
+    user: str | bytes,
     owner: str,
     R: int = 4,  # noqa: N803
     object_streams: bool = False,
@@ -29,7 +29,10 @@ def encrypt(
     compress: bool = True,
 ) -> bytes:
     """`data` encrypted by the standard security handler of revision `R`, 2,
-    3, 4 or 6.
+    3, 4, 5 or 6; pikepdf warns that revision 5 is deprecated.
+
+    pikepdf writes a password below revision 5 in PDFDocEncoding, from it on
+    as UTF-8; there `user` may also be bytes, which it writes as they are.
 
     With `object_streams`, the objects that may be are put into object streams.
     `aes` and `metadata` go to pikepdf as they are, and it refuses what it
