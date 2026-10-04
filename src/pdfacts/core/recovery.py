@@ -135,9 +135,9 @@ def _verified(rewritten: RecoveredBytes, password: str | None) -> int:
     """The object count of the result, once it has passed the checks.
 
     open() has PDFium open the result as it is written, with a page
-    dictionary for every page, and QPDF with recovery off; it compares their
-    page counts. Where QPDF cannot open the result or the counts differ, it
-    says so among the warnings.
+    dictionary for every page, and QPDF with recovery off; it compares the
+    encryption they read and their page counts. Where QPDF cannot open the
+    result or the engines differ, it says so among the warnings.
     """
     try:
         document = open(rewritten.data, password=password)
