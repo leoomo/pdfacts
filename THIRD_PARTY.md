@@ -54,8 +54,30 @@ Linux wheels also carry a software bill of materials at
 pytest and ruff are used for development only and are not part of any
 distributed package.
 
+## Libraries the gates compare with
+
+The dependency group `bench` installs these for the gates in `bench/gates/`;
+`bench/gates/run.py` installs the group. They are not dependencies of the
+package and are not part of any distributed package. The library, its tests
+and the tools never import them. Licenses are read from the wheels' metadata
+and license files (macOS arm64, read on 2026-10-05).
+
+| Component | Version | License | Role |
+| --- | --- | --- | --- |
+| pypdf | 6.19.0 | BSD-3-Clause | a third-party reader and writer in the M5a gate |
+| cryptography | 50.0.2 | Apache-2.0 or BSD-3-Clause | AES for pypdf |
+| cffi | 2.1.1 | MIT-0 | dependency of cryptography, not on PyPy |
+| pycparser | 3.0 | BSD-3-Clause | dependency of cffi, not on PyPy |
+| PyMuPDF | 1.28.2 (MuPDF 1.28.2) | AGPL-3.0 or Artifex's commercial license | a third-party reader and writer in the M5a gate |
+
+The cryptography wheel carries software bills of materials in
+`cryptography-<version>.dist-info/sboms/`: the OpenSSL built into it, 4.0.3 in
+the wheel read, and the Rust crates it is built from. The PyMuPDF wheel ships
+MuPDF in libraries of its own and lists nothing that is built into them.
+
 ## Not allowed as a dependency
 
 MuPDF and its bindings (PyMuPDF, MuPDF.js), Ghostscript, Poppler, iText and
 borb are licensed under the AGPL or GPL. They are not dependencies of the
-library. PyMuPDF may be installed for comparison under `bench/` only.
+library. PyMuPDF is installed for comparison under `bench/` only, in the group
+`bench` above.

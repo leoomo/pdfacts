@@ -1,10 +1,11 @@
 """Compare gate receipts: what each platform read, and whether it agrees.
 
-Takes two or more receipts that one gate wrote (m1.py or m4a.py, named in
-the receipt), refuses those that would not answer the question (partial,
-another gate, other engines, another commit, no file), prints the numbers of
-each receipt and one table over the files of all receipts together, and says
-with its exit status whether every cell is identical. Standard library only.
+Takes two or more receipts that one gate wrote (m1.py, m4a.py or m5a.py,
+named in the receipt), refuses those that would not answer the question
+(partial, another gate, other engines, another commit, no file), prints the
+numbers of each receipt and one table over the files of all receipts
+together, and says with its exit status whether every cell is identical.
+Standard library only.
 """
 
 from __future__ import annotations
@@ -60,6 +61,22 @@ GATES = {
         ),
         failed=("pdfium_differences", str, "pages whose characters differ from PDFium's"),
         tallies=("unknown", "known", "breaks"),
+    ),
+    "m5a": Gate(
+        counts=(
+            ("page_count", "pages"),
+            ("finding_count", "findings of active content"),
+            ("fault_count", "faults introduced"),
+        ),
+        digests=("inspection", "decryption", "recovery"),
+        columns=(
+            ("inspection", ("inspection", "contents", "findings")),
+            ("decryption", ("decryption", "readers")),
+            ("recovery", ("recovery",)),
+            ("faults", ("faults",)),
+        ),
+        failed=("failed", str, "conditions failed"),
+        tallies=("contents", "findings"),
     ),
 }
 
