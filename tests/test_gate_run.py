@@ -52,7 +52,7 @@ def gate(monkeypatch, tmp_path):
     return recorded
 
 
-@pytest.mark.parametrize("name", ["m1", "m4a"])
+@pytest.mark.parametrize("name", ["m1", "m4a", "m5a"])
 @pytest.mark.parametrize("architecture", ["arm64", "amd64"])
 def test_the_container_reads_the_corpus_read_only(architecture, name):
     command = run.container_command(
@@ -69,10 +69,11 @@ def test_the_container_reads_the_corpus_read_only(architecture, name):
     found_at = [
         inside.find("tar -x"),
         inside.find(f"uv=={checks.UV_VERSION}"),
-        inside.find("uv sync --locked"),
+        inside.find("uv sync --locked --group bench"),
         inside.find("fetch.py --verify-only --from /corpus"),
         inside.find(
-            f"bench/gates/{name}.py --commit c0ffee --out /out/{name}-linux-{architecture}.json"
+            f"uv run --locked --group bench python bench/gates/{name}.py --commit c0ffee"
+            f" --out /out/{name}-linux-{architecture}.json"
         ),
     ]
     assert -1 not in found_at
@@ -138,7 +139,7 @@ def test_one_gate_compare_knows_is_named(gate, arguments):
     assert gate["runs"] == []
 
 
-@pytest.mark.parametrize("name", ["m1", "m4a"])
+@pytest.mark.parametrize("name", ["m1", "m4a", "m5a"])
 def test_the_host_runs_the_gate_named(monkeypatch, tmp_path, name):
     """The host's steps, run in a copy of an empty snapshot: the last one runs
     the gate's script and writes the receipt of its name."""
@@ -155,6 +156,9 @@ def test_the_host_runs_the_gate_named(monkeypatch, tmp_path, name):
     out = tmp_path / "out"
     status = run.run_host(empty.getvalue(), name, commit="c0ffee", corpus=tmp_path, out=out)
     assert status == 0
+    # The libraries a gate compares with are in the group "bench".
+    assert steps[0] == ["uv", "sync", "--locked", "--group", "bench"]
+    assert steps[-1][:6] == ["uv", "run", "--locked", "--group", "bench", "python"]
     assert steps[-1][-5:] == [
         f"bench/gates/{name}.py",
         "--commit",
