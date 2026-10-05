@@ -47,6 +47,7 @@ from pdfacts.backends.protocols import (
     PageObject,
     RecoveredBytes,
     SelectedAppearance,
+    StateKeys,
     WidgetEntry,
     Written,
 )
@@ -1447,8 +1448,8 @@ class _Kept:
         self.fields: dict[tuple[int, int], FieldEntry] = {}
         self.kids: dict[tuple[int, int], Kids] = {}
         self.direct_kids: dict[tuple[int, int], Kids] = {}
-        self.n_states: dict[tuple[int, int], tuple[bytes | None, ...]] = {}
-        self.ap_n_states: dict[tuple[int, int], tuple[bytes | None, ...]] = {}
+        self.n_states: dict[tuple[int, int], StateKeys] = {}
+        self.ap_n_states: dict[tuple[int, int], StateKeys] = {}
         self.mk: dict[tuple[int, int], dict[bytes, Written]] = {}
         self.bs: dict[tuple[int, int], dict[bytes, Written]] = {}
         self.widgets: dict[tuple[int, int], WidgetEntry] = {}
@@ -1629,16 +1630,16 @@ def _sub_entries(
     return _taken(source, names, kept)
 
 
-def _states(n: pikepdf.Dictionary, ap: pikepdf.Dictionary, kept: _Kept) -> tuple[bytes | None, ...]:
+def _states(n: pikepdf.Dictionary, ap: pikepdf.Dictionary, kept: _Kept) -> StateKeys:
     """The keys of an /N dictionary in QPDF's order; converted once per role."""
     if n.is_indirect:
         store, key = kept.n_states, n.objgen
     elif ap.is_indirect:
         store, key = kept.ap_n_states, ap.objgen
     else:
-        return tuple(_key_bytes(key) for key in n)
+        return StateKeys(_key_bytes(key) for key in n)
     if key not in store:
-        store[key] = tuple(_key_bytes(key) for key in n)
+        store[key] = StateKeys(_key_bytes(key) for key in n)
     return store[key]
 
 
@@ -1660,7 +1661,7 @@ def _widget_entry(
     if not bs_invalid and bs is not None:
         entries.update(_sub_entries(bs, _BS_KEYS, kept.bs, kept))
     ap = dictionary.get("/AP")
-    states: tuple[bytes | None, ...] | None = None
+    states: StateKeys | None = None
     states_invalid = False
     if ap is not None:
         if not isinstance(ap, pikepdf.Dictionary):

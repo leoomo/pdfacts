@@ -9,9 +9,10 @@ engines; the caller opens those bytes.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import math
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
 from pdfacts.backends import qpdf
@@ -21,7 +22,11 @@ from pdfacts.backends.protocols import (
     EncryptionEntries,
     EngineFailure,
     FailureKind,
+    FieldEntry,
+    Kids,
     PageText,
+    WidgetEntry,
+    Written,
 )
 from pdfacts.core import runtime
 from pdfacts.core.bitmap import Colour
@@ -97,19 +102,21 @@ def decrypt(
     DecryptionFailedError also when QPDF cannot write the file or reports
     anything while it reads or writes it, and when the result fails a check.
     The result has to open as open() opens a file, read as not encrypted by
-    both engines, with /Size in its trailer, and give for each page what the
+    both engines, with /Size in its trailer; give for each page what the
     input gives: its geometry, what PDFium reads in each annotation
     dictionary of its /Annots, the characters PDFium reads in its content,
-    and the pixels of PDFium's rendering in RGB (CHECK_PIXELS).
-    Neither the input nor the result may give a warning.
+    and the pixels of PDFium's rendering in RGB (CHECK_PIXELS); and give the
+    input's fields as QPDF reads them, the field tree and each page's
+    widgets (_Fields). Neither the input nor the result may give a warning.
 
     The limits apply as for open(), to the input and to the result, with two
     exceptions: max_bytes applies to the input only, and deadline_seconds
     counts from the start of decrypt(), checked as open() checks it, once
-    the file is written and after each page of the check. max_render_pixels
-    applies to the renderings of the check; max_items_per_page holds the
-    entries of each page's /Annots as PDFium counts them, and its characters
-    as glyphs() holds them. EngineError when an engine fails otherwise.
+    the file is written, after each page of the check and after the fields
+    of each page. max_render_pixels applies to the renderings of the check;
+    max_items_per_page holds the entries of each page's /Annots as each
+    engine counts them, and its characters as glyphs() holds them.
+    EngineError when an engine fails otherwise.
 
     The object numbers of the result may differ from those of the input. Its
     /ID keeps the first part of the input's and gets a second made from its
@@ -231,7 +238,8 @@ def _verify(source: Document, data: bytes, limits: Limits, deadline: Callable[[]
         for index in range(source.page_count):
             _compare_page(source, result, index)
             deadline()
-        # Last: reading a page can add one.
+        _compare_fields(source, result, deadline)
+        # Last: reading a page or the fields can add one.
         for document, which in ((source, "the file"), (result, "the decrypted file")):
             if document.warnings:
                 raise DecryptionFailedError(
@@ -276,6 +284,180 @@ def _compare_page(source: Document, result: Document, index: int) -> None:
         raise DecryptionFailedError(
             detail=f"PDFium renders page {index} otherwise in the decrypted file"
         )
+
+
+def _compare_fields(source: Document, result: Document, deadline: Callable[[], None]) -> None:
+    """The result has to give the input's fields (_Fields): first the field
+    tree, then page by page what widgets() reads; the deadline is checked
+    after each page.
+
+    QPDF's values are known for both: decrypt() refuses an input for which
+    they are unknown, and a result for which they are fails the comparison of
+    its first page, whose geometry holds the user unit QPDF reads.
+    """
+    ours, theirs = _Fields(source), _Fields(result)
+    if theirs.tree() != ours.tree():
+        raise DecryptionFailedError(
+            detail="QPDF reads the field tree of /AcroForm otherwise in the decrypted file"
+        )
+    for index in range(source.page_count):
+        if theirs.page(index) != ours.page(index):
+            raise DecryptionFailedError(
+                detail=f"QPDF reads the widgets of page {index} otherwise in the decrypted file"
+            )
+        deadline()
+
+
+class _Labels:
+    """Each object a label of its own, in the order it is first met: the
+    object numbers QPDF writes anew are left out, and what refers to what is
+    kept. A dictionary written directly has none."""
+
+    def __init__(self) -> None:
+        self._labels: dict[tuple[int, int], int] = {}
+
+    def __call__(self, object_number: int | None, generation: int | None) -> int | None:
+        if object_number is None or generation is None:
+            return None
+        return self._labels.setdefault((object_number, generation), len(self._labels))
+
+
+class _Fields:
+    """The fields of one document as QPDF reads them for fields() and
+    widgets(), the tree first, then page by page, each object by its label
+    (_Labels) and each value by its digest (Written.digest).
+
+    What the backend gives once for many dictionaries is taken once: a value
+    by its digest, made once for that object; a field dictionary that is an
+    object of its own once for its object; a /Kids array, which the backend
+    keeps for the document, once for that array. Compared by content, each
+    would cost each time it is named. What the backend converts anew for each
+    page that names it, a dictionary written directly in /Annots, is taken
+    anew too, and not kept.
+    """
+
+    def __init__(self, document: Document) -> None:
+        self._document = document
+        self._labels = _Labels()
+        self._nodes: dict[tuple[int, int], tuple] = {}
+        # By id(): the /Kids arrays and the tree's lists of nodes, which the
+        # backend keeps for the document, each kept here with its digest.
+        self._kept: dict[int, tuple[object, bytes]] = {}
+
+    def _kept_digest(self, value: object, make: Callable[[], object]) -> bytes:
+        known = self._kept.get(id(value))
+        if known is None:
+            known = (value, _digest(repr(make()).encode()))
+            self._kept[id(value)] = known
+        return known[1]
+
+    def node(self, entry: FieldEntry) -> tuple:
+        """A field dictionary as QPDF reads it: its label, its entries, whether
+        it has /Kids and whether it is a widget; once for an object of its
+        own."""
+        if entry.object_number is None or entry.generation is None:
+            return self._node(entry)
+        key = (entry.object_number, entry.generation)
+        if key not in self._nodes:
+            self._nodes[key] = self._node(entry)
+        return self._nodes[key]
+
+    def _node(self, entry: FieldEntry) -> tuple:
+        return (
+            self._labels(entry.object_number, entry.generation),
+            _entries(entry.entries),
+            entry.kids,
+            entry.subtype_widget,
+        )
+
+    def tree(self) -> tuple | None:
+        """The field tree from /AcroForm /Fields as FieldTree gives it, each
+        node by node(), with the nodes its /Kids name, its parent, and whether
+        its /Parent names that and it is reached twice; the nodes /Fields
+        names, and whether the tree is valid and was cut. None without
+        /AcroForm."""
+        with self._document._access() as access:
+            found = access.field_tree()
+        if found is None:
+            return None
+        nodes = tuple(
+            (
+                self.node(node.entry),
+                None
+                if node.kids is None
+                else self._kept_digest(node.kids, lambda kids=node.kids: kids),
+                node.parent,
+                node.parent_matches,
+                node.reached_twice,
+            )
+            for node in found.nodes
+        )
+        return found.roots, found.invalid, found.cut, nodes
+
+    def page(self, index: int) -> object:
+        """Whether the page's /Annots is no array, and each widget QPDF reads
+        on the page (widget()); or, as widgets() gives it, the unknown object
+        number of a page QPDF does not read as PDFium does ("Object
+        identity"). The entries of /Annots are held to max_items_per_page as
+        QPDF counts them, before the widgets are read."""
+        number = self._document.pages[index].ref.object_number
+        if isinstance(number, Unknown):
+            return number
+        with self._document._access() as access:
+            count = access.annotation_count(index)
+            allowed = access.max_items_per_page
+            if allowed is not None and count is not None and count > allowed:
+                raise LimitExceededError(limit="max_items_per_page", allowed=allowed, found=count)
+            annotations = access.annotations(index)
+        return annotations.not_an_array, tuple(self.widget(one) for one in annotations.widgets)
+
+    def widget(self, widget: WidgetEntry) -> tuple:
+        """A widget as widgets() reads it: its index in /Annots and its object,
+        its own entries, the keys of its /AP /N and whether /AP, /MK or /BS is
+        written otherwise than allowed; the field dictionaries of its /Parent
+        chain (node()), whether the chain loops, is cut or meets a /Parent
+        that is no dictionary, and the /Kids of its own /Parent (_kids)."""
+        annotation = widget.annotation
+        kids = widget.parent_kids
+        return (
+            annotation.index,
+            self._labels(annotation.object_number, annotation.generation),
+            _entries(widget.entries),
+            None if widget.states is None else widget.states.digest(),
+            widget.states_invalid,
+            widget.mk_invalid,
+            widget.bs_invalid,
+            tuple(self.node(entry) for entry in widget.chain),
+            widget.chain_loops,
+            widget.chain_cut,
+            widget.parent_invalid,
+            None if kids is None else self._kept_digest(kids, lambda: _kids(kids, self._labels)),
+        )
+
+
+def _entries(entries: Mapping[bytes, Written]) -> tuple:
+    """A dictionary's entries as the backend gives them, each value by its
+    digest."""
+    return tuple((key, value.digest()) for key, value in sorted(entries.items()))
+
+
+def _kids(kids: Kids, labels: _Labels) -> tuple:
+    """A /Kids array as QPDF reads it for widgets(): each entry by its label
+    (_Labels) and whether it is a widget, the positions of each widget among
+    the widget entries, and whether every entry is a widget."""
+    return (
+        tuple(
+            (labels(entry.object_number, entry.generation), entry.widget) for entry in kids.entries
+        ),
+        tuple(
+            sorted((labels(*key), positions) for key, positions in kids.widget_positions.items())
+        ),
+        kids.all_widgets,
+    )
+
+
+def _digest(data: bytes) -> bytes:
+    return hashlib.sha256(data).digest()
 
 
 def _page_text(access: FeatureAccess, index: int) -> PageText:

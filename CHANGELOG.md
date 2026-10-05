@@ -311,6 +311,13 @@ may break callers.
   hold a NUL below revision 5, and a file whose `/V` and `/R` disagree;
   "Decryption": the known gap of a password outside ASCII is closed
   (decisions of the maintainer, 2026-10-04).
+- "Decryption": `decrypt()` also compares the fields as QPDF reads them for
+  `fields()` and `widgets()`: the field tree of `/AcroForm` and each page's
+  widgets, their own entries and their `/Parent` chains, each object by the
+  order in which it is first met, since QPDF numbers the objects anew; a
+  result that gives other fields is refused with `DecryptionFailedError`;
+  `max_items_per_page` holds QPDF's count of a page's `/Annots` too (decision
+  of the maintainer, 2026-10-05).
 
 ### Corrected
 
