@@ -1,6 +1,8 @@
 """Run a gate on three platforms and write one receipt per platform.
 
-The gate is one compare.py knows, m1 or m4a: bench/gates/<gate>.py. The host
+The gate is one compare.py knows, m1, m4a or m5a: bench/gates/<gate>.py. The
+dependency group "bench" is installed for each, the libraries a gate compares
+with; the library's own tests run without it (tools/checks.py). The host
 (macOS) runs in a fresh copy of the working tree, Linux arm64 and Linux
 x86_64 in the containers of tools/checks.py, over the same snapshot of the
 tree. The corpus is not part of the snapshot: each run places it with
@@ -74,9 +76,9 @@ def container_command(
             "pip install --quiet --disable-pip-version-check --root-user-action=ignore "
             f"uv=={UV_VERSION}",
             "cd /work",
-            "uv sync --locked",
+            "uv sync --locked --group bench",
             "uv run --locked python bench/corpus/fetch.py --verify-only --from /corpus",
-            f"uv run --locked python bench/gates/{gate}.py --commit "
+            f"uv run --locked --group bench python bench/gates/{gate}.py --commit "
             f"{commit} --out /out/{container_receipt(gate, architecture)}",
         ]
     )
@@ -118,7 +120,7 @@ def run_host(snapshot: bytes, gate: str, *, commit: str, corpus: Path, out: Path
         with tarfile.open(fileobj=io.BytesIO(snapshot)) as archive:
             archive.extractall(folder, filter="data")
         steps = [
-            ["uv", "sync", "--locked"],
+            ["uv", "sync", "--locked", "--group", "bench"],
             [
                 "uv",
                 "run",
@@ -133,6 +135,8 @@ def run_host(snapshot: bytes, gate: str, *, commit: str, corpus: Path, out: Path
                 "uv",
                 "run",
                 "--locked",
+                "--group",
+                "bench",
                 "python",
                 f"bench/gates/{gate}.py",
                 "--commit",

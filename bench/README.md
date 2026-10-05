@@ -73,16 +73,24 @@ installed the font policy. What is there:
 | --- | --- |
 | `digest.py` | SHA-256 over int, float and str values; the module states the encoding |
 | `gates/m1.py` | reads the corpus and writes one receipt: per file a geometry digest, a glyph digest, counts, warnings |
-| `gates/compare.py` | compares two or more receipts of one gate, the M1 or the M4a gate, prints one table per file and column: identical, differs, missing, error |
+| `gates/compare.py` | compares two or more receipts of one gate, the M1, the M4a or the M5a gate, prints one table per file and column: identical, differs, missing, error |
 | `gates/m2.py`, `gates/m2_referee.py` | the M2 gate: the widgets and fields of the corpus, against a referee that reads the dictionaries with pikepdf |
 | `gates/m3.py` | the M3 gate: the paths and images of the corpus, read twice, their numbers against PDFium's own |
 | `gates/m4a.py` | the M4a gate: the glyphs, words and lines of the corpus, digested for comparing platforms, their characters against PDFium's own count, and what the rule set leaves out or may get wrong, counted |
+| `gates/m5a.py` | the M5a gate: what `pdfacts.inspect()` finds, checked with pikepdf; the encrypted files decrypted, and read and written by pypdf and PyMuPDF; faults introduced into the results of `decrypt()` and `recover()` |
 
-The M2, M3 and M4a gates take the same `--commit`, `--out`, `--only` and
-`--corpus` as the M1 gate and refuse a run on the same grounds; the font
-policy is checked by the M4a gate as well, not by the M2 and M3 gates, which
-run on one machine. The rest of this section is about the M1 gate; the M4a
-gate runs on three platforms and is compared the same way.
+The M2, M3, M4a and M5a gates take the same `--commit`, `--out`, `--only`
+and `--corpus` as the M1 gate and refuse a run on the same grounds; the font
+policy is checked by the M4a and M5a gates as well, not by the M2 and M3
+gates, which run on one machine. The M5a gate reads with pypdf and PyMuPDF,
+the dependency group `bench`, and refuses a run without it:
+
+```bash
+uv run --group bench python bench/gates/m5a.py --commit "$(git rev-parse HEAD)" --out bench/out/m5a-manual.json
+```
+
+The rest of this section is about the M1 gate; the M4a and M5a gates run on
+three platforms and are compared the same way.
 
 Run the gate on one machine, from the repository root, with the corpus in
 place (`bench/corpus/fetch.py --verify-only` reports `104 files: ok 104`):
@@ -118,7 +126,8 @@ never a warning text.
 python3 bench/gates/run.py m1
 ```
 
-`run.py` takes the gate, `m1` or `m4a`, and runs `bench/gates/<gate>.py` on
+`run.py` takes the gate, `m1`, `m4a` or `m5a`, and runs
+`bench/gates/<gate>.py` on
 macOS natively (in a fresh copy of the working tree) and in the Linux arm64
 and Linux x86_64 containers of `tools/checks.py`, all three over the same
 snapshot of the tree. It refuses to run while the working tree has uncommitted
@@ -153,9 +162,23 @@ differ from PDFium's and the pages not compared:
 uv run python bench/gates/compare.py bench/out/m4a-darwin-arm64.json bench/out/m4a-linux-arm64.json bench/out/m4a-linux-amd64.json
 ```
 
+For the M5a gate, `python3 bench/gates/run.py m5a` installs the group
+`bench` on each platform and writes `m5a-darwin-arm64.json`,
+`m5a-linux-arm64.json` and `m5a-linux-amd64.json`; the comparison has a
+column for each of the inspection, the decryption, the recovery and the
+faults introduced:
+
+```bash
+uv run python bench/gates/compare.py bench/out/m5a-darwin-arm64.json bench/out/m5a-linux-arm64.json bench/out/m5a-linux-amd64.json
+```
+
 ## Comparison with other libraries
 
-Deferred to milestone M7.
+A comparison of what pdfacts reads with what other libraries read, on the
+same files, is part of milestone M7. Until then, the M5a gate has pypdf and
+PyMuPDF read the files `pdfacts.decrypt()` writes, and compares each
+library's reading with its own reading of the original.
 
-PyMuPDF may be installed here for comparison. It is licensed under the AGPL
-and must not be imported by the library or by the library's tests.
+PyMuPDF is installed here with the group `bench`, for comparison. It is
+licensed under the AGPL and must not be imported by the library or by the
+library's tests.
