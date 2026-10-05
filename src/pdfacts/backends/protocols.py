@@ -10,6 +10,7 @@ does not decide what is unknown; the core does.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -109,6 +110,25 @@ class DecryptedOtherwise:
     kind: str
 
 
+class StateKeys(tuple[bytes | None, ...]):
+    """The keys of an /AP /N dictionary, as a tuple, each as name bytes, or
+    None for a name without bytes (Written, "invalid name").
+
+    digest(): a SHA-256 of the keys, made once for each object, so that the
+    keys the backend gives once for many widgets cost it once.
+    """
+
+    def digest(self) -> bytes:
+        made = self.__dict__.get("_digest")
+        if made is None:
+            data = b"".join(
+                b"\0" if key is None else b"\1" + len(key).to_bytes(8, "big") + key for key in self
+            )
+            made = hashlib.sha256(data).digest()
+            self.__dict__["_digest"] = made
+        return made
+
+
 @dataclass(frozen=True, slots=True)
 class Written:
     """A value as the file writes it."""
@@ -121,6 +141,23 @@ class Written:
     # digits (ISO 32000-2, 7.3.5), which has no bytes: QPDF holds a NUL in
     # place of the #, and PDFium reads it otherwise (measured).
     data: bytes | int | float | bool | tuple[Written, ...] | None
+    # digest(), once it is asked for.
+    _digest: bytes | None = field(default=None, init=False, repr=False, compare=False)
+
+    def digest(self) -> bytes:
+        """A SHA-256 of the kind and what the value holds, an array by the
+        digests of its items. Made once for each object: a value the backend
+        gives once for many dictionaries costs it once."""
+        if self._digest is None:
+            if self.kind == "array":
+                payload = b"".join(item.digest() for item in self.data)
+            elif isinstance(self.data, bytes):
+                payload = self.data
+            else:
+                payload = repr(self.data).encode()
+            digest = hashlib.sha256(self.kind.encode() + b"\0" + payload).digest()
+            object.__setattr__(self, "_digest", digest)
+        return self._digest
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,7 +218,7 @@ class WidgetEntry:
     # Keys of /AP /N in the dictionary's order, when /N is a dictionary, None
     # for a key that is a name without bytes (Written, "invalid name"); None
     # when /AP or /N is absent or /N is a stream.
-    states: tuple[bytes | None, ...] | None
+    states: StateKeys | None
     states_invalid: bool  # /AP is not a dictionary, or /N is neither a dictionary nor a stream
     mk_invalid: bool  # /MK is present and not a dictionary
     bs_invalid: bool  # /BS is present and not a dictionary
