@@ -11,9 +11,12 @@ built otherwise.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import io
 import re
 import time
+import warnings
+from types import SimpleNamespace
 
 import pikepdf
 import pytest
@@ -28,13 +31,23 @@ from pdfacts import (
     NotEncryptedError,
     PasswordRequiredError,
 )
+from pdfacts.backends import protocols
 from pdfacts.backends import qpdf as qpdf_backend
 from pdfacts.backends.protocols import (
+    AnnotationEntry,
     CryptFilterEntry,
     DecryptedBytes,
     EncryptionEntries,
     EngineFailure,
     FailureKind,
+    FieldEntry,
+    FieldNode,
+    FieldTree,
+    KidEntry,
+    Kids,
+    PageAnnotations,
+    WidgetEntry,
+    Written,
 )
 from pdfacts.core import decryption
 from synthetic.builder import append_update, build, stream
@@ -996,6 +1009,528 @@ def test_the_checks_catch_a_result_without_a_usable_size(monkeypatch):
     monkeypatch.setattr(qpdf_backend.QpdfDocument, "object_count", object_count)
     with pytest.raises(DecryptionFailedError, match="the decrypted file has no usable /Size"):
         pdfacts.decrypt(ENCRYPTED)
+
+
+def grouped(
+    *,
+    form: bool = True,
+    fields: bytes | None = b"6 0 R 7 0 R",
+    parent: bytes = b"(Group)",
+    parent_entries: bytes = b"",
+    kids: bytes = b"5 0 R",
+    widget_parent: bytes = b"6 0 R",
+    other: bytes = b"(Other)",
+    other_entries: bytes = b"",
+    annots: bytes = b"5 0 R",
+    more: dict[int, bytes] | None = None,
+    widget_entries: bytes = b"",
+) -> bytes:
+    """A form whose one widget, object 5, on page 0, is the kid of the field
+    object 6, named `parent`; object 7 is a text field without a widget,
+    named `other`. `fields` is /AcroForm's /Fields, None for none; `kids` is
+    object 6's /Kids, and `widget_parent` the widget's /Parent;
+    `parent_entries` and `other_entries` are more entries of objects 6 and 7,
+    `annots` the page's /Annots, `more` more objects, and `widget_entries`
+    more entries of the widget."""
+    acroform = b"" if fields is None else b" /Fields [" + fields + b"]"
+    return plain(
+        annotation=False,
+        catalog=b" /AcroForm <<" + acroform + b" >>" if form else b"",
+        page_entries=b" /Annots [" + annots + b"]",
+        extra={
+            5: b"<< /Type /Annot /Subtype /Widget /FT /Tx /T (Name) /V (Value)"
+            b" /Rect [10 10 100 30] /P 10 0 R /Parent " + widget_parent + widget_entries + b" >>",
+            6: b"<< /T " + parent + b" /Kids [" + kids + b"]" + parent_entries + b" >>",
+            7: b"<< /T " + other + b" /FT /Tx" + other_entries + b" >>",
+            **(more or {}),
+        },
+    )
+
+
+# Object 8 a copy of the field 6, object 9 one of the widget 5 with its
+# /Parent 6, neither named by the form as grouped() builds it.
+COPIES = {
+    8: b"<< /T (Group) /Kids [5 0 R] >>",
+    9: b"<< /Type /Annot /Subtype /Widget /FT /Tx /T (Name) /V (Value)"
+    b" /Rect [10 10 100 30] /P 10 0 R /Parent 6 0 R >>",
+}
+
+
+GROUPED = encrypt(grouped(), user="", owner="o")
+
+
+def locked(data: bytes) -> bytes:
+    """`data` encrypted as GROUPED is. pikepdf warns where /AcroForm does not
+    reach a widget, as some of the forms here are built."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", pikepdf.PageCopyWarning)
+        return encrypt(data, user="", owner="o")
+
+
+def test_the_checks_pass_the_fields_as_they_were_built(monkeypatch):
+    returning(monkeypatch, grouped())
+    assert pdfacts.decrypt(GROUPED).data == grouped()
+
+
+@pytest.mark.parametrize(
+    "input, data",
+    [
+        (grouped(form=False), grouped(form=False, parent=b"(Other)")),
+        (grouped(form=False), grouped(form=False, parent_entries=b" /V (Value)")),
+        (grouped(form=False), grouped(form=False, parent_entries=b" /Subtype /Widget")),
+        (grouped(form=False), grouped(form=False, parent_entries=b" /Parent 5 0 R")),
+        (grouped(form=False), grouped(form=False, widget_parent=b"7 0 R")),
+        (grouped(form=False), grouped(form=False, kids=b"5 0 R 5 0 R")),
+        (grouped(form=False), grouped(form=False, kids=b"")),
+        (
+            grouped(more=COPIES),
+            grouped(kids=b"9 0 R", widget_parent=b"8 0 R", more=COPIES),
+        ),
+        (grouped(more=COPIES), grouped(annots=b"9 0 R", more=COPIES)),
+    ],
+    ids=[
+        "a parent named otherwise",
+        "a value given to the parent",
+        "a parent that is a widget",
+        "a chain that loops",
+        "a /Parent that names another field",
+        "the widget twice in its parent's /Kids",
+        "the widget not in its parent's /Kids",
+        "a widget the tree no longer reaches",
+        "a copy of the widget on the page",
+    ],
+)
+def test_the_checks_catch_other_fields_of_a_widget(monkeypatch, input, data):
+    """The widget's field, as QPDF reads it, is what changed: PDFium reads of
+    /Parent its type alone. Without /AcroForm, the tree does not tell; in the
+    last two, the tree reads the same, its widget a copy of the one on the
+    page."""
+    returning(monkeypatch, data)
+    with pytest.raises(DecryptionFailedError, match="QPDF reads the widgets of page 0 otherwise"):
+        pdfacts.decrypt(locked(input))
+
+
+@pytest.mark.parametrize(
+    "input, data",
+    [
+        (grouped(), grouped(fields=b"6 0 R")),
+        (grouped(), grouped(fields=b"7 0 R 6 0 R")),
+        (grouped(), grouped(fields=b"6 0 R << /T (Other) /FT /Tx >>")),
+        (grouped(), grouped(fields=b"6 0 R 7 0 R null")),
+        (grouped(fields=b"6 0 R null"), grouped(fields=b"null 6 0 R")),
+        (grouped(fields=b""), grouped(fields=None)),
+        (grouped(), grouped(kids=b"5 0 R null")),
+        (grouped(), grouped(other=b"(Another)")),
+        (grouped(other_entries=b" /Opt [(a) (b)]"), grouped(other_entries=b" /Opt [(a) (c)]")),
+        (grouped(), grouped(other_entries=b" /Kids []")),
+        (grouped(), grouped(other_entries=b" /Subtype /Widget")),
+        (grouped(), grouped(other_entries=b" /Parent 6 0 R")),
+        (grouped(), grouped(form=False)),
+        (plain(annotation=False), plain(annotation=False, catalog=b" /AcroForm << /Fields [] >>")),
+    ],
+    ids=[
+        "a field left out of /Fields",
+        "the fields in another order",
+        "a field written directly",
+        "a null in /Fields",
+        "a null elsewhere in /Fields",
+        "no /Fields where it was empty",
+        "a null in /Kids",
+        "a field without a widget named otherwise",
+        "an option of a field without a widget changed",
+        "an empty /Kids",
+        "a field without a widget that is a widget",
+        "a root with a /Parent",
+        "no /AcroForm",
+        "an /AcroForm added",
+    ],
+)
+def test_the_checks_catch_another_field_tree(monkeypatch, input, data):
+    """The field tree tells each; it is compared before the pages, which some
+    of these change too."""
+    returning(monkeypatch, data)
+    with pytest.raises(
+        DecryptionFailedError, match="QPDF reads the field tree of /AcroForm otherwise"
+    ):
+        pdfacts.decrypt(locked(input))
+
+
+def test_a_warning_from_the_field_tree_is_caught(monkeypatch):
+    """Object 7 writes /FT twice: QPDF warns of it when the field tree reads
+    the object, which nothing reads before, and reads the same tree."""
+    returning(monkeypatch, grouped(other_entries=b" /FT /Tx"))
+    with pytest.raises(
+        DecryptionFailedError, match="the decrypted file gives warnings: .*duplicated key /FT"
+    ):
+        pdfacts.decrypt(GROUPED)
+
+
+def test_the_deadline_is_checked_after_the_fields_of_each_page(monkeypatch):
+    """Two pages: the deadline passed while the result's first page is read,
+    nothing more is read."""
+    now = [0.0]
+    read = []
+    page = decryption._Fields.page
+
+    def slow(self, index):
+        read.append(index)
+        now[0] += 10
+        return page(self, index)
+
+    monkeypatch.setattr(decryption._Fields, "page", slow)
+    with pytest.raises(LimitExceededError) as raised:
+        pdfacts.decrypt(
+            encrypt(plain(pages=2), user="", owner="o"),
+            limits=Limits(deadline_seconds=5),
+            _clock=lambda: now[0],
+        )
+    assert raised.value.limit == "deadline_seconds"
+    assert read == [0, 0]
+
+
+def test_max_items_per_page_holds_the_entries_qpdf_reads(monkeypatch):
+    """The page has one entry in /Annots, which PDFium counts; QPDF's count
+    made three is held to the limit too, before QPDF reads the widgets."""
+    read = []
+    annotations = qpdf_backend.QpdfDocument.annotations
+
+    def recorded(self, index):
+        read.append(index)
+        return annotations(self, index)
+
+    monkeypatch.setattr(qpdf_backend.QpdfDocument, "annotation_count", lambda self, index: 3)
+    monkeypatch.setattr(qpdf_backend.QpdfDocument, "annotations", recorded)
+    with pytest.raises(LimitExceededError) as raised:
+        pdfacts.decrypt(GROUPED, limits=Limits(max_items_per_page=2))
+    assert (raised.value.limit, raised.value.found) == ("max_items_per_page", 3)
+    assert read == []
+
+
+def test_the_kids_of_a_parent_are_read_once(monkeypatch):
+    """Three widgets on the page, kids of the field 6: its /Kids is read once
+    for the input and once for the result, whichever widget names it first."""
+    calls = []
+    read = decryption._kids
+
+    def counted(kids, labels):
+        calls.append(len(kids.entries))
+        return read(kids, labels)
+
+    monkeypatch.setattr(decryption, "_kids", counted)
+    kid = b"<< /Type /Annot /Subtype /Widget /Rect [10 40 100 60] /P 10 0 R /Parent 6 0 R >>"
+    data = grouped(
+        kids=b"5 0 R 11 0 R 12 0 R", annots=b"5 0 R 11 0 R 12 0 R", more={11: kid, 12: kid}
+    )
+    returning(monkeypatch, data)
+    pdfacts.decrypt(locked(data))
+    assert calls == [3, 3]
+
+
+def test_the_checks_catch_annots_that_is_no_array(monkeypatch):
+    """PDFium counts no annotation on the page in either file; QPDF reads the
+    input's /Annots as empty, the result's as no array, as widgets() reads it.
+    (pikepdf, encrypting it, would write an input's /Annots 5 otherwise.)"""
+    returning(monkeypatch, plain(annotation=False, page_entries=b" /Annots 5"))
+    with pytest.raises(DecryptionFailedError, match="QPDF reads the widgets of page 0 otherwise"):
+        pdfacts.decrypt(locked(plain(annotation=False, page_entries=b" /Annots []")))
+
+
+def test_a_widget_that_is_its_own_parent():
+    """Its /Parent names itself, and it has /Kids: the backend gives that
+    /Kids for its /Parent, and a chain of the widget alone."""
+    data = grouped(form=False, widget_parent=b"5 0 R", widget_entries=b" /Kids [5 0 R]")
+    assert pdfacts.decrypt(locked(data)).page_count == 1
+
+
+def digests_made(monkeypatch, items: int) -> list[bytes]:
+    """The digests Written.digest() makes of arrays of `items` items, as they
+    are made."""
+    made = []
+    sha256 = hashlib.sha256
+
+    def counted(data=b""):
+        if data.startswith(b"array\0") and len(data) == 6 + items * 32:
+            made.append(data)
+        return sha256(data)
+
+    monkeypatch.setattr(protocols, "hashlib", SimpleNamespace(sha256=counted))
+    return made
+
+
+def test_a_value_shared_by_fields_is_compared_once(monkeypatch):
+    """The fields 7, 13 and 14 name one /Opt, object 15: its digest is made
+    once for the input and once for the result."""
+    made = digests_made(monkeypatch, 3)
+    choice = b"<< /T (%s) /FT /Ch /Opt 15 0 R >>"
+    data = grouped(
+        fields=b"6 0 R 7 0 R 13 0 R 14 0 R",
+        other_entries=b" /Opt 15 0 R",
+        more={13: choice % b"B", 14: choice % b"C", 15: b"[(a) (b) (c)]"},
+    )
+    returning(monkeypatch, data)
+    pdfacts.decrypt(locked(data))
+    assert len(made) == 2
+
+
+def test_the_keys_of_an_appearance_are_compared_once(monkeypatch):
+    """Three widgets on the page share the /N object 13: the digest of its
+    keys, /Off then /On, is made once for the input and once for the result."""
+    keys = b"\1" + (3).to_bytes(8, "big") + b"Off" + b"\1" + (2).to_bytes(8, "big") + b"On"
+    made = []
+    sha256 = hashlib.sha256
+
+    def counted(data=b""):
+        if data == keys:
+            made.append(data)
+        return sha256(data)
+
+    monkeypatch.setattr(protocols, "hashlib", SimpleNamespace(sha256=counted))
+    shared = b" /AP << /N 13 0 R >>"
+    kid = (
+        b"<< /Type /Annot /Subtype /Widget /Rect [10 40 100 60] /P 10 0 R /Parent 6 0 R"
+        + shared
+        + b" >>"
+    )
+    data = grouped(
+        kids=b"5 0 R 11 0 R 12 0 R",
+        annots=b"5 0 R 11 0 R 12 0 R",
+        widget_entries=shared,
+        more={11: kid, 12: kid, 13: b"<< /Off 14 0 R /On 14 0 R >>", 14: FORM_XOBJECT},
+    )
+    returning(monkeypatch, data)
+    pdfacts.decrypt(locked(data))
+    assert len(made) == 2
+
+
+def two_pages(annots: bytes, more: dict[int, bytes]) -> bytes:
+    """Two pages, objects 10 and 11, whose /Annots is `annots`."""
+    page = (
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R"
+        b" /Annots " + annots + b" >>"
+    )
+    return build(
+        {
+            1: b"<< /Type /Catalog /Pages 2 0 R >>",
+            2: b"<< /Type /Pages /Kids [10 0 R 11 0 R] /Count 2 >>",
+            4: stream(BODY),
+            10: page,
+            11: page,
+            **more,
+        },
+        1,
+    )
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        two_pages(
+            b"[20 0 R]",
+            {
+                20: b"<< /Type /Annot /Subtype /Widget /Rect [10 10 100 30]"
+                b" /Parent << /T (P) /FT /Ch /Opt [(a) (b) (c)] >> >>"
+            },
+        ),
+        two_pages(
+            b"[<< /Type /Annot /Subtype /Widget /FT /Ch /T (D) /Rect [10 10 100 30]"
+            b" /Opt 15 0 R >>]",
+            {15: b"[(a) (b) (c)]"},
+        ),
+    ],
+    ids=["a /Parent written in a widget of its own", "a value a widget written in /Annots names"],
+)
+def test_a_value_on_many_pages_is_compared_once(monkeypatch, data):
+    """The /Opt, which the backend gives as one object for both pages, in a
+    widget it keeps or as an object of its own: its digest is made once for
+    the input and once for the result."""
+    made = digests_made(monkeypatch, 3)
+    returning(monkeypatch, data)
+    pdfacts.decrypt(locked(data))
+    assert len(made) == 2
+
+
+def test_the_checks_catch_a_parent_that_is_no_dictionary(monkeypatch):
+    """The field 6 writes /Parent 3, a number, in the input: widgets() gives
+    the widget's field as unknown there, and known in the result."""
+    returning(monkeypatch, grouped(form=False))
+    with pytest.raises(DecryptionFailedError, match="QPDF reads the widgets of page 0 otherwise"):
+        pdfacts.decrypt(locked(grouped(form=False, parent_entries=b" /Parent 3")))
+
+
+def test_the_checks_catch_a_kid_that_is_no_longer_a_widget(monkeypatch):
+    """The field 6 has a second kid, object 13, on no page: a widget in the
+    input, a dictionary with no /Subtype in the result."""
+    widget = b"<< /Type /Annot /Subtype /Widget /Rect [0 0 1 1] /Parent 6 0 R >>"
+    returning(
+        monkeypatch,
+        grouped(form=False, kids=b"5 0 R 13 0 R", more={13: b"<< /Parent 6 0 R >>"}),
+    )
+    with pytest.raises(DecryptionFailedError, match="QPDF reads the widgets of page 0 otherwise"):
+        pdfacts.decrypt(locked(grouped(form=False, kids=b"5 0 R 13 0 R", more={13: widget})))
+
+
+def chained(last_parent: bytes) -> bytes:
+    """The widget's /Parent chain 33 dictionaries long, the widget's own and
+    the fields 20 to 51; the last writes `last_parent`, and 52 is a field."""
+    more = {
+        20 + index: b"<< /T (f%d) /Parent %d 0 R >>" % (index, 21 + index) for index in range(31)
+    }
+    more[51] = b"<< /T (f31)" + last_parent + b" >>"
+    more[52] = b"<< /T (f32) >>"
+    return grouped(form=False, widget_parent=b"20 0 R", more=more)
+
+
+def test_the_checks_catch_a_chain_cut_otherwise(monkeypatch):
+    """The 33rd dictionary of the chain has a /Parent in the input alone: the
+    chain is cut there, and the dictionaries read the same."""
+    returning(monkeypatch, chained(b""))
+    with pytest.raises(DecryptionFailedError, match="QPDF reads the widgets of page 0 otherwise"):
+        pdfacts.decrypt(locked(chained(b" /Parent 52 0 R")))
+
+
+FORM_XOBJECT = stream(b"", b"/Type /XObject /Subtype /Form /BBox [0 0 1 1]")
+
+
+@pytest.mark.parametrize(
+    "input, data",
+    [
+        (
+            grouped(widget_entries=b" /MK << /BC [1 0 0] >>"),
+            grouped(widget_entries=b" /MK << /BC [0 0 1] >>"),
+        ),
+        (grouped(widget_entries=b" /F 4"), grouped(widget_entries=b" /F 4.0")),
+        (
+            grouped(widget_entries=b" /BS << /W 1 >>"),
+            grouped(widget_entries=b" /BS << /W 3 >>"),
+        ),
+        (
+            grouped(
+                widget_entries=b" /AP << /N << /On 13 0 R /Off 13 0 R >> >>",
+                more={13: FORM_XOBJECT},
+            ),
+            grouped(
+                widget_entries=b" /AP << /N << /Yes 13 0 R /Off 13 0 R >> >>",
+                more={13: FORM_XOBJECT},
+            ),
+        ),
+        (grouped(widget_entries=b" /AP 5"), grouped()),
+        (grouped(widget_entries=b" /MK 5"), grouped()),
+        (grouped(widget_entries=b" /BS 5"), grouped()),
+    ],
+    ids=[
+        "another border colour",
+        "flags written as a real",
+        "another border width",
+        "other appearance states",
+        "an /AP that is no dictionary",
+        "an /MK that is no dictionary",
+        "a /BS that is no dictionary",
+    ],
+)
+def test_the_checks_catch_other_entries_of_a_widget(monkeypatch, input, data):
+    """What widgets() reads of the widget's own dictionary through QPDF:
+    PDFium reads the same of each, and draws no appearance for it."""
+    returning(monkeypatch, data)
+    with pytest.raises(DecryptionFailedError, match="QPDF reads the widgets of page 0 otherwise"):
+        pdfacts.decrypt(locked(input))
+
+
+def test_a_field_dictionary_is_taken_once():
+    """The backend gives one FieldEntry for each object: taken once, the
+    parent of many widgets costs the comparison once."""
+    with pdfacts.open(grouped()) as document:
+        fields = decryption._Fields(document)
+        with document._access() as access:
+            entry = access.field_tree().nodes[0].entry
+        assert fields.node(entry) is fields.node(entry)
+
+
+def test_what_the_backend_converts_anew_is_not_kept():
+    """Two pages name one /Annots, object 20, whose widget is written in it:
+    the backend converts the widget anew for each page, and the checks keep
+    nothing of it."""
+    widget = b"<< /Type /Annot /Subtype /Widget /FT /Tx /T (Direct) /Rect [10 10 100 30] >>"
+    data = two_pages(b"20 0 R", {20: b"[" + widget + b"]"})
+    with pdfacts.open(data) as document:
+        fields = decryption._Fields(document)
+        fields.tree()
+        first = fields.page(0)
+        kept = (len(fields._kept), len(fields._nodes))
+        assert fields.page(1) == first
+        assert (len(fields._kept), len(fields._nodes)) == kept
+
+
+def test_what_the_checks_read_of_the_backend():
+    """Each structure the backend gives for the fields, and what of it the
+    checks compare: a new attribute has to be taken, or left out here."""
+    compared = {
+        FieldTree: {"nodes", "roots", "invalid", "cut"},
+        FieldNode: {"entry", "kids", "parent", "parent_matches", "reached_twice"},
+        FieldEntry: {"object_number", "generation", "entries", "kids", "subtype_widget"},
+        PageAnnotations: {"not_an_array", "widgets"},
+        WidgetEntry: {
+            "annotation",
+            "entries",
+            "states",
+            "states_invalid",
+            "mk_invalid",
+            "bs_invalid",
+            "chain",
+            "chain_loops",
+            "chain_cut",
+            "parent_invalid",
+            "parent_kids",
+        },
+        AnnotationEntry: {"index", "object_number", "generation"},
+        Kids: {"entries", "widget_positions", "all_widgets"},
+        KidEntry: {"object_number", "generation", "widget"},
+        # _digest is digest() of the two, once it is made.
+        Written: {"kind", "data", "_digest"},
+    }
+    # The entries of /Annots that are no widget PDFium's reading compares;
+    # every widget is a dictionary whose /Subtype is /Widget.
+    left_out = {PageAnnotations: {"entries"}, AnnotationEntry: {"dictionary", "subtype"}}
+    for kind, names in compared.items():
+        assert {field.name for field in dataclasses.fields(kind)} == names | left_out.get(
+            kind, set()
+        ), kind.__name__
+
+
+def test_a_result_qpdf_does_not_read_fails_at_its_first_page(monkeypatch):
+    """QPDF opens the input first, then the result: the second fails, and the
+    user unit of the result's first page, which QPDF reads, is unknown. The
+    field tree is compared after the pages, from QPDF's known values."""
+    opened = []
+    open_qpdf = qpdf_backend.QpdfDocument.open.__func__
+
+    def failing(cls, data: bytes, password: str | None):
+        opened.append(data)
+        if len(opened) == 2:
+            raise EngineFailure(FailureKind.FORMAT, "made to fail")
+        return open_qpdf(cls, data, password)
+
+    monkeypatch.setattr(qpdf_backend.QpdfDocument, "open", classmethod(failing))
+    with pytest.raises(
+        DecryptionFailedError, match="page 0 of the decrypted file has the geometry .*made to fail"
+    ):
+        pdfacts.decrypt(ENCRYPTED)
+    assert len(opened) == 2
+
+
+def test_a_page_qpdf_reads_otherwise_is_refused_by_its_warning():
+    """An update lists the page twice: QPDF makes a copy of it, so the pages
+    it finds are not those the page tree lists, and widgets() gives their
+    object numbers as unknown. The fields compare them so, without asking
+    QPDF for the pages, and the warning refuses the file."""
+    with reopened(ENCRYPTED) as pdf:
+        pages, page = pdf.Root.Pages.objgen[0], pdf.Root.Pages.Kids[0].objgen[0]
+    data = updated(
+        ENCRYPTED, {pages: b"<< /Type /Pages /Kids [%d 0 R %d 0 R] /Count 2 >>" % (page, page)}
+    )
+    with pytest.raises(
+        DecryptionFailedError, match="the file gives warnings: QPDF cannot give the values of pages"
+    ):
+        pdfacts.decrypt(data)
 
 
 @pytest.mark.parametrize(
