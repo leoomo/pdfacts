@@ -1,3 +1,8 @@
+# pdfacts
+
+Structured, verifiable facts from PDF files: text, paths, images, annotations
+and forms, each with explicit geometry.
+
 > **Status: private, pre-alpha (milestone M5a done).** `pdfacts.open()` reads
 > a document and the geometry and object numbers of its pages, renders a page
 > or a region of it to raw bytes, `pdfacts.widgets()` and `pdfacts.fields()`
