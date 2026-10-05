@@ -835,11 +835,39 @@ what the input gives:
 | the characters of the page's content, as `glyphs()` reads them: each one's Unicode value, whether PDFium could not map it and whether it is a hyphen, its origin, matrix, font size and loose box, in content order, invisible text too | PDFium |
 | the pixels of the page rendered in RGB, its annotations drawn as PDFium draws them by default | PDFium, at scale 1 where the page is at most 2^22 pixels there, else at the scale at which its width and its height in pixels, each plus one, multiply to 2^22: rounded up, a page of any shape is then at most 2^22 pixels |
 
+For the document, the result has to give the input's fields, as QPDF reads
+them for `fields()` and `widgets()` ("Fields and widgets"; decision of the
+maintainer, 2026-10-05). First the field tree from `/AcroForm /Fields`: each
+node with the nodes its `/Kids` name, the node it was reached through, whether
+its `/Parent` names that node and whether it is reached twice; the nodes
+`/Fields` names, whether the tree is valid and whether it was followed to its
+end. Then, page by page, whether `/Annots` is an array, and each widget of it:
+its index there; its own entries `/Rect`, `/F`, `/AS`, `/MK /BC`, `/MK /BG`,
+`/BS /W` and `/BS /S`, the keys of its `/AP /N`, and whether its `/AP`, `/MK`
+or `/BS` is written as none of them may be; the field dictionaries of its
+`/Parent` chain, and whether the chain loops, is cut or meets a `/Parent` that
+is no dictionary; the entries of the `/Kids` of its own `/Parent`, which of
+them are widgets and where the widget stands among them. A field dictionary is
+compared by its entries `/T`, `/TU`, `/FT`, `/Ff`, `/V`, `/DV` and `/Opt`, by
+whether it has `/Kids` and is a widget, and by the object it is: objects are
+compared by the order in which they are first met, the tree's first, so that
+what QPDF numbers anew compares the same, and a widget, a field or an entry of
+`/Kids` that is another object, or one written directly, does not. An entry is
+compared as `fields()` and `widgets()` read it: a string, a name, a number or a
+boolean as written, an array to two levels of arrays, a dictionary or a stream
+as such. A page that QPDF does not read as PDFium does ("Object identity") is
+compared as `widgets()` gives it, by its unknown object number. Reason: PDFium
+reads the widgets of a page, of a widget's `/Parent` its type alone, and no
+field without a widget. Given a result whose `/Fields` lost its last field,
+the checks of each page passed in each of the 13 encrypted corpus files with
+fields (measured, 2026-10-05).
+
 A page of the result that is damaged where the input's is not fails the
 checks. Object numbers are not compared: QPDF numbers the objects of the
 result anew. Every page of the 14 encrypted corpus files renders the same,
 pixel for pixel, before and after, and gives the same characters (measured,
-2026-10-04).
+2026-10-04); each file passes the checks of its fields, 1314 nodes of the
+field trees in all (measured, 2026-10-05).
 
 Reason for the characters: where AES-encrypted data ends in inconsistent
 padding, PDFium strips the last block by its last byte alone and QPDF strips
@@ -848,9 +876,13 @@ invisible rendering mode changes where the rendering does not (decision of
 the maintainer, 2026-10-04).
 
 A known gap: the checks compare no other entry of an annotation, such as a
-comment's `/Contents` or a link's `/URI`, and no string or stream that neither
-the characters nor the rendering show, such as the metadata, an embedded
-file, a script or an outline. Where the engines decrypt one of these
+comment's `/Contents` or a link's `/URI`, and no entry of `/AcroForm` but
+`/Fields`, such as `/DA`, `/DR` or `/XFA`. They see a string or a stream only
+as the characters, the rendering or one engine's reading of the annotations
+and the fields shows it: the metadata, an embedded file, a script or an
+outline not at all, and the strings of the fields as QPDF decrypts them, in
+the input and in the result alike. Where the engines decrypt
+one of these
 otherwise, as they do damaged AES data, inconsistent padding at its end for
 one, the checks do not see it, nor a difference too small to change a pixel at
 the scale rendered. What
@@ -862,10 +894,11 @@ another ("Object identity", a known gap), is not seen (measured).
 The limits apply as for `open()`, to the input and to the result, with these
 exceptions: `max_bytes` applies to the input only; `deadline_seconds` counts
 from the start of `decrypt()`, checked as `open()` checks it, once the file is
-written and after each page of the check. `max_items_per_page` holds the
-entries of each page's `/Annots` that the checks read, as PDFium counts them,
-and the page's characters, as `glyphs()` holds them; `max_render_pixels`
-applies to the renderings of the check.
+written, after each page of the check and after the fields of each page; the
+field tree is read whole, as `fields()` reads it. `max_items_per_page` holds
+the entries of each page's `/Annots` that the checks read, as each engine
+counts them, and the page's characters, as `glyphs()` holds them;
+`max_render_pixels` applies to the renderings of the check.
 
 The result keeps the object streams the input has and gets none more; it is
 not linearized, and its XMP metadata is left as it is. Its `/ID` keeps the
