@@ -25,6 +25,8 @@ on. Three states are used throughout:
 | Paths and images (`GRAPHICS`) | proven | `tests/test_graphics_reader.py`, `tests/test_graphics_shapes.py`, `tests/test_graphics_cases.py`; on the corpus, 63472 paths and 1884 images on 467 pages, their numbers equal to PDFium's own for every page's content and every annotation's appearance; the M3 gate |
 | Text: glyphs, words and lines (`TEXT`) | proven | `tests/test_text_rules.py`, `tests/test_text_reader.py`, `tests/test_text_cases.py`, `tests/test_text_angles.py`; on the corpus, 1103908 glyphs, 154208 words and 32496 lines on 467 pages, the glyphs holding PDFium's characters in 104 of 104 files, every value identical on macOS arm64, Linux arm64 and Linux x86_64; the M4a gate |
 | Recovering a damaged file (`RECOVERY`) | proven | `tests/test_recovery.py`. Every corpus file with its end damaged six ways (`%%EOF` removed, its last byte cut, cut right after the offset of its last `startxref`, junk, Ctrl-Z or a vertical tab appended) recovered with the geometry of the original. The 32 files with an incremental update, cut 200 bytes into it: 30 refused as ending inside an update; two updates were shorter. Five corpus forms cut at 70 % and 95 %: one of the ten recovered, with the geometry and the form fields of the original; two refused as ending inside an update; seven refused, QPDF finding no `/Kids` in the root of the page tree. All five keep objects in object streams |
+| Inspecting a file's structure, encryption and active content (`INSPECTION`) | proven | `tests/test_inspection.py`, `tests/test_inspection_checks.py`, `tests/test_backend_qpdf_structure.py`, `tests/test_backend_qpdf_active_content.py`; on the corpus, the `/Contents` of each of 467 pages as pikepdf reads it apart from pdfacts, its streams and its array, 7 of them indirect arrays, and each of 1287 actions, 1258 entries that name them, 38 XFA streams and 2 embedded files in the object the report names; every value identical on macOS arm64, Linux arm64 and Linux x86_64; the M5a gate |
+| Decrypting a file (`DECRYPTION`) | proven | `tests/test_decryption.py`, `tests/test_passwords.py`; the 14 encrypted corpus files decrypted to the same bytes on three platforms, and read by pypdf and by PyMuPDF with the field names and rectangles of the original, 1038 widgets, on each page as many as pikepdf finds, and by pypdf with the 1020 names of the field trees, also after each wrote the file anew; in the 13 with a text field, a value set and read back by each; 82 faults introduced into the results, each refused, and the right result returned, also when written anew by pikepdf; the M5a gate |
 | Everything else | planned | [ROADMAP.md](../ROADMAP.md) |
 
 ## Milestone M0: install gate
@@ -252,6 +254,60 @@ The tests ran with `python3 tools/checks.py --all` on `f36993a`, the commit
 the gate ran on: 2376 tests on macOS arm64, and 2375 on Linux arm64
 and on Linux x86_64, where one test that needs macOS is skipped. The commit
 that records the run changes documents only.
+
+## Milestone M5a: gate
+
+Run on 2026-10-05 with `bench/gates/run.py m5a` on commit
+`8703d77e037f6d1817e77fb2ae96535501c3cbc3`, over the 104 files of
+`bench/corpus/manifest.csv`, after the runtime installed the font policy.
+Every platform reported pypdfium2 5.13.0, PDFium 153.0.7999.0, pikepdf
+10.14.0, QPDF 12.4.1 and the font policy embedded-only, and of the
+dependency group `bench`, pypdf 6.19.0 and PyMuPDF 1.28.2.
+
+| Platform | `uname -m` | Python | Files read | Pages | Findings | Faults | Seconds |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| macOS arm64, natively | arm64 | 3.13.5 | 104 | 467 | 2585 | 352 | 44.5 |
+| Linux arm64, container `python:3.13.5-slim` | aarch64 | 3.13.5 | 104 | 467 | 2585 | 352 | 44.5 |
+| Linux x86_64, container `python:3.13.5-slim`, emulated on an arm64 host | x86_64 | 3.13.5 | 104 | 467 | 2585 | 352 | 78.2 |
+
+| Compared on all three platforms | Files identical |
+| --- | --- |
+| inspection: every value `pdfacts.inspect()` gives, the forms of `/Contents` and the findings counted | 104 of 104 |
+| decryption: for the 14 encrypted files, the SHA-256 of what `pdfacts.decrypt()` wrote and what each library read; for the others, that they are not encrypted | 104 of 104 |
+| recovery: for the 90 files not encrypted, the SHA-256 of what `pdfacts.recover()` wrote; for the others, that they are encrypted | 104 of 104 |
+| faults: the outcome of each fault introduced | 104 of 104 |
+
+The gate printed these lines on every platform:
+
+```
+104 files, 467 pages; 14 files encrypted, 14 of them with an owner password that is not the empty one
+/Contents: stream 379, array 81, indirect-array 7, absent 0, other 0; as pikepdf reads them on 467 of 467 pages
+active content: actions 1287, triggers 1258, xfa streams 38, embedded files 2; in the object named: 2585 of 2585
+pypdf: 1038 widgets, as many on each page as pikepdf finds in 14 files, 1020 fields in the field tree; field names and rectangles equal after decryption in 14 files, after writing in 14; encrypted before and not after in 14; a value set and read back in 13, no text field in 1
+pymupdf: 1038 widgets, as many on each page as pikepdf finds in 14 files; field names and rectangles equal after decryption in 14 files, after writing in 14; encrypted before and not after in 14; a value set and read back in 13, no text field in 1
+decrypt(), faults refused: a widget moved 13 of 13, a stroke added 14 of 14, a page removed 14 of 14, a field left out 13 of 13, still encrypted 14 of 14, a warning 14 of 14; the right result returned in 14 of 14, written anew by pikepdf in 14 of 14
+recover(), faults refused: a page removed 90 of 90, no /Size 90 of 90, cut short 90 of 90; the right result returned in 90 of 90, written anew by pikepdf in 90 of 90
+files that failed a condition: 0
+```
+
+| Part of the gate in `ROADMAP.md` | Shown by |
+| --- | --- |
+| owner-password-protected corpus files are readable and writable by a third-party library after decryption, with field names and rectangles equal to those of the original file | `pdfacts.decrypt()`, given no password, wrote anew the 14 encrypted files, those pikepdf reads as encrypted, each with an owner password that is not the empty one. pypdf and PyMuPDF each read the field name and the rectangle of every widget, page by page: 1038 in the originals, on each page as many as pikepdf finds in its `/Annots`, and the same in the decrypted files and in the files each wrote anew from them; pypdf also read the same 1020 names of the field trees in each. Each read the originals as encrypted, and the decrypted files and its own as not. Each set the value of the first text field, wrote the file and read the value back, in the 13 files where pikepdf finds one; the fourteenth, `06`, has no widget |
+| a page `/Contents` entry that is an indirect array is handled | `pdfacts.inspect()` gave the `/Contents` of all 467 pages: 379 streams, 81 arrays and 7 indirect arrays. pikepdf, read apart from pdfacts, found on each page the same form, the same streams, as many other entries and the same array |
+| the verification inside each function detects a deliberately introduced fault | the QPDF backend's writing replaced by one that returns a result made wrong on purpose. `decrypt()` refused with `DecryptionFailedError` each of six faults on each encrypted file: a widget moved by one point and the last field of `/Fields` left out (neither in `06`, which has no widget and no field), a stroke added to the first page, the last page removed, the input returned still encrypted, a warning reported. `recover()` refused with `RecoveryFailedError` each of three on each of the 90 other files: the last page removed with the page count kept, the last `/Size` taken out, the file cut to half its length. `recover()` keeps a file's encryption, and what it writes for an encrypted file differs from one call to the next, so its faults go to the files not encrypted. Given the right result unchanged, and written anew by pikepdf as the faults that edit it are, each function returned it in every file |
+| the active content report names the object in which each finding was made | pikepdf found each finding in the object the report names: the 1258 entries, each at its key in its owner, naming a value of its own of the kind of its action, written in the action's object; the 1287 actions, each found by an entry or by a `/Next` that names it in its order, or, where nothing names it, as a dictionary of its kind; the 38 XFA streams, where `/XFA` names them, in order; and the 2 embedded files, each a file specification with the streams its `/EF` names |
+
+No file failed a condition, and none raised an error. Seconds are the time
+the gate script took over the corpus, its decryptions, recoveries and faults
+included.
+
+`decrypt()` compares the fields as QPDF reads them since #102 (F7): a
+result whose `/Fields` lost its last field is one of the faults it refused.
+
+The tests ran with `python3 tools/checks.py --all` on `8703d77`, the commit
+the gate ran on: 3224 tests on macOS arm64, and 3223 on Linux arm64 and on
+Linux x86_64, where one test that needs macOS is skipped. The commit that
+records the run changes documents only.
 
 ## What the engines provide
 
