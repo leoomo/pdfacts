@@ -14,7 +14,7 @@ with form fields, later for documents without.
 | 3 | M2 | forms: fields and widgets | done 2026-09-30 |
 | 4 | M3 | paths and images | done 2026-10-01 |
 | 5 | M4a | text, first level | done 2026-10-02 |
-| 6 | M5a | inspection, repair and decryption | planned |
+| 6 | M5a | inspection, repair and decryption | done 2026-10-05 |
 | 7 | M6 | the first consumer switches for documents with form fields; version 1.0 | planned |
 | 8 | M4b | text probe, then text in full | planned |
 | 9 | M5b | what was left out on the way: edit session, annotations, rotated text | planned |
@@ -165,6 +165,8 @@ Gate
 - a page `/Contents` entry that is an indirect array is handled
 - the verification inside each function detects a deliberately introduced fault
 - the active content report names the object in which each finding was made
+
+Recorded results are in [docs/capabilities.md](docs/capabilities.md).
 
 ## M6 Integration
 
