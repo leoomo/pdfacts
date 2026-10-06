@@ -55,8 +55,9 @@ class Bitmap:
     data: bytes = field(repr=False)
     # Pixels per user space unit, as asked for.
     scale: float
-    # The rendered region in display space, cut to the page.
-    region: Rect
+    # The rendered region in display space, cut to the page; render() takes
+    # its region in user space.
+    display_region: Rect
     display_to_pixel: Matrix
 
     def __post_init__(self) -> None:
@@ -82,8 +83,10 @@ class Bitmap:
                 f"data must be {self.row_length * self.height} bytes, not {len(self.data)}"
             )
         object.__setattr__(self, "scale", checked_scale(self.scale))
-        if not isinstance(self.region, Rect):
-            raise TypeError(f"region must be a Rect, not {type(self.region).__name__}")
+        if not isinstance(self.display_region, Rect):
+            raise TypeError(
+                f"display_region must be a Rect, not {type(self.display_region).__name__}"
+            )
         if not isinstance(self.display_to_pixel, Matrix):
             raise TypeError(
                 f"display_to_pixel must be a Matrix, not {type(self.display_to_pixel).__name__}"

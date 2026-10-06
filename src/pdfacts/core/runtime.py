@@ -15,15 +15,12 @@ from contextlib import contextmanager
 from enum import StrEnum
 
 from pdfacts.backends import pdfium
-from pdfacts.core.capabilities import Capability, require
 from pdfacts.core.errors import ConfigurationError
 
 
 class FontPolicy(StrEnum):
     # Only fonts embedded in the file and the engine's built-in substitutes.
     EMBEDDED_ONLY = "embedded-only"
-    # Fonts installed on the host as well. Not implemented.
-    HOST = "host"
 
 
 # Every call into an engine, PDFium or QPDF, happens while this is held. The
@@ -84,8 +81,6 @@ def configure(*, font_policy: FontPolicy | str = FontPolicy.EMBEDDED_ONLY) -> No
     """
     global _requested
     policy = FontPolicy(font_policy)
-    if policy is FontPolicy.HOST:
-        require(Capability.FONT_POLICY_HOST)
     with engine_lock:
         if _active is not None:
             if policy is not _active:
