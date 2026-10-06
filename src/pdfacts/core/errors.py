@@ -1,6 +1,9 @@
 """The errors that pdfacts raises.
 
-Every error is a PdfactsError. The attributes of an error are given as
+An error about the input, a limit, a password, the state of a document, or an
+engine that fails while it reads is a PdfactsError; a wrong argument raises
+TypeError or ValueError, and a page index outside the document IndexError
+(docs/conventions.md, "Errors"). The attributes of an error are given as
 keywords and are available under the same names; the message is built from
 them. MemoryError is never caught and never wrapped.
 """
@@ -30,7 +33,8 @@ def _rebuild(cls: type[PdfactsError], args: tuple[Any, ...]) -> PdfactsError:
 
 
 class PdfactsError(Exception):
-    """Base class of every error pdfacts raises."""
+    """Base class of the errors pdfacts raises about a file, a limit, a
+    password, a document's state or an engine; not of an argument's."""
 
     def __init__(self, message: str, **fields: Any) -> None:
         super().__init__(message)
@@ -151,7 +155,8 @@ class ClosedError(PdfactsError):
 
 
 class ConfigurationError(PdfactsError):
-    """The runtime was configured too late, or twice with different values."""
+    """The runtime was configured, after its start, with another font policy
+    than the active one."""
 
     def __init__(self, message: str) -> None:
         super().__init__(message)

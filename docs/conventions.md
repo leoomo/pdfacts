@@ -753,11 +753,11 @@ What each entry raises (measured, 2026-10-06):
 | `pages[i]`, iterating `Document.pages` | `TypeError` for an index that is not an `int`, a `bool` or a slice too; `IndexError` outside 0 to `page_count - 1`, a negative index too; `ClosedError`; `DamagedFileError` ("Damaged files"); `LimitExceededError` for `deadline_seconds` and `max_forms_per_page`; `LimitUncheckedError` for `max_forms_per_page`; `EngineError`. A page already given raises only `ClosedError`. Iteration stops at the first page that raises |
 | `widgets()`, `paths()`, `images()`, `glyphs()`, `words()`, `lines()` | `TypeError` where the first argument is no `Document`; the errors of `pages[i]`; `LimitExceededError` for `deadline_seconds`, also for a page already given, and for `max_items_per_page` |
 | `fields()`, `inspect()` | `TypeError` where the argument is no `Document`; `ClosedError`; `LimitExceededError` for `deadline_seconds`; `EngineError` |
-| `Page.render()` | `ClosedError`; `TypeError` for a scale that is not a number or a region that is not a `Rect`; `ValueError` for a scale that is not finite and above 0, a colour that is none, a region without area on the page, a page of more pixels than PDFium addresses at this scale, or less than a pixel left; `LimitExceededError` for `max_render_pixels`; `EngineError` |
+| `Page.render()` | `ClosedError`; `TypeError` for a scale that is not a number or a region that is not a `Rect`; `ValueError` for a scale that is not finite and above 0, a colour that is no `Colour`, a region without area on the page, a page of more pixels than PDFium addresses at this scale, or less than a pixel left; `LimitExceededError` for `max_render_pixels`; `EngineError` |
 | `Document.page_count`, `object_count`, `pages`, entering `with`; `Page.index`, `ref`, `geometry` | `ClosedError` |
 | `Document.warnings` | `ClosedError`, `EngineError` |
 | `Document.close()`, leaving `with` | `EngineError` where an engine fails to close; the document is closed all the same, and a further `close()` does nothing |
-| `configure()` | `ValueError` for a name that is no `FontPolicy` |
+| `configure()` | `ValueError` for a name that is no `FontPolicy`; `ConfigurationError`, which does not occur in this version |
 | `require()` | `ValueError` for a name that is no `Capability`; `UnsupportedError`, which does not occur in this version |
 | `capabilities()`, `engine_info()` | none |
 | `Limits`, `Rect` and the other facts, built by a caller | `TypeError` or `ValueError` for a value of the wrong type or range |
