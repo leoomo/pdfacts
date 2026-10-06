@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import re
 import tomllib
+from importlib import metadata
 from pathlib import Path
 
 import pikepdf
@@ -31,6 +32,11 @@ def test_engines_match_the_pins():
     assert info.pypdfium2 == pins["pypdfium2"]
     assert info.pikepdf == pins["pikepdf"]
     assert info.pdfacts == pdfacts.__version__
+
+
+def test_the_version_is_the_project_s():
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    assert pdfacts.__version__ == project["version"] == metadata.version("pdfacts")
 
 
 def test_engine_identity_is_complete():

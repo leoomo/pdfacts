@@ -1,10 +1,12 @@
 """pdfacts: structured, verifiable facts from PDF files."""
 
+from importlib import metadata as _metadata
+
 from pdfacts.annotations.model import Annotation
 from pdfacts.core.bitmap import Bitmap, Colour
 from pdfacts.core.capabilities import Capability, capabilities, require
 from pdfacts.core.decryption import Decryption, decrypt
-from pdfacts.core.document import Document, Page, open
+from pdfacts.core.document import Document, Page, Pages, open
 from pdfacts.core.engines import EngineInfo, engine_info
 from pdfacts.core.errors import (
     ClosedError,
@@ -78,7 +80,8 @@ from pdfacts.text.glyphs import Glyph
 from pdfacts.text.layout import Line, Word
 from pdfacts.text.reader import glyphs, lines, words
 
-__version__ = "0.0.1"
+# The version of the installed distribution, which pyproject.toml gives.
+__version__ = _metadata.version("pdfacts")
 
 __all__ = [
     "Action",
@@ -141,6 +144,7 @@ __all__ = [
     "PageContents",
     "PageGeometry",
     "PageRef",
+    "Pages",
     "PasswordRequiredError",
     "Path",
     "PdfactsError",

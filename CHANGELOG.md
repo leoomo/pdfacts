@@ -4,9 +4,18 @@ Every change to the public interface or to a convention is recorded here.
 Versions are 0.x until the first consumer has switched; until then a change
 may break callers.
 
-## Unreleased
+## 0.1.0 (2026-10-06)
+
+The release the first consumer switches on.
 
 ### Added
+
+- `Pages`, the type of `Document.pages`, is exported.
+- `pdfacts.__version__`, and so `engine_info().pdfacts`, is the version of
+  the installed distribution, 0.1.0 for this release; it was 0.0.1 at every
+  commit before.
+- README, "Interface": the interface is `pdfacts.__all__`; facts are carried
+  by `pickle`; the text of details, warnings and messages is not interface.
 
 - Error types: `PdfactsError` and its subclasses, listed under "Errors" in
   `docs/conventions.md`.
@@ -331,6 +340,13 @@ may break callers.
   line break; this holds for the pattern check and the count of
   `max_forms_per_page` too (decisions of the maintainer, 2026-10-05 and
   2026-10-06).
+- "Rendering" states what is drawn: the content and the annotations' normal
+  appearances as PDFium draws them by default; not an annotation flagged
+  hidden or not to be viewed, a popup, or a widget, so form fields are not
+  drawn. This was so before and was not written down.
+- "Damaged files" states that iterating `Document.pages` raises at a damaged
+  page and stops there, the pages after it read by their index (decision of
+  the maintainer, 2026-10-06). This was so before and was not written down.
 
 ### Corrected
 
