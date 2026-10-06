@@ -4,6 +4,16 @@ Every change to the public interface or to a convention is recorded here.
 Versions are 0.x until the first consumer has switched; until then a change
 may break callers.
 
+## Unreleased
+
+### Changed
+
+- The order of milestones: M4b, the text probe and text in full, comes
+  before the switch in M6 and before version 1.0, no longer after them. The
+  switch waits in the first consumer's project, and what the probe decides
+  about text can still change the interface without a major version.
+  Decision of the maintainer, 2026-10-06.
+
 ## 0.2.0 (2026-10-06)
 
 The interface as the review before 1.0 left it (A1 to A3): rendering
