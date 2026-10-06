@@ -234,16 +234,15 @@ recommends (Annex C), they lie about 0.001 apart; anywhere, at most 2^-23 of
 the magnitude apart, and coordinates can lie far beyond the page.
 
 `paths(document, page_index)` and `images(document, page_index)` give what
-PDFium interprets for the page, in drawing order: its content, each form
-where it is drawn, then the normal appearance of each annotation in `/Annots`
-order. They give it whether or not a rendering shows it: hidden and NoView
-annotations, pop-ups and widgets too. Paths and images share one
-drawing index. A fact from an appearance carries the annotation's reference
-and its `/F`, 0 where it has none; a fact from the content carries neither.
-The values come from PDFium, which gives each object's points in its own
-space and its matrix composed through the forms that hold it; pdfacts
-composes the matrices in 64-bit floats. The deadline is checked when either
-function begins.
+PDFium interprets for the page, in drawing order: its content, each form where
+it is drawn, then the normal appearance of each annotation in `/Annots` order.
+They give it whether or not a rendering shows it: hidden and NoView
+annotations, pop-ups and widgets too. Paths and images share one drawing
+index. A fact from an appearance carries the annotation's reference and its
+`/F`, 0 where it has none; a fact from the content carries neither. The values
+come from PDFium, which gives each object's points in its own space and its
+matrix composed through the forms that hold it; pdfacts composes the matrices
+in 64-bit floats. The deadline is checked when either function begins.
 
 An appearance's graphics are used only where the engines agree on it. QPDF
 selects the normal appearance PDFium would draw (`/AS`, else `/V`, else the
@@ -1103,7 +1102,7 @@ annotations, as PDFium draws them by default: an annotation's appearance is
 drawn, also one flagged invisible (`/F` bit 1), and for some annotations
 without an appearance, such as a square, PDFium draws one of its own; not
 drawn are an annotation flagged hidden (`/F` bit 2) or not to be viewed (bit
-6), a popup, and every widget, so form fields are not drawn (measured,
+6), a pop-up, and every widget, so form fields are not drawn (measured,
 2026-10-06).
 
 The region is given in user space, like every fact, and is cut to the
