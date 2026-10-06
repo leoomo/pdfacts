@@ -291,7 +291,8 @@ class PdfiumDocument:
         stops, and the drawing that stopped is the last one given. PDFium
         parses an appearance when its objects are first asked for. An
         appearance PDFium generated for an annotation that has none is drawn
-        only by the document that renders, which is not this one (issue A1).
+        only by the document that renders, which is not the one read here
+        (issue A1).
         """
         _check_cap(cap)
         return self._read_page(index, lambda page: _appearance_drawings(page, cap))

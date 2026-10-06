@@ -11,6 +11,10 @@ may break callers.
 - "Rendering" states that rendering changes no fact: pages are drawn through
   a document of their own, opened from the same bytes and password when a
   page is first rendered.
+- "Paths and images" no longer says that an annotation PDFium generated an
+  appearance for is unknown once the page was rendered: such an appearance
+  is drawn only by the document that renders, from which no fact is read
+  (consent of the maintainer, 2026-10-06).
 
 ### Corrected
 
