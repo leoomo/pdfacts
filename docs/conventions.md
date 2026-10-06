@@ -234,16 +234,15 @@ recommends (Annex C), they lie about 0.001 apart; anywhere, at most 2^-23 of
 the magnitude apart, and coordinates can lie far beyond the page.
 
 `paths(document, page_index)` and `images(document, page_index)` give what
-PDFium interprets for the page, in drawing order: its content, each form
-where it is drawn, then the normal appearance of each annotation in `/Annots`
-order. They give it whether or not a rendering shows it: hidden and NoView
-annotations, closed pop-ups and widgets too. Paths and images share one
-drawing index. A fact from an appearance carries the annotation's reference
-and its `/F`, 0 where it has none; a fact from the content carries neither.
-The values come from PDFium, which gives each object's points in its own
-space and its matrix composed through the forms that hold it; pdfacts
-composes the matrices in 64-bit floats. The deadline is checked when either
-function begins.
+PDFium interprets for the page, in drawing order: its content, each form where
+it is drawn, then the normal appearance of each annotation in `/Annots` order.
+They give it whether or not a rendering shows it: hidden and NoView
+annotations, pop-ups and widgets too. Paths and images share one drawing
+index. A fact from an appearance carries the annotation's reference and its
+`/F`, 0 where it has none; a fact from the content carries neither. The values
+come from PDFium, which gives each object's points in its own space and its
+matrix composed through the forms that hold it; pdfacts composes the matrices
+in 64-bit floats. The deadline is checked when either function begins.
 
 An appearance's graphics are used only where the engines agree on it. QPDF
 selects the normal appearance PDFium would draw (`/AS`, else `/V`, else the
@@ -829,14 +828,16 @@ between another `startxref` and its offset, the engines read different
 ones. There `open()` warns.
 
 A page counts as damaged when it is read, and reading it raises
-`DamagedFileError` while the other pages are read as usual, when PDFium's
-visible box for it is not finite (the file writes a real number beyond what
-PDFium holds) or has no area, or when the boxes the file writes leave no
-area: a flat crop box, or a media box that is flat or that, intersected with
-the crop box, has no area. PDFium puts in US letter for a flat media box,
-ignores a flat crop box and answers `(0, 0, 0, 0)` for a crop box outside the
-media box; none of these is a box the file writes. The file's boxes are read
-through QPDF, so the flat cases are seen only where QPDF can read the page.
+`DamagedFileError` while the other pages are read as usual (iterating
+`Document.pages` raises there too and stops; the pages after it are read by
+their index), when PDFium's visible box for it is not finite (the file writes
+a real number beyond what PDFium holds) or has no area, or when the boxes the
+file writes leave no area: a flat crop box, or a media box that is flat or
+that, intersected with the crop box, has no area. PDFium puts in US letter for
+a flat media box, ignores a flat crop box and answers `(0, 0, 0, 0)` for a
+crop box outside the media box; none of these is a box the file writes. The
+file's boxes are read through QPDF, so the flat cases are seen only where QPDF
+can read the page.
 
 A known gap (measured): PDFium can read a box as flat where the file writes
 one with an area. It reads an integer outside -2^31 to 2^32 - 1 as 0, and one
@@ -1095,6 +1096,14 @@ checked before any entry is read; the deadline is also checked when
 A page or a region of it is rendered at a given scale to grey or RGB. The
 result is raw bytes with width, height and row length. No type of an imaging
 library appears in the public interface.
+
+What is drawn is the page's content and the normal appearances of its
+annotations, as PDFium draws them by default: an annotation's appearance is
+drawn, also one flagged invisible (`/F` bit 1), and for some annotations
+without an appearance, such as a square, PDFium draws one of its own; not
+drawn are an annotation flagged hidden (`/F` bit 2) or not to be viewed (bit
+6), a pop-up, and every widget, so form fields are not drawn (measured,
+2026-10-06).
 
 The region is given in user space, like every fact, and is cut to the
 displayed page; the scale is pixels per user space unit. Pixel coordinates
