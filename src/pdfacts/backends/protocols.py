@@ -294,6 +294,29 @@ class AnnotationView:
     values: Mapping[bytes, tuple[int, str]]
 
 
+# The components of a colour as the content writes them for `g` or `rg` (and
+# `G` or `RG`): one for a grey, three for red, green and blue.
+Components = tuple[float, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class Painted:
+    """A path as QPDF reads it where a pattern colour is set
+    (QpdfDocument.page_painted, C1)."""
+
+    # The components of the colour QPDF reads for the fill and for the stroke,
+    # (0.0,) for the black where the content sets none; None for a side whose
+    # colour QPDF does not read, or that the path does not paint.
+    fill: Components | None
+    stroke: Components | None
+    # As PDFium gives them for the path's painting operator: FPDF_FILLMODE_*
+    # (0 none, 1 even-odd, 2 nonzero), and whether it strokes.
+    fill_mode: int
+    stroked: bool
+    # The path's first point in its own space, as the content writes it.
+    first: tuple[float, float]
+
+
 @dataclass(frozen=True, slots=True)
 class SelectedAppearance:
     """The normal appearance QPDF selects for an annotation, as the file writes it."""
@@ -328,6 +351,12 @@ class AppearanceReader(Protocol):
     def appearances(self, index: int) -> tuple[AnnotationAppearance, ...]: ...
 
     def page_uses_pattern(self, index: int) -> bool | None: ...
+
+    def page_painted(self, index: int, cap: int) -> tuple[Painted, ...] | None: ...
+
+    def appearance_painted(
+        self, index: int, position: int, cap: int
+    ) -> tuple[Painted, ...] | None: ...
 
 
 # PDFium's matrix of an object, composed with those of the forms that hold it:
