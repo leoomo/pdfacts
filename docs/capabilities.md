@@ -153,7 +153,10 @@ image; PDFium gives objects for 2972 annotations, 12 of them text alone. The
 unknown values are those that "Paths and images" in `docs/conventions.md`
 names, as their details say: the 649 colours, "a pattern colour or colour space
 is set here, and PDFium reports a colour of its own", and the 103 line widths,
-"the transform scales the line width unevenly".
+"the transform scales the line width unevenly". Since the colours are judged
+path by path (2026-10-06), 5 fill colours of the corpus are unknown, "a
+pattern colour is set here, and QPDF does not confirm the colour PDFium
+reports for the fill", and no stroke colour (measured).
 
 | Part of the gate in `ROADMAP.md` | Shown by |
 | --- | --- |

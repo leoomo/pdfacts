@@ -2,19 +2,24 @@
 
 Every value comes from PDFium, which interprets the content. QPDF decides
 which annotation appearance PDFium would draw, gives what PDFium does not
-(its /Rect, /BBox and /Matrix, and whether a pattern colour is set), and the
-two are checked against each other before an appearance's objects are used.
+(its /Rect, /BBox and /Matrix; whether a pattern colour is set; and, where
+one is, the colour QPDF reads for each side of each path), and the two are
+checked against each other before an appearance's objects or a colour are
+used.
 """
 
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 
 from pdfacts.backends.protocols import (
     AnnotationAppearance,
     AppearanceDrawing,
+    Components,
     DrawnImage,
     DrawnPath,
+    Painted,
     SelectedAppearance,
     Transform,
     Written,
@@ -120,17 +125,37 @@ def _read(
             raise LimitExceededError(limit="max_items_per_page", allowed=cap, found=cap + 1)
         appearances = access.appearances(page_index)
         pattern = access.page_uses_pattern(page_index)
+        painted = (
+            access.page_painted(page_index, _paths_in(content.objects))
+            if pattern and not content.too_deep
+            else None
+        )
+        # The colours QPDF reads for the appearances that set a pattern colour.
+        painted_appearances = {
+            entry.annotation.index: access.appearance_painted(
+                page_index, entry.annotation.index, _paths_in(drawing.drawing.objects)
+            )
+            for entry in appearances
+            if entry.appearance is not None
+            and entry.appearance.uses_pattern
+            and entry.annotation.index < len(drawings)
+            and (drawing := drawings[entry.annotation.index]) is not None
+            and not drawing.drawing.too_deep
+        }
     if content.too_deep:
         return Unknown(_UNREADABLE, _TOO_DEEP)
     out = _Out(page_index)
-    colour = _colour_known(pattern)
-    for obj in content.objects:
+    for obj, colour in zip(
+        content.objects, _colours(pattern, painted, content.objects), strict=True
+    ):
         out.add(obj, obj.matrix, None, None, colour)
     for entry in appearances:
         drawing = (
             drawings[entry.annotation.index] if entry.annotation.index < len(drawings) else None
         )
-        page_unknown = _annotation(entry, drawing, out)
+        page_unknown = _annotation(
+            entry, drawing, out, painted_appearances.get(entry.annotation.index)
+        )
         if page_unknown is not None:
             return page_unknown
     return tuple(out.paths), tuple(out.images)
@@ -154,7 +179,7 @@ class _Out:
         matrix: Transform | None,
         annotation: AnnotationRef | None,
         flags: int | None | Unknown,
-        colour: Unknown | None,
+        colour: _Colours,
     ) -> None:
         ref = self.ref(annotation)
         if isinstance(obj, DrawnPath):
@@ -197,7 +222,10 @@ class _Out:
 
 
 def _annotation(
-    entry: AnnotationAppearance, drawing: AppearanceDrawing | None, out: _Out
+    entry: AnnotationAppearance,
+    drawing: AppearanceDrawing | None,
+    out: _Out,
+    painted: tuple[Painted, ...] | None,
 ) -> Unknown | None:
     """The graphics of one annotation's appearance, checked and placed on the page.
 
@@ -250,8 +278,9 @@ def _annotation(
     if isinstance(placement, Unknown) or drawing is None:
         out.unknown(annotation, placement if isinstance(placement, Unknown) else _GONE)
         return None
-    colour = _colour_known(selected.uses_pattern)
-    for obj in drawing.drawing.objects:
+    objects = drawing.drawing.objects
+    colours = _colours(selected.uses_pattern, painted, objects)
+    for obj, colour in zip(objects, colours, strict=True):
         matrix = None if obj.matrix is None else _then(obj.matrix, placement)
         out.add(obj, matrix, annotation, flags, colour)
     return None
@@ -331,20 +360,118 @@ def _numbers(written: Written | None, count: int) -> list[float] | None:
     return [float(item.data) for item in written.data]
 
 
-def _colour_known(uses_pattern: bool | None) -> Unknown | None:
-    """Why the colours are unknown where a pattern colour is set; None where they are known."""
+# Why a side of a path is unknown where a pattern colour is set in its
+# content and QPDF does not confirm the colour PDFium reports (_confirmed).
+_UNREAD_FILL = Unknown(
+    _UNREADABLE,
+    "a pattern colour is set here, and QPDF does not confirm the colour PDFium reports"
+    " for the fill",
+)
+_UNREAD_STROKE = Unknown(
+    _UNREADABLE,
+    "a pattern colour is set here, and QPDF does not confirm the colour PDFium reports"
+    " for the stroke",
+)
+# Why every colour of a content is unknown where QPDF cannot tell whether a
+# pattern colour is set.
+_UNSCANNED = Unknown(
+    _UNREADABLE,
+    "QPDF cannot read the content, or warns that it misread an object of the file,"
+    " or reads a name without bytes in it, to see whether a pattern colour is set",
+)
+# Why every colour of a content is unknown where a pattern colour is set and
+# QPDF cannot read its colours path by path.
+_UNPAIRED = Unknown(
+    _UNREADABLE,
+    "a pattern colour or colour space is set here, PDFium reports a colour of its own,"
+    " and QPDF cannot read the content's colours path by path",
+)
+# Why a fill and a stroke are known, or unknown.
+_Colours = tuple[Unknown | None, Unknown | None]
+
+
+def _paths_in(objects: Sequence[DrawnPath | DrawnImage]) -> int:
+    return sum(isinstance(obj, DrawnPath) for obj in objects)
+
+
+def _colours(
+    uses_pattern: bool | None,
+    painted: tuple[Painted, ...] | None,
+    objects: Sequence[DrawnPath | DrawnImage],
+) -> list[_Colours]:
+    """Why the fill and the stroke of each of `objects` are unknown, None
+    where they are known.
+
+    Where a pattern colour is set in the content, the paths QPDF reads are
+    taken one by one with PDFium's, in drawing order, and a side's colour is
+    known only where QPDF reads the colour PDFium reports for it; where QPDF
+    reads other paths than PDFium makes, painted otherwise or from another
+    first point, or cannot read them, the colours of all of them are
+    unknown, as where QPDF cannot read the content.
+    """
     if uses_pattern is None:
-        return Unknown(
-            _UNREADABLE,
-            "QPDF cannot read the content, or warns that it misread an object of the file,"
-            " or reads a name without bytes in it, to see whether a pattern colour is set",
-        )
-    if uses_pattern:
-        return Unknown(
-            _UNREADABLE,
-            "a pattern colour or colour space is set here, and PDFium reports a colour of its own",
-        )
-    return None
+        return [(_UNSCANNED, _UNSCANNED)] * len(objects)
+    if not uses_pattern:
+        return [(None, None)] * len(objects)
+    drawn = [obj for obj in objects if isinstance(obj, DrawnPath)]
+    if painted is None or len(painted) != len(drawn) or not all(map(_paired, painted, drawn)):
+        return [(_UNPAIRED, _UNPAIRED)] * len(objects)
+    sides = iter(painted)
+    out: list[_Colours] = []
+    for obj in objects:
+        if isinstance(obj, DrawnPath):
+            path = next(sides)
+            out.append(
+                (
+                    None if _confirmed(path.fill, obj.fill_colour) else _UNREAD_FILL,
+                    None if _confirmed(path.stroke, obj.stroke_colour) else _UNREAD_STROKE,
+                )
+            )
+        else:
+            out.append((None, None))
+    return out
+
+
+def _paired(read: Painted, path: DrawnPath) -> bool:
+    """Whether QPDF's path is PDFium's: painted alike, from the same first
+    point, which PDFium holds in single precision (measured, C1)."""
+    if (path.fill_mode, path.stroke) != (read.fill_mode, read.stroked) or not path.segments:
+        return False
+    _, x, y, _ = path.segments[0]
+    return _near(read.first[0], x) and _near(read.first[1], y)
+
+
+def _near(written: float, held: float) -> bool:
+    return math.isclose(written, held, rel_tol=1e-6, abs_tol=1e-4)
+
+
+# The colours PDFium reports for a coloured tiling pattern, a grey of 191,
+# and for a shading pattern or numbers in a Pattern colour space, white
+# (measured, C1). Where a pattern colour is set, neither is known anywhere in
+# the content: a pattern hidden from QPDF, by what the engines read otherwise
+# without a warning, still has its colour unknown (the maintainer's decision
+# of 2026-10-06).
+_MADE_UP = frozenset(((191, 191, 191), (255, 255, 255)))
+
+
+def _confirmed(components: Components | None, reported: tuple[int, int, int, int] | None) -> bool:
+    """Whether QPDF reads the colour PDFium reports, and it is none PDFium
+    makes up for a pattern; or PDFium reports none, which _display gives as
+    unknown."""
+    if reported is None:
+        return True
+    if components is None:
+        return False
+    colour = _rgb(components)
+    return colour == reported[:3] and colour not in _MADE_UP
+
+
+def _rgb(components: Components) -> tuple[int, ...]:
+    """The colour PDFium reports for the components g or rg set: each within
+    0 and 1, times 255, rounded half up, a grey in all three channels
+    (measured, C1)."""
+    channels = tuple(math.floor(min(1.0, max(0.0, c)) * 255 + 0.5) for c in components)
+    return channels * 3 if len(channels) == 1 else channels
 
 
 def _then(first: Transform, second: Transform) -> Transform:
@@ -426,7 +553,7 @@ def _path(
     matrix: Transform | None,
     ref: GraphicRef,
     flags: int | None | Unknown,
-    colour: Unknown | None,
+    colour: _Colours,
 ) -> Path:
     fill: FillRule | None | Unknown
     stroke: bool | Unknown
@@ -446,13 +573,13 @@ def _path(
         dash = _dash(obj, scale)
         cap = _CAP.get(obj.cap, Unknown(_UNREADABLE, "PDFium gives no line cap"))
         join = _JOIN.get(obj.join, Unknown(_UNREADABLE, "PDFium gives no line join"))
-        stroke_colour = _display(obj.stroke_colour, colour)
+        stroke_colour = _display(obj.stroke_colour, colour[1])
     if fill is None:
         fill_colour: DisplayColour | None | Unknown = None
     elif isinstance(fill, Unknown):
         fill_colour = fill
     else:
-        fill_colour = _display(obj.fill_colour, colour)
+        fill_colour = _display(obj.fill_colour, colour[0])
     return Path(
         ref=ref,
         subpaths=_subpaths(obj, matrix),

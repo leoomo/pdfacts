@@ -273,13 +273,86 @@ annotation's facts unknown, `invalid-in-file`.
 
 | Value | Where it is unknown |
 | --- | --- |
-| fill and stroke colour | where the content, or a form it draws, selects a pattern colour space or sets a pattern colour (PDFium then reports a colour of its own), where QPDF cannot read that content or warns that it misread an object of the file, where the pattern check reads a name without bytes from the content ("Text strings and names"; measured, 2026-10-03), and where PDFium gives no colour. QPDF's warnings gather as it reads the file, so a colour known at first can be unknown once another page was read |
+| fill and stroke colour | where the content, or a form it draws, selects a pattern colour space or sets a pattern colour (PDFium then reports a colour of its own): a side of a path whose colour QPDF does not read as PDFium reports it (the rules follow the table), and every colour of the content where QPDF cannot take its paths one by one with PDFium's; where QPDF cannot read that content or warns that it misread an object of the file, and where the pattern check reads a name without bytes from the content ("Text strings and names"; measured, 2026-10-03), every colour of the content; and where PDFium gives no colour. QPDF's warnings gather as it reads the file, so a colour known at first can be unknown once another page was read |
 | line width, dash | where the transform does not scale every direction alike: its two scales differ by more than a thousandth, or the cosine of the angle between its two directions exceeds about a thousandth; elsewhere they are given in user space, scaled by the geometric mean of the two scales. A negative width or dash length and a dash of zeros are `invalid-in-file`; a transform that makes every dash length 0 leaves the dash unknown |
 | points | where a point is not finite in user space, `invalid-in-file` |
 | cap, join, draw mode, points, matrix | where PDFium gives none |
 | an image's values | where PDFium gives no metadata, all of them but its corners; its colour space and bits per pixel where PDFium cannot decode it (it reports 0 bits per pixel); a pattern colour space is `invalid-in-file`; a pixel size outside 1 to 2^31 - 1 is `invalid-in-file` |
 | everything of the page | where a form in the page's content lies deeper than PDFium reads forms, 40 levels |
 | everything of an annotation | where a form in its appearance lies deeper than 40 levels |
+
+Where a pattern colour is set in a content, the colour of a path's fill, or of
+its stroke, is known only where QPDF reads that colour as PDFium reports it.
+QPDF reads the colour set last for that side by `g` or `rg`, or `G` or `RG`
+for the stroke, with one or three numbers, each within 0 and 1, times 255 and
+rounded half up; and black where none was set. Any other operator that sets a
+colour or a colour space for the side — `k`, `cs`, `sc`, `scn` and their
+stroke counterparts — leaves its colour unread. `q` and `Q` save and restore
+what QPDF reads, a `Q` without its `q` is ignored; a form starts from the
+colours where it is drawn, and what it sets ends with it; an appearance starts
+from black. A form is read where PDFium draws it: its `/Subtype` the name
+`/Form` or the string `(Form)`. The colour is known where PDFium reports the
+one QPDF reads, red, green and blue, and that colour is neither of those
+PDFium makes up for a pattern: the grey of 191 of a coloured tiling pattern,
+and the white of a shading pattern or of numbers in a Pattern colour space,
+which are not read anywhere in a content that sets a pattern colour, whether
+QPDF sees that pattern or not; else it is unknown. A content selects a Pattern
+colour space also where `cs` or `CS` selects `/DeviceGray`, `/DeviceRGB` or
+`/DeviceCMYK` and its resources give `/DefaultGray`, `/DefaultRGB` or
+`/DefaultCMYK` as one, which PDFium then uses, and where it selects an array
+whose family is the string `(Pattern)` and a base follows; `g`, `rg` and `k`
+set their colour as it is (measured).
+
+The paths are those PDFium makes: one for each painting operator (`S`, `s`,
+`f`, `F`, `f*`, `B`, `B*`, `b`, `b*`) whose path holds a rectangle, or a line
+or a curve drawn from a current point; none for `n`, or for a line without a
+current point (measured). The parts of a page's `/Contents` are read as PDFium
+joins them, with a space between them, so that a comment at the end of one
+part runs on into the next. Where a pattern colour is set, QPDF's paths of the
+content, forms read where they are drawn, are taken with PDFium's one for one
+in drawing order, and each must be painted alike, its fill mode and its stroke
+as PDFium gives them, and start at the same point, which PDFium holds in
+single precision: to a millionth of its value, or a ten-thousandth near 0.
+Every colour of the content is unknown where QPDF reads more or fewer paths
+than PDFium makes, stopping once it reads more, or a path painted otherwise or
+from another first point; where a painting operator ends a path that is a move
+alone, with or without `h`, of which PDFium makes a path or none by the caps
+and the operator; where QPDF warns as it reads the content or a form it draws;
+where it reads an operator ISO 32000-1 does not name (a token such as `1..5`,
+which PDFium may read as a number), or one of those it reads for the paths and
+the colours with operands PDFium does not take so (a move with a name, `n`
+with an operand); where the content holds a byte 0x0B, which QPDF takes for
+white space and PDFium does not; where it holds an inline image, or `BI`, `ID`
+or `EI` alone (QPDF ends an image at the first `EI`, PDFium after the data its
+dictionary declares); where `Do`, `cs`, `CS`, `scn` or `SCN` takes a name of
+more than 84 bytes, which may be written with more than the 254 bytes after
+its slash that PDFium reads; where `scn` or `SCN` sets a pattern that is not a
+coloured tiling pattern or a shading pattern, or one with components; and
+where a Pattern colour space with a base colour space is selected — PDFium
+reports such a pattern's colour through the base colour space (measured).
+Where the page's `/Contents`, one of its parts, or a form the pattern check
+meets before it finds a pattern colour is an object stream's entry that QPDF
+reads as a dictionary and PDFium as a stream ("Limits"), QPDF cannot tell
+whether a pattern colour is set, and every colour of the content is unknown.
+
+Reason: PDFium reports a colour of its own for a pattern colour, that pdfacts
+cannot tell from a colour the file sets, and gives no colour space; QPDF reads
+the operators that set a colour, and PDFium's report confirms each colour QPDF
+reads (measured, 2026-10-06). Known gap: where QPDF and PDFium read the tokens
+or the objects of a file otherwise without either one warning — PDFium takes
+bytes 0x80 and 0xFF for white space, QPDF does not; PDFium takes `21 1 R` for
+object 21 written as `21 0 obj`, QPDF for null; an object listed twice in one
+cross-reference section ("Object identity") — an operator that sets a pattern
+colour or a colour space, or a `Q` that restores one, can be hidden from QPDF.
+Where PDFium then reports the grey of 191 or white for a path, its colour is
+still unknown; any other colour PDFium reports there can be given as a known
+one, as it reports for an uncoloured pattern or a Pattern colour space with a
+base, or the colour it keeps where a Pattern colour space is selected without
+a pattern, which paints nothing. The pattern check that decides whether a
+pattern colour is set has the same gap where QPDF sees no pattern colour at
+all: a content whose operators are set apart by 0xFF has its pattern colour
+unseen by QPDF, and its colours given as PDFium reports them (measured,
+2026-10-06).
 
 The page's paths and images are unknown as a whole, with that reason, where
 QPDF's values are all unknown, where the engines see the page differently

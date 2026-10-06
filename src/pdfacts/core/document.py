@@ -36,6 +36,7 @@ from pdfacts.backends.protocols import (
     PageAnnotations,
     PageObject,
     PageText,
+    Painted,
     RawBitmap,
 )
 from pdfacts.backends.qpdf import QpdfDocument, revision_part_follows
@@ -300,6 +301,14 @@ class FeatureAccess:
     def page_uses_pattern(self, index: int) -> bool | None:
         """Whether QPDF finds a pattern colour set in the page's content."""
         return _qpdf_call(lambda: self._qpdf_ready().page_uses_pattern(index))
+
+    def page_painted(self, index: int, cap: int) -> tuple[Painted, ...] | None:
+        """The colours QPDF reads for each path of the page's content."""
+        return _qpdf_call(lambda: self._qpdf_ready().page_painted(index, cap))
+
+    def appearance_painted(self, index: int, position: int, cap: int) -> tuple[Painted, ...] | None:
+        """The colours QPDF reads for each path of an annotation's appearance."""
+        return _qpdf_call(lambda: self._qpdf_ready().appearance_painted(index, position, cap))
 
     def structure(self) -> FileStructure:
         """QPDF's objects by kind, encryption and each page's /Contents."""
