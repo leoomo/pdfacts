@@ -15,12 +15,14 @@ with form fields, later for documents without.
 | 4 | M3 | paths and images | done 2026-10-01 |
 | 5 | M4a | text, first level | done 2026-10-02 |
 | 6 | M5a | inspection, repair and decryption | done 2026-10-05 |
-| 7 | M6 | the first consumer switches for documents with form fields; version 1.0 | planned |
-| 8 | M4b | text probe, then text in full | planned |
+| 7 | M4b | text probe, then text in full | in progress |
+| 8 | M6 | the first consumer switches for documents with form fields; version 1.0 | releases 0.1.0 and 0.2.0 made for it; the switch waits in the first consumer's project |
 | 9 | M5b | what was left out on the way: edit session, annotations, rotated text | planned |
 | - | M7 | checks before going public | no date |
 
-Until M6 nothing is built that the switch does not need.
+Until M6 nothing is built that the switch does not need, except M4b: on
+2026-10-06, with the switch waiting in the first consumer's project, the
+maintainer moved it ahead of the switch and of version 1.0.
 
 ## Supported platforms
 
@@ -175,12 +177,16 @@ acceptance criteria live in that project. After each earlier milestone the
 consumer's comparison is run again outside this repository, so that the
 interface meets a real caller early.
 
-Version 1.0 is released with this milestone.
+Version 1.0 is released with this milestone. Releases 0.1.0 and 0.2.0 were
+made for the switch on 2026-10-06; the switch itself waits in the first
+consumer's project.
 
 ## M4b Text in full
 
-The main technical risk of the project. It comes after M6 so that the switch
-does not depend on it.
+The main technical risk of the project. The switch does not depend on it.
+It was planned after M6; it comes before the switch and before version 1.0
+(decision of the maintainer, 2026-10-06), so that what the probe decides
+about text can still change the interface without a major version.
 
 It starts with a probe, time-boxed to two weeks. Two glyph sources are
 compared on the same files: the PDFium text interface, and a content-stream
