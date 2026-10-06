@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 import pdfacts
-from pdfacts import ConfigurationError, FontPolicy, UnsupportedError, configure
+from pdfacts import ConfigurationError, FontPolicy, configure
 from pdfacts.core import runtime
 
 TESTS = Path(__file__).resolve().parent
@@ -129,9 +129,19 @@ before = pdfacts.engine_info().font_policy
 still_off = runtime.active_font_policy() is None
 runtime.start()
 after = pdfacts.engine_info().font_policy
-print(json.dumps({"before": before, "still_off": still_off, "after": after}))
+print(json.dumps({
+    "before": before,
+    "still_off": still_off,
+    "after": after,
+    "a FontPolicy": after is pdfacts.FontPolicy.EMBEDDED_ONLY,
+}))
 """
-    assert run(code) == {"before": "not-started", "still_off": True, "after": "embedded-only"}
+    assert run(code) == {
+        "before": None,
+        "still_off": True,
+        "after": "embedded-only",
+        "a FontPolicy": True,
+    }
 
 
 def test_start_is_idempotent():
@@ -220,7 +230,7 @@ runtime.start()
 seen["started again"] = free()
 runtime.configure(font_policy="embedded-only")
 seen["configured after the start"] = free()
-runtime._active = FontPolicy.HOST  # a started runtime with another policy
+runtime._active = object()  # a started runtime with another policy
 try:
     runtime.configure(font_policy="embedded-only")
 except ConfigurationError:
@@ -347,19 +357,15 @@ except ValueError:
     assert run(code) == {"raised": True, "installed": False, "handed_to_pdfium": 0}
 
 
-def test_the_host_policy_is_unsupported():
-    with pytest.raises(UnsupportedError) as raised:
-        configure(font_policy=FontPolicy.HOST)
-    assert raised.value.capability is pdfacts.Capability.FONT_POLICY_HOST
-    with pytest.raises(UnsupportedError):
-        configure(font_policy="host")
-
-
-def test_the_host_policy_is_unsupported_after_the_start_too(monkeypatch):
-    # Issue #9: UnsupportedError at any time, not ConfigurationError.
-    monkeypatch.setattr(runtime, "_active", FontPolicy.EMBEDDED_ONLY)
-    with pytest.raises(UnsupportedError):
-        configure(font_policy=FontPolicy.HOST)
+@pytest.mark.parametrize("started", [False, True], ids=["before the start", "after it"])
+def test_a_name_that_is_no_policy_is_refused(monkeypatch, started):
+    # "host" named a policy that was never implemented and is gone (issue A2).
+    if started:
+        monkeypatch.setattr(runtime, "_active", FontPolicy.EMBEDDED_ONLY)
+    for name in ("host", "bogus"):
+        with pytest.raises(ValueError):
+            configure(font_policy=name)
+    assert [policy.value for policy in FontPolicy] == ["embedded-only"]
 
 
 def test_an_unknown_policy_name_is_refused():
@@ -369,7 +375,7 @@ def test_an_unknown_policy_name_is_refused():
 
 def test_configuring_another_policy_after_the_start_is_an_error(monkeypatch):
     # Only one policy exists, so a started runtime with another one is simulated.
-    monkeypatch.setattr(runtime, "_active", FontPolicy.HOST)
+    monkeypatch.setattr(runtime, "_active", object())
     with pytest.raises(ConfigurationError):
         configure(font_policy=FontPolicy.EMBEDDED_ONLY)
 
@@ -419,7 +425,6 @@ def test_two_threads_holding_the_engine_lock_do_not_overlap():
 
 def test_the_embedded_only_policy_is_now_a_capability():
     assert pdfacts.capabilities()[pdfacts.Capability.FONT_POLICY_EMBEDDED_ONLY] is True
-    assert pdfacts.capabilities()[pdfacts.Capability.FONT_POLICY_HOST] is False
 
 
 def test_configure_and_font_policy_are_exported_and_start_is_not():

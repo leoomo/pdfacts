@@ -16,7 +16,7 @@ FIELDS = {
     "colour": Colour.GREY,
     "data": bytes(6),
     "scale": 1.0,
-    "region": Rect(0, 0, 2, 3),
+    "display_region": Rect(0, 0, 2, 3),
     "display_to_pixel": Matrix(1, 0, 0, -1, 0, 3),
 }
 
@@ -62,7 +62,7 @@ def test_the_scale_is_a_float():
         ({"scale": 0}, ValueError),
         ({"scale": float("nan")}, ValueError),
         ({"scale": "1"}, TypeError),
-        ({"region": (0, 0, 2, 3)}, TypeError),
+        ({"display_region": (0, 0, 2, 3)}, TypeError),
         ({"display_to_pixel": (1, 0, 0, -1, 0, 3)}, TypeError),
     ],
     ids=repr,

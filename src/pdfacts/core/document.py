@@ -120,9 +120,10 @@ class Page:
         is more pixels than the engine addresses.
 
         LimitExceededError when the pixels, counted from the region and the
-        scale, exceed max_render_pixels; the engine is not called then. Nor is
-        it when max_forms_per_page refuses the page (docs/conventions.md,
-        "Limits"). Memory is otherwise the caller's to limit.
+        scale, exceed max_render_pixels; the engine is not called then. A page
+        that max_forms_per_page refuses is not given out, so it is never
+        rendered (docs/conventions.md, "Limits"). Memory is otherwise the
+        caller's to limit.
         """
         self._document._check_open()
         scale = checked_scale(scale)
@@ -148,7 +149,7 @@ class Page:
             colour=colour,
             data=raw.data,
             scale=scale,
-            region=shown,
+            display_region=shown,
             display_to_pixel=Matrix(scale, 0, 0, -scale, -shown.x0 * scale, shown.y1 * scale),
         )
 
