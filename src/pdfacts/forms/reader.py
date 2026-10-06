@@ -27,6 +27,7 @@ from pdfacts.forms.model import (
 
 _INVALID = UnknownReason.INVALID
 _UNREADABLE = UnknownReason.UNREADABLE
+_NOT_READ = UnknownReason.NOT_READ
 # PDFium's FPDF_OBJECT_* codes, named here so the reader imports no engine.
 _OBJECT_UNKNOWN = 0
 _OBJECT_STRING = 3
@@ -44,6 +45,10 @@ _STRAY = "a name with a # not followed by two hexadecimal digits"
 
 def _unreadable(detail: str) -> Unknown:
     return Unknown(_UNREADABLE, detail)
+
+
+def _not_read(detail: str) -> Unknown:
+    return Unknown(_NOT_READ, detail)
 
 
 @dataclass(frozen=True)
@@ -386,7 +391,7 @@ def _value(chain, key: bytes, type_) -> object:
         if kind == "string":
             return decode_text_string(written.data)
         if kind == "stream":
-            return _unreadable("the value of the field is a stream")
+            return _not_read("pdfacts does not read the value of a text field written as a stream")
         return _invalid("the value of the field is not a string")
     if type_ in (FieldType.COMBO_BOX, FieldType.LIST_BOX):
         if kind == "string":
@@ -407,7 +412,7 @@ def _value(chain, key: bytes, type_) -> object:
         return _invalid("the value of the field is not a name")
     if type_ is FieldType.PUSHBUTTON:
         return _invalid("a pushbutton has no value")
-    return _unreadable("pdfacts does not read the value of a signature field")
+    return _not_read("pdfacts does not read the value of a signature field")
 
 
 def _options(opt: Written | None) -> object:

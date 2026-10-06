@@ -189,6 +189,12 @@ drawn invisible under the same text drawn visibly gives that text render mode
 3. Not given: words and lines of text that is not upright, and text in
 annotation appearances.
 
+`words()` and `lines()` keep these rules (decision of the maintainer,
+2026-10-06). A later version that makes words and lines otherwise, of text
+that is not upright or from another source of glyphs, gives them through a
+keyword or a function of its own; a field it adds to `Word` or `Line`, such
+as a direction, is added as rule 7 of `docs/architecture.md` allows.
+
 ## Appearance streams
 
 Path and image facts include what annotation and widget appearance streams
@@ -505,7 +511,9 @@ be a field node of the tree, and the terminal field must be a terminal node
 there. Names are the non-empty
 partial names joined with `.`; a partial name holding `.` makes the name
 unknown. Unknown field flags make the type unknown. A pushbutton has no
-value; the value of a signature field is not read. Where the field tree node
+value. The value and the default value of a signature field, and those of a
+text field written as a stream, are not read: they are unknown, `not-read`.
+Where the field tree node
 is structurally invalid, every fact of the field but its reference and
 `in_form` is unknown. `in_form` is true when the terminal field is a node of
 the tree, whatever else the tree holds; false when there is no `/AcroForm`;
@@ -689,13 +697,17 @@ absent, and a value is never made up to fill the gap.
 
 A single unknown value does not discard the facts around it.
 
-An unknown value is `pdfacts.Unknown`, with one of three reasons:
+An unknown value is `pdfacts.Unknown`, with one of four reasons:
 
 | Reason | Meaning |
 | --- | --- |
 | `engines-disagree` | the two engines describe the object differently |
 | `unreadable` | the value could not be read from the file |
 | `invalid-in-file` | the file contains a value that the PDF specification does not allow |
+| `not-read` | pdfacts does not read values of this kind; a later version may |
+
+`not-read` is one value of a fact this version gives, whatever the file;
+unsupported is a capability this version lacks as a whole.
 
 An unknown value refuses to be used as a boolean: `if value:` raises
 `TypeError`, so that it cannot silently count as true. Test it with

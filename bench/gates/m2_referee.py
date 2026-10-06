@@ -25,6 +25,7 @@ import pikepdf
 
 INVALID = "invalid-in-file"
 UNREADABLE = "unreadable"
+NOT_READ = "not-read"
 
 CHAIN_LIMIT = 33  # dictionaries in a widget's chain, its own included
 TREE_DEPTH = 32  # levels below a root whose /Kids are still followed
@@ -546,7 +547,7 @@ def _value(value, kind):
         if isinstance(value, pikepdf.String):
             return text_string(bytes(value))
         if isinstance(value, pikepdf.Stream):
-            return _unknown(UNREADABLE)
+            return _unknown(NOT_READ)  # a text field's value written as a stream is not read
         return _unknown(INVALID)
     if kind in ("combo-box", "list-box"):
         if isinstance(value, pikepdf.String):
@@ -562,7 +563,7 @@ def _value(value, kind):
         return _unknown(INVALID)
     if kind == "pushbutton":
         return _unknown(INVALID)  # a pushbutton has no value
-    return _unknown(UNREADABLE)  # the value of a signature field is not read
+    return _unknown(NOT_READ)  # the value of a signature field is not read
 
 
 def _options(terminal, kind):

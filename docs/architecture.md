@@ -96,8 +96,17 @@ Core does not import features. Adding annotations does not touch text or forms.
 
 ### 7. Structures only grow
 
-Fact structures carry a schema version. A minor version may add optional
-fields. Removing or changing a field needs a major version.
+The version of the package is the version of its facts' structures; they carry
+none of their own. A minor version may add fields to a fact and members to an
+enum, so a caller that matches every member of an enum needs a case for the
+others. Removing a field or a member, renaming one, or changing a field's type
+or a member's value needs a major version. This holds for the facts pdfacts
+gives; a caller that builds a fact itself may have to change where a field is
+added.
+
+A name that is to go is deprecated first: for at least one minor version it
+keeps working and warns with `DeprecationWarning`, and the CHANGELOG says so;
+it goes in the next major version.
 
 This rule takes effect with version 1.0. Before that, the interface may change
 in ways that break callers, and every such change is recorded in
