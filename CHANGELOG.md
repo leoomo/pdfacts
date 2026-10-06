@@ -4,6 +4,27 @@ Every change to the public interface or to a convention is recorded here.
 Versions are 0.x until the first consumer has switched; until then a change
 may break callers.
 
+## Unreleased
+
+### Conventions
+
+- "Rendering" states that rendering changes no fact: pages are drawn through
+  a document of their own, opened from the same bytes and password when a
+  page is first rendered.
+- "Paths and images" no longer says that an annotation PDFium generated an
+  appearance for is unknown once the page was rendered: such an appearance
+  is drawn only by the document that renders, from which no fact is read
+  (consent of the maintainer, 2026-10-06).
+
+### Corrected
+
+- Rendering a page could change the facts read after it. Drawing an
+  annotation of some kinds that has no appearance (a square, a circle, ink,
+  a highlight, an underline, a squiggly or struck-out line, a text note, free
+  text), PDFium adds one to it, and `paths()` and `images()` gave it from
+  then on as a path and an image whose values were unknown. Rendering now
+  draws through a document of its own (#111).
+
 ## 0.1.0 (2026-10-06)
 
 The release the first consumer switches on.
