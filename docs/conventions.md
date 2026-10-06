@@ -829,7 +829,9 @@ between another `startxref` and its offset, the engines read different
 ones. There `open()` warns.
 
 A page counts as damaged when it is read, and reading it raises
-`DamagedFileError` while the other pages are read as usual, when PDFium's
+`DamagedFileError` while the other pages are read as usual (iterating
+`Document.pages` raises there too and stops; the pages after it are read by
+their index), when PDFium's
 visible box for it is not finite (the file writes a real number beyond what
 PDFium holds) or has no area, or when the boxes the file writes leave no
 area: a flat crop box, or a media box that is flat or that, intersected with
@@ -1095,6 +1097,14 @@ checked before any entry is read; the deadline is also checked when
 A page or a region of it is rendered at a given scale to grey or RGB. The
 result is raw bytes with width, height and row length. No type of an imaging
 library appears in the public interface.
+
+What is drawn is the page's content and the normal appearances of its
+annotations, as PDFium draws them by default: an annotation's appearance is
+drawn, also one flagged invisible (`/F` bit 1), and for some annotations
+without an appearance, such as a square, PDFium draws one of its own; not
+drawn are an annotation flagged hidden (`/F` bit 2) or not to be viewed (bit
+6), a popup, and every widget, so form fields are not drawn (measured,
+2026-10-06).
 
 The region is given in user space, like every fact, and is cut to the
 displayed page; the scale is pixels per user space unit. Pixel coordinates

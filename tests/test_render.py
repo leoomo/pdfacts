@@ -34,6 +34,7 @@ from pdfacts.backends import pdfium as pdfium_backend
 from pdfacts.backends.protocols import EngineFailure, FailureKind
 from pdfacts.core import runtime
 from synthetic import cases
+from synthetic.builder import build, stream
 
 DARK = 128
 # A byte below DARK becomes 1, any other 0.
@@ -470,3 +471,59 @@ def test_a_scale_at_which_the_page_is_more_pixels_than_the_engine_addresses_is_a
     # page is 400 wide, or on the turned page 400 high. The region stays small.
     with pytest.raises(ValueError, match="more than PDFium addresses"):
         first_page(make().data).render(scale, region=Rect(50, 40, 50.0001, 40.0001))
+
+
+# --- what is drawn ----------------------------------------------------------------
+
+# A form that fills its whole box black, the appearance of each annotation.
+BLACK_FORM = b"/Type /XObject /Subtype /Form /BBox [0 0 40 40]"
+ANNOTATION = b" /Rect [10 10 50 50] /AP << /N 6 0 R >>"
+
+
+@pytest.mark.parametrize(
+    ("annotation", "drawn"),
+    [
+        (b"/Subtype /Square" + ANNOTATION, True),
+        (b"/Subtype /Square /F 1" + ANNOTATION, True),
+        (b"/Subtype /Link" + ANNOTATION, True),
+        (b"/Subtype /Square /Rect [10 10 50 50] /C [0 0 0] /IC [0 0 0]", True),
+        (b"/Subtype /Square /F 2" + ANNOTATION, False),
+        (b"/Subtype /Square /F 32" + ANNOTATION, False),
+        (b"/Subtype /Popup" + ANNOTATION, False),
+        (b"/Subtype /Widget /FT /Tx /T (a)" + ANNOTATION, False),
+        (
+            b"/Subtype /Widget /FT /Btn /T (b) /AS /On /Rect [10 10 50 50]"
+            b" /AP << /N << /On 6 0 R >> >>",
+            False,
+        ),
+    ],
+    ids=[
+        "an appearance",
+        "flagged invisible",
+        "a link",
+        "a square without an appearance, PDFium's own",
+        "flagged hidden",
+        "flagged not to be viewed",
+        "a popup",
+        "a text field",
+        "a check box",
+    ],
+)
+def test_what_render_draws(annotation, drawn):
+    """docs/conventions.md, "Rendering": the content and the annotations'
+    normal appearances as PDFium draws them by default (measured, 2026-10-06)."""
+    data = build(
+        {
+            1: b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>",
+            2: b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            3: b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Annots [5 0 R] >>",
+            5: b"<< /Type /Annot " + annotation + b" >>",
+            6: stream(b"0 g 0 0 40 40 re f", BLACK_FORM),
+        },
+        1,
+    )
+    with pdfacts.open(data) as document:
+        bitmap = document.pages[0].render(scale=1)
+    # (30, 30) in user space, inside the annotation: column 30, row 100 - 30.
+    value = bitmap.data[70 * bitmap.row_length + 30 * bitmap.channels]
+    assert (value < DARK) is drawn
