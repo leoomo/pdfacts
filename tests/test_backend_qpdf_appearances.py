@@ -709,5 +709,5 @@ def test_the_types_have_their_fields_and_are_frozen():
 
 def test_it_implements_the_appearance_reader():
     members = typing.get_protocol_members(AppearanceReader)
-    assert members == {"appearances", "page_uses_pattern"}
+    assert members == {"appearances", "page_uses_pattern", "page_painted", "appearance_painted"}
     assert all(callable(getattr(QpdfDocument, name)) for name in members)

@@ -26,6 +26,7 @@ from pdfacts.backends.protocols import (
     AnnotationAppearance,
     AnnotationEntry,
     Box,
+    Components,
     ContentsForm,
     ContentStreamLength,
     CryptFilterEntry,
@@ -45,6 +46,7 @@ from pdfacts.backends.protocols import (
     PageAnnotations,
     PageContents,
     PageObject,
+    Painted,
     RecoveredBytes,
     SelectedAppearance,
     StateKeys,
@@ -735,7 +737,9 @@ class QpdfDocument:
                     selected = "QPDF warns that it misread an object of the file"
                 appearance = None
                 if isinstance(selected, pikepdf.Stream):
-                    appearance = _appearance(selected, top, kept)
+                    appearance = _appearance(selected, top, kept, self._compressed())
+                    # Reading it can warn of an object of its own (C1).
+                    misread = self._misread()
                 if misread and appearance is not None:
                     appearance = SelectedAppearance(
                         data=appearance.data,
@@ -774,8 +778,64 @@ class QpdfDocument:
             self.warnings()
             # Where QPDF warns that it mis-read an object, what the content
             # sets is as unreadable (issue #62's rule).
-            found = _uses_pattern(lambda: counter._page_content(page), top)
+            found = _uses_pattern(lambda: counter._page_content(page), top, self._compressed())
             return None if self._misread() else found
+
+    def page_painted(self, index: int, cap: int) -> tuple[Painted, ...] | None:
+        """For each path PDFium makes of the page's content, in its order,
+        forms where they are drawn: the colour QPDF reads for its fill and its
+        stroke (_painted). None where page_uses_pattern is None for the same
+        reasons, and where QPDF reads more than `cap` paths.
+        """
+        self._check_open()
+        objgen = self._annotated_page(index)
+        with _translated():
+            page = self._unwalked.get_object(objgen)
+            resources = _inherited(page, "/Resources")
+            top = _Context(resources, ("page",), resources, ("page",))
+            counter = _ParsedStreams(self._compressed())
+            self.warnings()
+            misread = self._misread()
+            found = _painted(lambda: counter._page_content(page), top, cap)
+            # A warning QPDF gives while it reads the content, about the
+            # content or an object, means PDFium may read it otherwise (C1).
+            if self._heard() or counter._scratch.get_warnings():
+                return None
+            return None if misread else found
+
+    def appearance_painted(self, index: int, position: int, cap: int) -> tuple[Painted, ...] | None:
+        """As page_painted(), for the normal appearance PDFium would draw for
+        the entry at `position` of the page's /Annots, which starts from the
+        default state (measured, C1); None where QPDF selects none."""
+        self._check_open()
+        objgen = self._annotated_page(index)
+        with _translated():
+            page = self._unwalked.get_object(objgen)
+            annots = page.get("/Annots")
+            if not isinstance(annots, pikepdf.Array) or not 0 <= position < len(annots):
+                return None
+            resources = _inherited(page, "/Resources")
+            top = _Context(resources, ("page",), resources, ("page",))
+            self.warnings()
+            item = annots[position]
+            selected = _selected_appearance(item) if isinstance(item, pikepdf.Dictionary) else None
+            if not isinstance(selected, pikepdf.Stream):
+                return None
+            misread = self._misread()
+            found = _painted(lambda: selected, top.drawing(selected), cap)
+            if self._heard():
+                return None
+            return None if misread else found
+
+    def _heard(self) -> bool:
+        """Whether QPDF gave a warning since its queue was last drained, about
+        anything; the queue is drained into the collected warnings."""
+        fresh = [str(message) for message in self._unwalked.get_warnings()]
+        for message in fresh:
+            if message not in self._known_warnings:
+                self._warnings.append(message)
+                self._known_warnings.add(message)
+        return bool(fresh)
 
     def _misread(self) -> bool:
         """Whether QPDF's parser has warned that it mis-read an object of the file.
@@ -2036,12 +2096,16 @@ class _ParsedStreams:
         contents = page.get("/Contents")
         if isinstance(contents, pikepdf.Stream):
             return contents
-        parts = (
-            [part for part in contents if isinstance(part, pikepdf.Stream)]
-            if isinstance(contents, pikepdf.Array)
-            else []
-        )
-        return pikepdf.Stream(self._scratch, b"\n".join(part.read_bytes() for part in parts))
+        # A part QPDF reads as a dictionary and PDFium as a stream (C1).
+        _read_otherwise(contents, self._compressed)
+        parts = []
+        for part in contents if isinstance(contents, pikepdf.Array) else ():
+            _read_otherwise(part, self._compressed)
+            if isinstance(part, pikepdf.Stream):
+                parts.append(part)
+        # PDFium joins them with a space: a comment at the end of one part
+        # runs on into the next (measured, C1).
+        return pikepdf.Stream(self._scratch, b" ".join(part.read_bytes() for part in parts))
 
     def _content(self, owner, key, context: _Context, depth: int) -> int:
         """What parsing `owner` at `depth` makes PDFium parse besides it."""
@@ -2263,7 +2327,9 @@ def _state_text(value: object, where: str) -> bytes | str:
     return b""
 
 
-def _appearance(stream: pikepdf.Stream, page: _Context, kept: _Kept) -> SelectedAppearance:
+def _appearance(
+    stream: pikepdf.Stream, page: _Context, kept: _Kept, compressed: frozenset[int]
+) -> SelectedAppearance:
     try:
         data: bytes | None = stream.read_bytes()
     except pikepdf.PdfError:
@@ -2274,18 +2340,18 @@ def _appearance(stream: pikepdf.Stream, page: _Context, kept: _Kept) -> Selected
         data=data,
         bbox=None if bbox is None else _written(bbox, 0, kept),
         matrix=None if matrix is None else _written(matrix, 0, kept),
-        uses_pattern=_uses_pattern(lambda: stream, page.drawing(stream)),
+        uses_pattern=_uses_pattern(lambda: stream, page.drawing(stream), compressed),
     )
 
 
-def _uses_pattern(owner, context: _Context) -> bool | None:
+def _uses_pattern(owner, context: _Context, compressed: frozenset[int]) -> bool | None:
     """Whether the content `owner()` gives, or a form it draws, sets a pattern colour.
 
     None where QPDF cannot read one of them, or a name an operator of one
     names has no bytes (_content_name).
     """
     try:
-        return _pattern_in(owner(), context, 0, {})
+        return _pattern_in(owner(), context, 0, {}, compressed)
     except MemoryError:
         raise
     except Exception:
@@ -2295,28 +2361,52 @@ def _uses_pattern(owner, context: _Context) -> bool | None:
         return None
 
 
+# The default colour space PDFium uses in place of a device colour space that
+# cs/CS selects, where the resources give one (measured, C1); not for g, rg
+# or k.
+_DEFAULTS = {
+    b"/DeviceGray": "/DefaultGray",
+    b"/DeviceRGB": "/DefaultRGB",
+    b"/DeviceCMYK": "/DefaultCMYK",
+}
+
+
+def _colour_space(name: pikepdf.Name, context: _Context):
+    """The colour space the resources give for `name`, None for none: for a
+    device colour space, the default colour space given in its place."""
+    if bytes(name) in _DEFAULTS:
+        name = pikepdf.Name(_DEFAULTS[bytes(name)])
+    space, _ = context.lookup("/ColorSpace", name)
+    return space
+
+
 def _pattern_space(name: pikepdf.Name, context: _Context) -> bool:
     """Whether cs/CS with `name` selects a Pattern colour space (measured, G2).
 
     The name /Pattern, or a name whose /ColorSpace resource is /Pattern or an
-    array that starts with /Pattern: PDFium makes up a colour for a fill in
-    such a space even where no pattern is ever set (the review of the G2
-    draft, 2026-10-01).
+    array that starts with /Pattern, or a device colour space whose default
+    colour space is one (C1): PDFium makes up a colour for a fill in such a
+    space even where no pattern is ever set (the review of the G2 draft,
+    2026-10-01).
     """
     if bytes(name) == b"/Pattern":
         return True
-    space, _ = context.lookup("/ColorSpace", name)
+    space = _colour_space(name, context)
     if isinstance(space, pikepdf.Name):
         return bytes(space) == b"/Pattern"
-    return (
-        isinstance(space, pikepdf.Array)
-        and len(space) > 0
-        and isinstance(space[0], pikepdf.Name)
-        and bytes(space[0]) == b"/Pattern"
-    )
+    if not isinstance(space, pikepdf.Array) or len(space) == 0:
+        return False
+    family = space[0]
+    if isinstance(family, pikepdf.Name):
+        return bytes(family) == b"/Pattern"
+    # PDFium takes the string (Pattern) for the family where a base follows
+    # (measured in review, C1).
+    return isinstance(family, pikepdf.String) and bytes(family) == b"Pattern" and len(space) > 1
 
 
-def _pattern_in(owner, context: _Context, depth: int, seen: dict[tuple, bool]) -> bool:
+def _pattern_in(
+    owner, context: _Context, depth: int, seen: dict[tuple, bool], compressed: frozenset[int]
+) -> bool:
     """Whether `owner` sets a pattern colour, or a form it draws does, down to 40 levels.
 
     Names are looked up as PDFium looks them up (_Context); a form is read once
@@ -2333,6 +2423,9 @@ def _pattern_in(owner, context: _Context, depth: int, seen: dict[tuple, bool]) -
         if op in ("cs", "CS") and _pattern_space(name, context):
             return True
         drawn, _ = context.lookup("/XObject", name)
+        if isinstance(drawn, pikepdf.Dictionary) and _subtype_is(drawn.get("/Subtype"), b"Form"):
+            # A form QPDF reads as a dictionary and PDFium as a stream (C1).
+            _read_otherwise(drawn, compressed)
         if (
             isinstance(drawn, pikepdf.Stream)
             and _subtype_is(drawn.get("/Subtype"), b"Form")
@@ -2341,10 +2434,276 @@ def _pattern_in(owner, context: _Context, depth: int, seen: dict[tuple, bool]) -
             inner = context.drawing(drawn)
             key = (drawn.objgen, depth + 1, inner.key, inner.fallback_key)
             if key not in seen:
-                seen[key] = _pattern_in(drawn, inner, depth + 1, seen)
+                seen[key] = _pattern_in(drawn, inner, depth + 1, seen, compressed)
             if seen[key]:
                 return True
     return False
+
+
+# The painting operators after which PDFium makes a path object, where the
+# path has a segment drawn from a current point: the fill mode PDFium gives
+# the path (FPDF_FILLMODE_*: 0 none, 1 even-odd, 2 nonzero) and whether it
+# strokes. `n` makes none, nor does a line or curve without a current point;
+# a move alone, with or without `h`, makes one or none by the caps and the
+# operator (measured, C1).
+_PAINTING = {
+    "S": (0, True),
+    "s": (0, True),
+    "f": (2, False),
+    "F": (2, False),
+    "f*": (1, False),
+    "B": (2, True),
+    "B*": (1, True),
+    "b": (2, True),
+    "b*": (1, True),
+}
+# The segments that need a current point; `re` is a segment of its own.
+_SEGMENTS = frozenset(("l", "c", "v", "y"))
+# The operators of ISO 32000-1 (Annex A). QPDF takes a token it reads as no
+# number for an operator, where PDFium may read a number: `1..5`, `--1`.
+_OPERATORS = frozenset(
+    (
+        *"b B b* B* BDC BI BMC BT BX c cm CS cs d d0 d1 Do DP EI EMC ET EX f F f*".split(),
+        *"G g gs h i ID j J K k l m M MP n q Q re RG rg ri s S SC sc SCN scn sh".split(),
+        *"T* Tc Td TD Tf Tj TJ TL Tm Tr Ts Tw Tz v w W W* y ' \"".split(),
+    )
+)
+
+
+def _painted(
+    owner: Callable[[], pikepdf.Stream], context: _Context, cap: int
+) -> tuple[Painted, ...] | None:
+    """For each path PDFium makes of the content `owner()` gives, in drawing
+    order, forms where they are drawn: the colour of its fill, and of its
+    stroke, as QPDF reads the operator that set it, None for a side whose
+    colour QPDF does not read so; how its painting operator paints it, and
+    its first point.
+
+    QPDF reads the components that g or rg set, and G or RG for the stroke,
+    as the content writes them, and black where the content sets none; k,
+    cs, sc, scn and their stroke counterparts leave the side's colour unread.
+    q and Q save and restore it, a Q without q is ignored; a form starts from
+    the colour where it is drawn, and what it sets ends with it. None where
+    QPDF cannot read the content, as for _uses_pattern; where `scn` sets a
+    pattern of another kind (_known_pattern), or a Pattern colour space with
+    a base is selected; where QPDF reads an
+    operator ISO 32000-1 does not know, or one with operands PDFium does not
+    take so, or the content or a form it draws holds a byte 0x0B or an
+    inline image, which the engines read otherwise; where a painting operator
+    ends a move alone, or a name may be longer than PDFium reads; and where
+    QPDF reads more than `cap` paths.
+    """
+    try:
+        out: list[Painted] = []
+        _paint(owner(), context, 0, (_BLACK, _BLACK), out, {}, cap)
+    except MemoryError:
+        raise
+    except Exception:
+        # As _uses_pattern; _CannotCount for what the engines read otherwise
+        # and for too many paths.
+        return None
+    return tuple(out)
+
+
+# The black where the content sets no colour: a grey of 0.
+_BLACK = (0.0,)
+# The colour a form is read from, once for all the states it is drawn in: no
+# components, which no operator writes. It stands for the fill's and the
+# stroke's where the form is drawn (_drawn_from).
+_ENTERED: Components = ()
+# The operators that set a colour of their own, with the number of numbers
+# they take: whether each sets the fill.
+_GREY_RGB = {"g": (1, True), "G": (1, False), "rg": (3, True), "RG": (3, False)}
+# The number of numbers each operator takes; the operators that take none.
+_COUNTS = {"m": 2, "l": 2, "c": 6, "v": 4, "y": 4, "re": 4, "g": 1, "G": 1, "rg": 3, "RG": 3}
+_COUNTS |= {"k": 4, "K": 4}
+_BARE = frozenset(("q", "Q", "n", *_PAINTING))
+
+
+def _numbers(operands, count: int) -> bool:
+    """Whether `operands` are `count` numbers."""
+    return len(operands) == count and all(
+        isinstance(o, (int, Decimal)) and not isinstance(o, bool) for o in operands
+    )
+
+
+def _well_formed(op: str, operands) -> bool:
+    """Whether `operands` are what PDFium takes for `op`, among the operators
+    _paint reads: elsewhere it can read the content otherwise than QPDF
+    (measured in review, C1). True for the other operators."""
+    if op in _BARE:
+        return not operands
+    if op in _COUNTS:
+        return _numbers(operands, _COUNTS[op])
+    if op in ("cs", "CS", "Do"):
+        return len(operands) == 1 and isinstance(operands[0], pikepdf.Name)
+    if op in ("sc", "SC"):
+        return 1 <= len(operands) <= 4 and _numbers(operands, len(operands))
+    if op in ("scn", "SCN"):
+        named = bool(operands) and isinstance(operands[-1], pikepdf.Name)
+        numbers = operands[:-1] if named else operands
+        return (
+            (named or bool(numbers))
+            and len(numbers) <= 4
+            and (not numbers or _numbers(numbers, len(numbers)))
+        )
+    return True
+
+
+def _pattern_base(name: pikepdf.Name, context: _Context) -> bool:
+    """Whether the Pattern colour space `name` selects has a base, in which
+    PDFium reports a pattern's colour through the base (measured in review,
+    C1)."""
+    space = _colour_space(name, context)
+    return isinstance(space, pikepdf.Array) and len(space) > 1
+
+
+def _known_pattern(name: pikepdf.Name, operands, context: _Context) -> None:
+    """Refuse the pattern `name` unless PDFium reports a grey of 191 or white
+    for it: a coloured tiling pattern or a shading pattern, without
+    components (measured, C1). _CannotCount for any other, an uncoloured
+    pattern, components, or a name that names none, where PDFium reports
+    other colours."""
+    pattern, _ = context.lookup("/Pattern", name)
+    if len(operands) == 1 and isinstance(pattern, (pikepdf.Dictionary, pikepdf.Stream)):
+        kind = pattern.get("/PatternType")
+        if kind == 1 and isinstance(pattern, pikepdf.Stream) and pattern.get("/PaintType") == 1:
+            return
+        if kind == 2:
+            return
+    raise _CannotCount("a pattern whose colour PDFium reports otherwise")
+
+
+def _paint(
+    owner: pikepdf.Stream,
+    context: _Context,
+    depth: int,
+    state: tuple[Components | None, Components | None],
+    out: list[Painted],
+    seen: dict[tuple, tuple[Painted, ...]],
+    cap: int,
+) -> None:
+    """Add to `out` the paths of `owner`, drawn from `state`, the colours QPDF
+    reads for the fill and the stroke, and those of the forms it draws down
+    to 40 levels, each form read once for each level and context it is drawn
+    in, from _ENTERED. _CannotCount where the engines
+    may read the content otherwise, where a pattern of another kind than
+    _known_pattern takes is set, and once `out` holds more than `cap` paths."""
+    if b"\x0b" in owner.read_bytes():
+        raise _CannotCount("a byte 0x0B, which QPDF takes for white space and PDFium not")
+    fill, stroke = state
+    saved: list[tuple[Components | None, Components | None]] = []
+    # The current point's move, and the path's first point once it has a
+    # segment.
+    point: tuple[float, float] | None = None
+    first: tuple[float, float] | None = None
+    for instruction in pikepdf.parse_content_stream(owner):
+        if isinstance(instruction, pikepdf.ContentStreamInlineImage):
+            raise _CannotCount("an inline image, which the engines may end at different places")
+        operands, op = instruction.operands, str(instruction.operator)
+        if op not in _OPERATORS:
+            raise _CannotCount(f"{op}, which QPDF takes for an operator and PDFium may not")
+        if op in ("BI", "ID", "EI"):
+            raise _CannotCount("an inline image, which the engines may end at different places")
+        if not _well_formed(op, operands):
+            raise _CannotCount(f"{op} with operands PDFium may read otherwise")
+        if op == "m":
+            point = (float(operands[0]), float(operands[1]))
+        elif op == "re":
+            point = (float(operands[0]), float(operands[1]))
+            first = first or point
+        elif op in _SEGMENTS:
+            first = first or point
+        elif op in _PAINTING:
+            if first is not None:
+                fill_mode, strokes = _PAINTING[op]
+                out.append(
+                    Painted(
+                        fill if fill_mode else None,
+                        stroke if strokes else None,
+                        fill_mode,
+                        strokes,
+                        first,
+                    )
+                )
+                if len(out) > cap:
+                    raise _CannotCount("QPDF reads more paths than PDFium makes")
+            elif point is not None:
+                raise _CannotCount("a move alone, of which PDFium may make a path")
+            point = first = None
+        elif op == "n":
+            point = first = None
+        elif op == "q":
+            saved.append((fill, stroke))
+        elif op == "Q":
+            if saved:
+                fill, stroke = saved.pop()
+        elif op in _GREY_RGB:
+            _, sets_fill = _GREY_RGB[op]
+            colour = tuple(float(o) for o in operands)
+            if sets_fill:
+                fill = colour
+            else:
+                stroke = colour
+        elif op in ("k", "cs", "sc", "scn", "K", "CS", "SC", "SCN"):
+            name = operands[-1] if isinstance(operands[-1], pikepdf.Name) else None
+            if name is not None:
+                name = _whole_name(name)
+            if op in ("cs", "CS") and _pattern_space(name, context):
+                if _pattern_base(name, context):
+                    raise _CannotCount("a Pattern colour space with a base")
+            if op in ("scn", "SCN") and name is not None:
+                _known_pattern(name, operands, context)
+            if op.islower():
+                fill = None
+            else:
+                stroke = None
+        elif op == "Do":
+            drawn, _ = context.lookup("/XObject", _whole_name(operands[0]))
+            if isinstance(drawn, pikepdf.Stream) and _drawn_form(drawn) and depth < _FORM_DEPTH:
+                inner = context.drawing(drawn)
+                key = (drawn.objgen, depth + 1, inner.key, inner.fallback_key)
+                if key not in seen:
+                    part: list[Painted] = []
+                    entry = (_ENTERED, _ENTERED)
+                    _paint(drawn, inner, depth + 1, entry, part, seen, cap)
+                    seen[key] = tuple(part)
+                out.extend(_drawn_from(path, fill, stroke) for path in seen[key])
+                if len(out) > cap:
+                    raise _CannotCount("QPDF reads more paths than PDFium makes")
+
+
+def _drawn_from(path: Painted, fill: Components | None, stroke: Components | None) -> Painted:
+    """A path of a form drawn where the fill is `fill` and the stroke
+    `stroke`: a colour the form keeps from where it is drawn is theirs."""
+    return Painted(
+        fill if path.fill == _ENTERED else path.fill,
+        stroke if path.stroke == _ENTERED else path.stroke,
+        path.fill_mode,
+        path.stroked,
+        path.first,
+    )
+
+
+def _whole_name(name: pikepdf.Name) -> pikepdf.Name:
+    """A name an operator of a content stream takes, as _content_name, of 84
+    bytes or fewer: PDFium reads no more than 254 bytes after a name's slash
+    (measured in review, C1), and a name of more bytes may be written with
+    that many, each byte as # and two digits. _CannotCount for a longer one."""
+    name = _content_name(name)
+    if len(bytes(name)) > 85:
+        raise _CannotCount("a name longer than PDFium may read")
+    return name
+
+
+def _drawn_form(stream: pikepdf.Stream) -> bool:
+    """Whether PDFium draws `stream` as a form: its /Subtype the name /Form,
+    or the string (Form); not the string (/Form), which _subtype_is takes
+    (measured in review, C1)."""
+    subtype = stream.get("/Subtype")
+    if isinstance(subtype, pikepdf.Name):
+        return bytes(subtype) == b"/Form"
+    return isinstance(subtype, pikepdf.String) and bytes(subtype) == b"Form"
 
 
 def _number(value: object) -> float | None:
