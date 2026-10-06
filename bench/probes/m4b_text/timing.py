@@ -9,6 +9,7 @@ a page's text, each the fastest of five runs, the four ways taking turns.
   into pdfacts glyphs, words and lines by the rules of M4a. pdfacts.open is
   not in it: a pdfacts that uses the interpreter opens QPDF anyway.
 """
+
 import math
 import statistics
 import sys
@@ -17,9 +18,9 @@ from pathlib import Path
 
 import fitz
 import pikepdf
+from interpreter import Unreadable, glyphs_of, page_glyphs
 
 import pdfacts
-from interpreter import Unreadable, glyphs_of, page_glyphs
 from pdfacts.text.layout import words_and_lines
 
 
@@ -76,8 +77,22 @@ for path in sorted(Path(sys.argv[1]).glob("*.pdf")):
         rotations = [page.geometry.rotation for page in doc.pages]
     t = fastest(data, rotations)
     rows.append(t)
-    print(f"{path.name[:40]:40} pages={len(rotations):3d} reference={t[0]:7.3f} pdfium={t[1]:7.3f} interpreter={t[2]:7.3f} unchecked={t[3]:7.3f}  ratio={t[2] / t[0]:5.2f} {t[3] / t[0]:5.2f}")
+    print(
+        f"{path.name[:40]:40} pages={len(rotations):3d} reference={t[0]:7.3f}"
+        f" pdfium={t[1]:7.3f} interpreter={t[2]:7.3f} unchecked={t[3]:7.3f}"
+        f"  ratio={t[2] / t[0]:5.2f} {t[3] / t[0]:5.2f}"
+    )
 med = [statistics.median(r[i] for r in rows) for i in range(4)]
-print(f"files {len(rows)}; median seconds: reference {med[0]:.3f}, pdfium {med[1]:.3f}, interpreter {med[2]:.3f}, interpreter unchecked {med[3]:.3f}")
-print(f"medians over reference: pdfium {med[1] / med[0]:.2f}, interpreter {med[2] / med[0]:.2f}, interpreter unchecked {med[3] / med[0]:.2f}")
-print(f"median of per-file ratios over reference: interpreter {statistics.median(r[2] / r[0] for r in rows):.2f}, unchecked {statistics.median(r[3] / r[0] for r in rows):.2f}")
+ratios = [statistics.median(r[i] / r[0] for r in rows) for i in (2, 3)]
+print(
+    f"files {len(rows)}; median seconds: reference {med[0]:.3f}, pdfium {med[1]:.3f},"
+    f" interpreter {med[2]:.3f}, interpreter unchecked {med[3]:.3f}"
+)
+print(
+    f"medians over reference: pdfium {med[1] / med[0]:.2f}, interpreter {med[2] / med[0]:.2f},"
+    f" interpreter unchecked {med[3] / med[0]:.2f}"
+)
+print(
+    f"median of per-file ratios over reference: interpreter {ratios[0]:.2f},"
+    f" unchecked {ratios[1]:.2f}"
+)

@@ -1,14 +1,17 @@
 """Criterion 3 of the probe: every corpus file whose text pdfacts reads
 through PDFium, read by the interpreter too. Prints, per file, pages that
-PDFium reads and the interpreter does not, with the reason; and counts."""
+PDFium reads and the interpreter does not, with the reason; and counts.
+Also checks, page by page, that the glyphs made without their checks (as
+timing.py's fourth way makes them) equal those made with them."""
+
 import sys
 from collections import Counter
 from pathlib import Path
 
 import pikepdf
+from interpreter import Unreadable, glyphs_of, page_glyphs
 
 import pdfacts
-from interpreter import Unreadable, page_glyphs
 
 files = sorted(Path(sys.argv[1]).glob("*.pdf"))
 c = Counter()
@@ -32,7 +35,13 @@ for path in files:
                 c["pages the interpreter reads"] += 1
                 c["glyphs of the interpreter"] += len(found)
                 c["glyphs without text"] += sum(g.text is None for g in found)
-                c["glyphs without ascent or descent"] += sum(g.ascent is None or g.descent is None for g in found)
+                c["glyphs without ascent or descent"] += sum(
+                    g.ascent is None or g.descent is None for g in found
+                )
+                rotation = page.geometry.rotation
+                checked, _ = glyphs_of(found, page.index, rotation, True)
+                unchecked, _ = glyphs_of(found, page.index, rotation, False)
+                c["pages whose unchecked glyphs differ"] += checked != unchecked
                 if pdfium_reads:
                     c["glyphs of PDFium"] += len(pdfium)
             except Unreadable as error:
@@ -42,5 +51,7 @@ for path in files:
                     print(f"{path.name[:40]:40} page {page.index}: {error}")
             except Exception as error:  # a fault of the prototype, counted apart
                 c["pages where the interpreter fails"] += 1
-                print(f"{path.name[:40]:40} page {page.index}: FAULT {type(error).__name__}: {error}")
+                print(
+                    f"{path.name[:40]:40} page {page.index}: FAULT {type(error).__name__}: {error}"
+                )
 print(dict(c))

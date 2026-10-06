@@ -92,7 +92,9 @@ class ToUnicode:
 
     def __init__(self) -> None:
         self.chars: dict[int, tuple[int, str]] = {}  # code: order, text
-        self.ranges: list[tuple[int, int, int, object]] = []  # order, low, high, bytes or list of bytes
+        self.ranges: list[
+            tuple[int, int, int, object]
+        ] = []  # order, low, high, bytes or list of bytes
         self.order = 0
 
     def get(self, code: int) -> str | None:
@@ -123,7 +125,10 @@ def parse_to_unicode(data: bytes) -> ToUnicode:
             while i + 1 < len(tokens) and tokens[i] != b"endbfchar":
                 if tokens[i].startswith(b"<") and tokens[i + 1].startswith(b"<"):
                     out.order += 1
-                    out.chars[int.from_bytes(_hex(tokens[i]), "big")] = (out.order, _utf16(_hex(tokens[i + 1])))
+                    out.chars[int.from_bytes(_hex(tokens[i]), "big")] = (
+                        out.order,
+                        _utf16(_hex(tokens[i + 1])),
+                    )
                 i += 2
         elif token == b"beginbfrange":
             i += 1
@@ -296,7 +301,9 @@ def load_font(font) -> Font:
         first = int(font.get("/FirstChar", 0))
         for offset, value in enumerate(widths):
             out.widths[first + offset] = float(value) / 1000
-        missing = descriptor.get("/MissingWidth", 0) if isinstance(descriptor, pikepdf.Dictionary) else 0
+        missing = (
+            descriptor.get("/MissingWidth", 0) if isinstance(descriptor, pikepdf.Dictionary) else 0
+        )
         out.default_width = float(missing) / 1000
     elif standard is not None:
         by_char = standard.character_widths
@@ -485,7 +492,9 @@ class Reader:
                     render_mode=state.render_mode,
                 )
             )
-            spacing = state.char_spacing + (state.word_spacing if length == 1 and code == 32 else 0.0)
+            spacing = state.char_spacing + (
+                state.word_spacing if length == 1 and code == 32 else 0.0
+            )
             tx = (width * state.size + spacing) * state.scale
             tm = multiply((1.0, 0.0, 0.0, 1.0, tx, 0.0), tm)
         return tm
@@ -508,7 +517,13 @@ class Reader:
         inner = state.copy()
         inner.ctm = multiply(matrix, state.ctm)
         own = xobject.get("/Resources")
-        self.run(xobject, own if isinstance(own, pikepdf.Dictionary) else resources, inner, depth + 1, entered + (key,))
+        self.run(
+            xobject,
+            own if isinstance(own, pikepdf.Dictionary) else resources,
+            inner,
+            depth + 1,
+            entered + (key,),
+        )
 
 
 def page_glyphs(pdf: pikepdf.Pdf, index: int) -> list[RawGlyph]:
@@ -548,6 +563,7 @@ def glyphs_of(raws: list[RawGlyph], page_index: int, rotation: int, checked: boo
     import pdfacts
 
     if not checked:
+
         def point(x, y):
             return _made(pdfacts.Point, x=x, y=y)
 
@@ -562,7 +578,9 @@ def glyphs_of(raws: list[RawGlyph], page_index: int, rotation: int, checked: boo
     else:
         point, quad, glyph, ref = pdfacts.Point, pdfacts.Quad, pdfacts.Glyph, pdfacts.GlyphRef
 
-    unknown = pdfacts.Unknown(pdfacts.UnknownReason.UNREADABLE, "no ToUnicode entry and no encoding for the code")
+    unknown = pdfacts.Unknown(
+        pdfacts.UnknownReason.UNREADABLE, "no ToUnicode entry and no encoding for the code"
+    )
     glyphs = []
     left_out = 0
     for raw in raws:
@@ -587,7 +605,7 @@ def glyphs_of(raws: list[RawGlyph], page_index: int, rotation: int, checked: boo
                 scale = size / (high - low) if high > low else 1.0
                 low, high = low * scale, high * scale
 
-            def at(u, v):
+            def at(u, v, ox=ox, oy=oy, ux=ux, uy=uy, vx=vx, vy=vy):
                 return point(ox + u * ux + v * vx, oy + u * uy + v * vy)
 
             box = quad(at(start, low), at(end, low), at(end, high), at(start, high))
