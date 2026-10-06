@@ -4,7 +4,11 @@ Every change to the public interface or to a convention is recorded here.
 Versions are 0.x until the first consumer has switched; until then a change
 may break callers.
 
-## Unreleased
+## 0.2.0 (2026-10-06)
+
+The interface as the review before 1.0 left it (A1 to A3): rendering
+changes no fact, names and types made plain, the errors of each entry, rule
+7 and the reason `not-read`. The first consumer has not switched yet.
 
 ### Added
 
