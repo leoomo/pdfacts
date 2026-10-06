@@ -108,17 +108,17 @@ DRAWN_COUNTS = {
     "page paths": 4,
     "page rectangle": 3,
 }
-# A pattern set in the page's content makes the colours of its paths unknown,
-# those of a form it draws too: two filled, two stroked (docs/conventions.md,
-# "Paths and images"). The image PDFium cannot decode has no colour space and
-# no bits per pixel. Annotation 1's /BBox of 100 x 20 is placed on a /Rect of
-# 200 x 20: the width of its stroked curve has no single value.
+# A pattern set in the page's content makes unknown the colour of the side of
+# each path it may paint: the fill of the last rectangle alone
+# (docs/conventions.md, "Paths and images"). The image PDFium cannot decode
+# has no colour space and no bits per pixel. Annotation 1's /BBox of 100 x 20
+# is placed on a /Rect of 200 x 20: the width of its stroked curve has no
+# single value.
 DRAWN_UNKNOWN = {
     "appearance line_width unreadable": 1,
     "page bits_per_pixel unreadable": 1,
     "page colour_space unreadable": 1,
-    "page fill_colour unreadable": 2,
-    "page stroke_colour unreadable": 2,
+    "page fill_colour unreadable": 1,
 }
 
 
@@ -281,8 +281,7 @@ def test_8_a_run_writes_the_receipt_and_the_summary(monkeypatch, tmp_path, capsy
         "page: paths 4, images 2, line 2, rectangle 3, quad 0, polyline 0, curves 0",
         "appearance: paths 2, images 1, line 0, rectangle 1, quad 0, polyline 0, curves 1",
         "unknown: appearance line_width unreadable 1, page bits_per_pixel unreadable 1,"
-        " page colour_space unreadable 1, page fill_colour unreadable 2,"
-        " page stroke_colour unreadable 2",
+        " page colour_space unreadable 1, page fill_colour unreadable 1",
         "stable: 1 of 1 files",
         "PDFium's own count: equal in 1 of 1 files; not compared: 0 pages, 0 annotations",
         f"0 errors, {receipt['seconds']} s; receipt {out}",

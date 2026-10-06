@@ -318,6 +318,19 @@ may break callers.
   result that gives other fields is refused with `DecryptionFailedError`;
   `max_items_per_page` holds QPDF's count of a page's `/Annots` too (decision
   of the maintainer, 2026-10-05).
+- "Paths and images": where a pattern colour is set, the colour of a path's
+  fill or stroke is known where QPDF reads it, set by `g` or `rg` or black, as
+  PDFium reports it, and it is neither the grey of 191 nor the white PDFium
+  makes up for a pattern, which stay unknown wherever a pattern colour is set;
+  unknown otherwise. It was unknown for every path of the content or
+  appearance. Where QPDF's paths are not PDFium's one for one, or the content
+  holds what the engines may read otherwise, every colour of the content is
+  unknown, as before; a known gap is stated, where the engines read a file
+  otherwise without either one warning. The parts of a page's `/Contents` are
+  joined with a space, as PDFium joins them, where they were joined with a
+  line break; this holds for the pattern check and the count of
+  `max_forms_per_page` too (decisions of the maintainer, 2026-10-05 and
+  2026-10-06).
 
 ### Corrected
 
@@ -367,6 +380,23 @@ may break callers.
   127 bytes, every value from QPDF is now unknown, `decrypt()` refuses the
   file and `recover()` the password, as the second known gap of "Errors"
   states.
+- The check that decides whether a pattern colour is set missed some, and the
+  colour PDFium makes up was given as the path's: a Pattern colour space
+  selected through a default colour space — where `cs` selects `/DeviceRGB`
+  and the resources give `/DefaultRGB` as one, PDFium reports white or black;
+  `/DefaultGray` and `/DefaultCMYK` are read alike — or one whose family is
+  the string `(Pattern)`, a base following; and a pattern set in `/Contents`,
+  a part of it, or a form, that an object stream holds as what QPDF reads as a
+  dictionary and PDFium as a stream: where the check meets one, it now has no
+  answer, and the colours are unknown. A `/ColorSpace` resource named
+  `/DeviceRGB`, which PDFium does not look up, no longer counts as a Pattern
+  colour space.
+- `max_forms_per_page` did not see `/Contents`, or a part of it, that an
+  object stream holds as what QPDF reads as a dictionary and PDFium as a
+  stream: such a page is now unchecked, as a form so held already left it.
+- A warning QPDF gives as it reads an annotation's appearance, that it
+  misread an object, was not heeded for that appearance, whose colours were
+  given; they are now unknown.
 
 ## 0.0.1
 
