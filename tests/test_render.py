@@ -33,6 +33,7 @@ from pdfacts import (
 from pdfacts.backends import pdfium as pdfium_backend
 from pdfacts.backends.protocols import EngineFailure, FailureKind
 from pdfacts.core import runtime
+from pdfium_handles import watch
 from synthetic import cases
 from synthetic.builder import build, stream
 
@@ -527,3 +528,74 @@ def test_what_render_draws(annotation, drawn):
     # (30, 30) in user space, inside the annotation: column 30, row 100 - 30.
     value = bitmap.data[70 * bitmap.row_length + 30 * bitmap.channels]
     assert (value < DARK) is drawn
+
+
+# --- rendering changes no fact (issue A1) -------------------------------------------
+
+# Annotations without an appearance to which PDFium adds one as it draws them
+# (measured, issue A1), with the entries each is built with.
+COMPLETED = {
+    "Square": b"/C [1 0 0]",
+    "Circle": b"/C [1 0 0]",
+    "Ink": b"/C [1 0 0] /InkList [[60 60 80 80]]",
+    "Highlight": b"/C [1 1 0] /QuadPoints [60 80 80 80 60 60 80 60]",
+    "Underline": b"/C [1 0 0] /QuadPoints [60 80 80 80 60 60 80 60]",
+    "Squiggly": b"/C [1 0 0] /QuadPoints [60 80 80 80 60 60 80 60]",
+    "StrikeOut": b"/C [1 0 0] /QuadPoints [60 80 80 80 60 60 80 60]",
+    "Text": b"/C [1 1 0]",
+    "FreeText": b"/DA (/Helv 12 Tf 0 g) /Contents (x)",
+}
+
+
+def every_fact(document: pdfacts.Document) -> tuple:
+    readers = (
+        pdfacts.paths,
+        pdfacts.images,
+        pdfacts.glyphs,
+        pdfacts.words,
+        pdfacts.lines,
+        pdfacts.widgets,
+    )
+    return tuple(read(document, 0) for read in readers)
+
+
+@pytest.mark.parametrize("kind", list(COMPLETED))
+def test_rendering_changes_no_fact(kind):
+    data = build(
+        {
+            1: b"<< /Type /Catalog /Pages 2 0 R >>",
+            2: b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            3: b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Annots [5 0 R] >>",
+            5: b"<< /Type /Annot /Subtype /"
+            + kind.encode()
+            + b" /Rect [60 60 80 80] "
+            + COMPLETED[kind]
+            + b" >>",
+        },
+        1,
+    )
+    with pdfacts.open(data) as document:
+        before = every_fact(document)
+        document.pages[0].render()
+        after = every_fact(document)
+    # The annotation has no appearance: no path and no image come from it.
+    assert before[:2] == ((), ())
+    assert after == before
+
+
+def test_the_document_that_renders_is_opened_once_and_closed_with_the_others(monkeypatch):
+    handles = watch(monkeypatch)
+    document = pdfacts.open(cases.one_rectangle().data)
+    opened = len(handles.loaded)
+    document.pages[0].render()
+    document.pages[0].render(scale=2)
+    assert len(handles.loaded) == opened + 1
+    document.close()
+    assert sorted(handles.freed) == sorted(handles.loaded)
+
+
+def test_an_encrypted_document_renders_with_its_password():
+    case = cases.user_password()
+    with pdfacts.open(case.data, password=case.user_password) as document:
+        bitmap = document.pages[0].render()
+    assert dark_area(bitmap) == expected_dark_area(cases.RECTANGLE, (0, 0, 400, 300), 1)
