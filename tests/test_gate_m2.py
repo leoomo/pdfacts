@@ -152,6 +152,18 @@ def test_5_the_referee_finds_the_unknown_values(entries):
     assert widgets[0]["value"] == {"unknown": "invalid-in-file"}
 
 
+@pytest.mark.parametrize(
+    "entries",
+    [b"/T (s) /FT /Sig /V 9 0 R", b"/T (t) /FT /Tx /V 9 0 R"],
+    ids=["a signature field", "a text field written as a stream"],
+)
+def test_5b_the_referee_does_not_read_these_values(entries):
+    data = forms_file({6: widget(entries)}, fields=b"[6 0 R]", objects={9: STREAM})
+    widgets, _ = m2_referee.read(data)
+    assert widgets[0]["value"] == {"unknown": "not-read"}
+    assert m2.check_file(data)["differences"] == []
+
+
 def test_6_the_referee_uses_nothing_of_pdfacts():
     program = (
         "import sys\n"

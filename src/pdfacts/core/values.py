@@ -18,6 +18,8 @@ class UnknownReason(StrEnum):
     UNREADABLE = "unreadable"
     # The file contains a value that the PDF specification does not allow.
     INVALID = "invalid-in-file"
+    # pdfacts does not read this kind of value; a later version may.
+    NOT_READ = "not-read"
 
 
 @dataclass(frozen=True, slots=True)
