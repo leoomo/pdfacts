@@ -129,9 +129,19 @@ before = pdfacts.engine_info().font_policy
 still_off = runtime.active_font_policy() is None
 runtime.start()
 after = pdfacts.engine_info().font_policy
-print(json.dumps({"before": before, "still_off": still_off, "after": after}))
+print(json.dumps({
+    "before": before,
+    "still_off": still_off,
+    "after": after,
+    "a FontPolicy": after is pdfacts.FontPolicy.EMBEDDED_ONLY,
+}))
 """
-    assert run(code) == {"before": None, "still_off": True, "after": "embedded-only"}
+    assert run(code) == {
+        "before": None,
+        "still_off": True,
+        "after": "embedded-only",
+        "a FontPolicy": True,
+    }
 
 
 def test_start_is_idempotent():
