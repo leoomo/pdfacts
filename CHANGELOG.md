@@ -341,7 +341,7 @@ The release the first consumer switches on.
   2026-10-06).
 - "Rendering" states what is drawn: the content and the annotations' normal
   appearances as PDFium draws them by default; not an annotation flagged
-  hidden or not to be viewed, a popup, or a widget, so form fields are not
+  hidden or not to be viewed, a pop-up, or a widget, so form fields are not
   drawn. This was so before and was not written down.
 - "Damaged files" states that iterating `Document.pages` raises at a damaged
   page and stops there, the pages after it read by their index (decision of
