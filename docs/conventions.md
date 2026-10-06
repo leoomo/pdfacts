@@ -511,8 +511,9 @@ be a field node of the tree, and the terminal field must be a terminal node
 there. Names are the non-empty
 partial names joined with `.`; a partial name holding `.` makes the name
 unknown. Unknown field flags make the type unknown. A pushbutton has no
-value. The value of a signature field, and that of a text field written as a
-stream, are not read: they are unknown, `not-read`. Where the field tree node
+value. The value and the default value of a signature field, and those of a
+text field written as a stream, are not read: they are unknown, `not-read`.
+Where the field tree node
 is structurally invalid, every fact of the field but its reference and
 `in_form` is unknown. `in_form` is true when the terminal field is a node of
 the tree, whatever else the tree holds; false when there is no `/AcroForm`;
@@ -704,6 +705,9 @@ An unknown value is `pdfacts.Unknown`, with one of four reasons:
 | `unreadable` | the value could not be read from the file |
 | `invalid-in-file` | the file contains a value that the PDF specification does not allow |
 | `not-read` | pdfacts does not read values of this kind; a later version may |
+
+`not-read` is one value of a fact this version gives, whatever the file;
+unsupported is a capability this version lacks as a whole.
 
 An unknown value refuses to be used as a boolean: `if value:` raises
 `TypeError`, so that it cannot silently count as true. Test it with
