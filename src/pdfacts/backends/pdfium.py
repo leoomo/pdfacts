@@ -244,8 +244,9 @@ class PdfiumDocument:
         """The page at `scale` pixels per unit, without what `crop` cuts off.
 
         `scale` is finite and above 0, and `crop` is not negative; the core
-        makes sure. The page's own rotation is applied, and forms and
-        annotations are drawn as PDFium draws them by default. Width and height
+        makes sure. The page's own rotation is applied, and the annotations'
+        appearances are drawn as PDFium draws them by default; no form
+        environment is set up, so no widget is drawn ("Rendering"). Width and height
         are what pypdfium2 makes of the page size, the scale and the crop. The
         pixels are copied out of PDFium's bitmap before it is freed.
 

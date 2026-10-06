@@ -36,8 +36,8 @@ The interface is what the package `pdfacts` exports, the names in
 `pdfacts.__all__`; the modules beneath it are not. Facts are frozen
 dataclasses whose collections are tuples. They are carried between processes
 by `pickle`, from and to the same version of pdfacts; `dataclasses.asdict()`
-and JSON are no transport for them, since a name holds bytes and a value
-reads alike to an `Unknown` there. The text of an `Unknown`'s detail, of a
+and JSON are no transport for them: JSON refuses the bytes a name holds, and
+`asdict()` turns an `Unknown` into a plain mapping of its reason and detail. The text of an `Unknown`'s detail, of a
 warning and of an error's message is written for people, not to be parsed.
 Before version 1.0 the interface may change in ways that break callers; each
 such change is in [CHANGELOG.md](CHANGELOG.md).
