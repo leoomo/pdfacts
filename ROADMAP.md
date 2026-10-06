@@ -16,7 +16,7 @@ with form fields, later for documents without.
 | 5 | M4a | text, first level | done 2026-10-02 |
 | 6 | M5a | inspection, repair and decryption | done 2026-10-05 |
 | 7 | M4b | text probe, then text in full | in progress |
-| 8 | M6 | the first consumer switches for documents with form fields; version 1.0 | releases 0.1.0 and 0.2.0 made for it; the switch waits in the first consumer's project |
+| 8 | M6 | the first consumer switches for documents with form fields; version 1.0 | releases 0.1.0 and 0.2.0 made; the switch waits in the first consumer's project |
 | 9 | M5b | what was left out on the way: edit session, annotations, rotated text | planned |
 | - | M7 | checks before going public | no date |
 
@@ -170,17 +170,6 @@ Gate
 
 Recorded results are in [docs/capabilities.md](docs/capabilities.md).
 
-## M6 Integration
-
-The first consumer switches to pdfacts for documents with form fields. Its
-acceptance criteria live in that project. After each earlier milestone the
-consumer's comparison is run again outside this repository, so that the
-interface meets a real caller early.
-
-Version 1.0 is released with this milestone. Releases 0.1.0 and 0.2.0 were
-made for the switch on 2026-10-06; the switch itself waits in the first
-consumer's project.
-
 ## M4b Text in full
 
 The main technical risk of the project. The switch does not depend on it.
@@ -218,6 +207,18 @@ If the gate is missed, in this order:
 1. the cases that do not work are recorded as unsupported
 2. the gate is relaxed, and every remaining difference is reviewed one by one
 3. a third text source is added
+
+## M6 Integration
+
+The first consumer switches to pdfacts for documents with form fields. Its
+acceptance criteria live in that project. After each earlier milestone the
+consumer's comparison is run again outside this repository, so that the
+interface meets a real caller early.
+
+Version 1.0 is released with this milestone. Two releases were made in it on
+2026-10-06: 0.1.0, the release the consumer switches on, and 0.2.0, the
+interface as the review before 1.0 left it. The switch itself waits in the
+first consumer's project.
 
 ## M5b What was left out on the way
 
