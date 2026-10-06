@@ -95,6 +95,10 @@ def unreadable(value) -> bool:
     return isinstance(value, Unknown) and value.reason.value == "unreadable"
 
 
+def not_read(value) -> bool:
+    return isinstance(value, Unknown) and value.reason.value == "not-read"
+
+
 # --- A1 to A7: the field, its name, inheritance ----------------------------------------
 
 
@@ -243,20 +247,20 @@ def test_a8_types(entries, check):
     ("entries", "expected"),
     [
         (b"/T (a) /FT /Tx /V (x)", "x"),
-        (b"/T (a) /FT /Tx /V 9 0 R", "unreadable"),
+        (b"/T (a) /FT /Tx /V 9 0 R", "not-read"),
         (b"/T (a) /FT /Ch /V (x)", ("x",)),
         (b"/T (a) /FT /Ch /V [(x) (y)]", ("x", "y")),
         (b"/T (a) /FT /Btn /V /Ja", N(b"Ja")),
         (b"/T (a) /FT /Btn /V ()", "invalid"),
         (b"/T (a) /FT /Btn /Ff 65536 /V (x)", "invalid"),
-        (b"/T (a) /FT /Sig /V 5 0 R", "unreadable"),
+        (b"/T (a) /FT /Sig /V 5 0 R", "not-read"),
     ],
 )
 def test_a9_values(entries, expected):
     data = forms_file({6: widget(entries)}, fields=b"[6 0 R]", objects={9: STREAM, 5: STREAM})
     value = one_widget(data).field.value
-    if expected == "unreadable":
-        assert unreadable(value)
+    if expected == "not-read":
+        assert not_read(value)
     elif expected == "invalid":
         assert invalid(value)
     else:
