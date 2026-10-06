@@ -69,8 +69,8 @@ INSTANCES = [
     (NotEncryptedError(), {}),
     (DecryptionFailedError(detail="another page count"), {"detail": "another page count"}),
     (
-        UnsupportedError(capability=Capability.FONT_POLICY_HOST),
-        {"capability": Capability.FONT_POLICY_HOST},
+        UnsupportedError(capability=Capability.TEXT),
+        {"capability": Capability.TEXT},
     ),
     (ClosedError(), {}),
     (ConfigurationError("the font policy is already set"), {}),

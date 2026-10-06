@@ -6,6 +6,21 @@ may break callers.
 
 ## Unreleased
 
+### Changed
+
+These break callers, as 0.x allows; the review of the interface before 1.0
+found them.
+
+- `Bitmap.region` is now `Bitmap.display_region`: it is in display space,
+  where `Page.render(region=)` takes user space, and the old name read as if
+  the one could be given back as the other.
+- `EngineInfo.font_policy` is a `FontPolicy`, or None until the runtime has
+  started, where it was a string, `"not-started"` before the start.
+- `FontPolicy.HOST` and `Capability.FONT_POLICY_HOST` are gone: the policy
+  was never implemented. `configure(font_policy="host")` now raises
+  `ValueError`, as any other name that is no policy does; it raised
+  `UnsupportedError`.
+
 ### Conventions
 
 - "Rendering" states that rendering changes no fact: pages are drawn through
@@ -15,6 +30,12 @@ may break callers.
   appearance for is unknown once the page was rendered: such an appearance
   is drawn only by the document that renders, from which no fact is read
   (consent of the maintainer, 2026-10-06).
+- "Errors" lists what each entry raises, measured, and no longer says that
+  every error is a `PdfactsError`: a wrong argument raises `TypeError` or
+  `ValueError`, and a page index outside the document `IndexError`, as they
+  did before. It states that an engine's other exceptions are raised as
+  `EngineError`, and that QPDF's messages to pikepdf's logger are not
+  warnings of the document.
 
 ### Corrected
 
@@ -24,6 +45,10 @@ may break callers.
   text), PDFium adds one to it, and `paths()` and `images()` gave it from
   then on as a path and an image whose values were unknown. Rendering now
   draws through a document of its own (#111).
+- "Errors" said `ConfigurationError` is raised where the runtime is
+  configured twice with different values. Configured before the start, it
+  takes the last value; only another policy than the active one, after the
+  start, raises it.
 
 ## 0.1.0 (2026-10-06)
 

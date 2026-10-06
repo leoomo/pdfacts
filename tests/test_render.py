@@ -135,7 +135,7 @@ def test_a_region_in_user_space():
     region = Rect(40, 30, 120, 70)
     bitmap = first_page(cases.one_rectangle().data).render(region=region)
     assert (bitmap.width, bitmap.height) == (80, 40)
-    assert bitmap.region == region
+    assert bitmap.display_region == region
     assert dark_area(bitmap) == expected_dark_area(cases.RECTANGLE, (40, 30, 120, 70), 1)
     assert dark_area(bitmap) == (10, 69, 10, 29)
 
@@ -147,7 +147,7 @@ def test_a_region_on_a_rotated_page_is_dark_where_to_display_puts_the_rectangle(
     to_display = page.geometry.to_display
     shown = to_display.apply_rect(region)
     rectangle = to_display.apply_rect(Rect(*cases.RECTANGLE))
-    assert bitmap.region == shown
+    assert bitmap.display_region == shown
     assert (bitmap.width, bitmap.height) == (40, 80)
     assert dark_area(bitmap) == expected_dark_area(
         (rectangle.x0, rectangle.y0, rectangle.x1, rectangle.y1),
@@ -166,7 +166,7 @@ def test_a_region_on_a_rotated_page_is_dark_where_to_display_puts_the_rectangle(
 )
 def test_a_region_partly_outside_is_cut_to_the_page(region, inside):
     bitmap = first_page(cases.one_rectangle().data).render(region=region)
-    assert bitmap.region == inside
+    assert bitmap.display_region == inside
     assert (bitmap.width, bitmap.height) == (50, 50)
 
 
@@ -331,7 +331,7 @@ def test_the_whole_page_is_the_visible_box():
     bitmap = first_page(case.data).render()
     x0, y0, x1, y1 = case.crop_box
     assert (bitmap.width, bitmap.height) == (x1 - x0, y1 - y0)
-    assert bitmap.region == Rect(0, 0, x1 - x0, y1 - y0)
+    assert bitmap.display_region == Rect(0, 0, x1 - x0, y1 - y0)
 
 
 def test_the_colour_may_be_given_by_its_name():
@@ -434,7 +434,7 @@ def test_the_pixel_limit_counts_each_side_rounded_up(allowed, refused):
             page.render(region=region)
         assert raised.value.found == 81 * 41
     else:
-        assert page.render(region=region).region == region
+        assert page.render(region=region).display_region == region
 
 
 @pytest.mark.parametrize(

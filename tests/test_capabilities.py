@@ -21,7 +21,6 @@ def test_the_members_are_exactly_these():
         "INSPECTION",
         "DECRYPTION",
         "FONT_POLICY_EMBEDDED_ONLY",
-        "FONT_POLICY_HOST",
     ]
 
 
@@ -54,28 +53,42 @@ def test_nothing_is_claimed_that_is_not_implemented():
     }
 
 
-def test_require_raises_for_a_capability_that_is_not_available():
-    with pytest.raises(UnsupportedError) as raised:
-        require(Capability.FONT_POLICY_HOST)
-    assert raised.value.capability is Capability.FONT_POLICY_HOST
-
-
-def test_require_takes_a_capability_by_its_value_and_rejects_other_names():
-    with pytest.raises(UnsupportedError):
-        require("font-policy-host")
-    with pytest.raises(ValueError):
-        require("bogus")
-
-
-def test_require_passes_for_a_capability_that_is_available(monkeypatch):
+def not_available(monkeypatch, capability: Capability) -> None:
+    """Make `capability` one this version does not have: every one it lists
+    is implemented, so the table is changed for the test."""
     from pdfacts.core import capabilities as module
 
     table = dict(module.capabilities())
-    table[Capability.RENDERING] = True
+    table[capability] = False
     monkeypatch.setattr(module, "_TABLE", table)
+
+
+def test_every_capability_of_this_version_is_available():
+    assert all(capabilities().values())
+
+
+def test_require_raises_for_a_capability_that_is_not_available(monkeypatch):
+    not_available(monkeypatch, Capability.TEXT)
+    with pytest.raises(UnsupportedError) as raised:
+        require(Capability.TEXT)
+    assert raised.value.capability is Capability.TEXT
+
+
+def test_require_takes_a_capability_by_its_value_and_rejects_other_names(monkeypatch):
+    not_available(monkeypatch, Capability.TEXT)
+    with pytest.raises(UnsupportedError):
+        require("text")
+    with pytest.raises(ValueError):
+        require("bogus")
+    with pytest.raises(ValueError):
+        require("font-policy-host")
+
+
+def test_require_passes_for_a_capability_that_is_available(monkeypatch):
+    not_available(monkeypatch, Capability.TEXT)
     assert require(Capability.RENDERING) is None
     with pytest.raises(UnsupportedError):
-        require(Capability.FONT_POLICY_HOST)
+        require(Capability.TEXT)
 
 
 def test_the_capability_names_are_exported():

@@ -22,8 +22,9 @@ class EngineInfo:
     pdfium_flags: tuple[str, ...]
     pikepdf: str
     qpdf: str
-    # The font policy changes the facts, so a receipt has to name it.
-    font_policy: str
+    # The font policy changes the facts, so a receipt has to name it; None
+    # until the runtime has started.
+    font_policy: runtime.FontPolicy | None
 
     def as_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -32,8 +33,8 @@ class EngineInfo:
 def engine_info() -> EngineInfo:
     """Return the versions of pdfacts and of both engines, and the font policy.
 
-    The font policy is "not-started" until the runtime has started; asking
-    does not start it.
+    The font policy is None until the runtime has started; asking does not
+    start it.
     """
     pdfium_versions = pdfium.versions()
     qpdf_versions = qpdf.versions()
@@ -45,5 +46,5 @@ def engine_info() -> EngineInfo:
         pdfium_flags=pdfium_versions.flags,
         pikepdf=qpdf_versions.binding,
         qpdf=qpdf_versions.engine,
-        font_policy=str(policy) if (policy := runtime.active_font_policy()) else "not-started",
+        font_policy=runtime.active_font_policy(),
     )

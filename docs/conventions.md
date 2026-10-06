@@ -706,8 +706,11 @@ whether this version has it. A capability is True only once it is implemented.
 
 ## Errors
 
-Every error is a `PdfactsError`. Its attributes are given as keywords and are
-readable under the same names.
+An error about the input, a limit, a password, the state of a document, or an
+engine that fails while it reads is a `PdfactsError`. A wrong argument is not:
+it raises `TypeError` or `ValueError`, and a page index outside the document
+raises `IndexError`. The attributes of a `PdfactsError` are given as keywords
+and are readable under the same names.
 
 | Error | Parent | Attributes | Raised when |
 | --- | --- | --- | --- |
@@ -722,9 +725,9 @@ readable under the same names.
 | `RecoveryFailedError` | `PdfactsError` | `detail` | recovery did not produce a usable file |
 | `NotEncryptedError` | `PdfactsError` | - | `decrypt()` was given a file both engines read as not encrypted |
 | `DecryptionFailedError` | `PdfactsError` | `detail` | `decrypt()` refused the file, or its result failed a check |
-| `UnsupportedError` | `PdfactsError` | `capability` | a feature was asked for that this version does not have |
+| `UnsupportedError` | `PdfactsError` | `capability` | a feature was asked for that this version does not have; every capability of this version is available, so it does not occur |
 | `ClosedError` | `PdfactsError` | - | a document or page was used after it was closed |
-| `ConfigurationError` | `PdfactsError` | - | the runtime was configured too late, or twice with different values |
+| `ConfigurationError` | `PdfactsError` | - | the runtime was configured with another font policy than the one it started with; there is one policy, so it does not occur |
 | `EngineError` | `PdfactsError` | `engine`, `detail` | an engine failed in a way none of the above describes |
 
 The number 1029 is the 1024 bytes that PDFium accepts before the header
@@ -733,7 +736,31 @@ The number 1029 is the 1024 bytes that PDFium accepts before the header
 A limit that could not be checked does not count as passed; that is why
 `LimitUncheckedError` exists.
 
-`MemoryError` is never caught and never wrapped.
+`MemoryError` is never caught and never wrapped, nor is `KeyboardInterrupt`.
+Every other exception an engine raises while it reads, of pikepdf or of
+pypdfium2, is raised as `EngineError`. A message QPDF writes to pikepdf's
+logger, such as one about a page tree it repairs, is not an error and not
+among a document's warnings; Python's logging prints it to standard error
+where nothing else handles it.
+
+What each entry raises (measured, 2026-10-06):
+
+| Entry | Errors |
+| --- | --- |
+| `open()` | `TypeError` for `data` that is not `bytes`, a `password` that is not a string or None, `limits` that are not `Limits` or None; `ValueError` for a password holding a NUL or not writable as UTF-8; `EmptyInputError`, `NotPdfError`, `DamagedFileError`, `PasswordRequiredError`; `LimitExceededError` for `max_bytes`, `max_pages`, `max_objects`; `LimitUncheckedError` for `max_objects` and `max_forms_per_page` where they cannot be checked; `EngineError` otherwise, for example for a security handler PDFium does not support |
+| `recover()` | the argument errors of `open()`; `EmptyInputError`, `NotPdfError`, `PasswordRequiredError`; `RecoveryFailedError` where QPDF cannot rebuild the file or the result fails a check, never `DamagedFileError`; `LimitExceededError` for `max_bytes`, `max_pages`, `max_objects`, `deadline_seconds`; `EngineError` |
+| `decrypt()` | every error of `open()`, then `NotEncryptedError`, `DecryptionFailedError`, the errors of `pages[i]` for a page of the input, `LimitExceededError` for `deadline_seconds`, `max_items_per_page`, `max_render_pixels`, and `EngineError` |
+| `pages[i]`, iterating `Document.pages` | `TypeError` for an index that is not an `int`, a `bool` or a slice too; `IndexError` outside 0 to `page_count - 1`, a negative index too; `ClosedError`; `DamagedFileError` ("Damaged files"); `LimitExceededError` for `deadline_seconds` and `max_forms_per_page`; `LimitUncheckedError` for `max_forms_per_page`; `EngineError`. A page already given raises only `ClosedError`. Iteration stops at the first page that raises |
+| `widgets()`, `paths()`, `images()`, `glyphs()`, `words()`, `lines()` | `TypeError` where the first argument is no `Document`; the errors of `pages[i]`; `LimitExceededError` for `deadline_seconds`, also for a page already given, and for `max_items_per_page` |
+| `fields()`, `inspect()` | `TypeError` where the argument is no `Document`; `ClosedError`; `LimitExceededError` for `deadline_seconds`; `EngineError` |
+| `Page.render()` | `ClosedError`; `TypeError` for a scale that is not a number or a region that is not a `Rect`; `ValueError` for a scale that is not finite and above 0, a colour that is none, a region without area on the page, a page of more pixels than PDFium addresses at this scale, or less than a pixel left; `LimitExceededError` for `max_render_pixels`; `EngineError` |
+| `Document.page_count`, `object_count`, `pages`, entering `with`; `Page.index`, `ref`, `geometry` | `ClosedError` |
+| `Document.warnings` | `ClosedError`, `EngineError` |
+| `Document.close()`, leaving `with` | `EngineError` where an engine fails to close; the document is closed all the same, and a further `close()` does nothing |
+| `configure()` | `ValueError` for a name that is no `FontPolicy` |
+| `require()` | `ValueError` for a name that is no `Capability`; `UnsupportedError`, which does not occur in this version |
+| `capabilities()`, `engine_info()` | none |
+| `Limits`, `Rect` and the other facts, built by a caller | `TypeError` or `ValueError` for a value of the wrong type or range |
 
 A password is given to both engines as PDFium takes it (decision of the
 maintainer, 2026-10-04): first as the UTF-8 of its text; where that does not
@@ -1115,9 +1142,10 @@ every fact is read from a document that never draws.
 
 The region is given in user space, like every fact, and is cut to the
 displayed page; the scale is pixels per user space unit. Pixel coordinates
-count columns and rows from the top left corner. A bitmap of the region
-`(rx0, ry0, rx1, ry1)` in display space at scale s carries `display_to_pixel`,
-`Matrix(s, 0, 0, -s, -rx0·s, ry1·s)`: column = (x - rx0)·s, row = (ry1 - y)·s.
+count columns and rows from the top left corner. A bitmap whose
+`display_region` is `(rx0, ry0, rx1, ry1)`, in display space, at scale s
+carries `display_to_pixel`, `Matrix(s, 0, 0, -s, -rx0·s, ry1·s)`:
+column = (x - rx0)·s, row = (ry1 - y)·s.
 The engine decides how it rounds the size of the bitmap and the edges of the
 region, and it places points in 32-bit floating point. On a page of up to
 2^20 pixels a side, its own transform to the pixels differs from

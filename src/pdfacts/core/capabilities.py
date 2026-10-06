@@ -24,7 +24,6 @@ class Capability(StrEnum):
     INSPECTION = "inspection"
     DECRYPTION = "decryption"
     FONT_POLICY_EMBEDDED_ONLY = "font-policy-embedded-only"
-    FONT_POLICY_HOST = "font-policy-host"
 
 
 # Each entry becomes True in the change that implements it.
@@ -41,7 +40,6 @@ _TABLE: Mapping[Capability, bool] = MappingProxyType(
         Capability.INSPECTION: True,
         Capability.DECRYPTION: True,
         Capability.FONT_POLICY_EMBEDDED_ONLY: True,
-        Capability.FONT_POLICY_HOST: False,
     }
 )
 
