@@ -16,6 +16,7 @@ def test_the_reasons_are_exactly_these():
         "ENGINES_DISAGREE": "engines-disagree",
         "UNREADABLE": "unreadable",
         "INVALID": "invalid-in-file",
+        "NOT_READ": "not-read",
     }
 
 

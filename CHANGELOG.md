@@ -6,6 +6,11 @@ may break callers.
 
 ## Unreleased
 
+### Added
+
+- `UnknownReason.NOT_READ`, `"not-read"`: pdfacts does not read values of
+  this kind; a later version may.
+
 ### Changed
 
 These break callers, as 0.x allows; the review of the interface before 1.0
@@ -20,6 +25,9 @@ found them.
   was never implemented. `configure(font_policy="host")` now raises
   `ValueError`, as any other name that is no policy does; it raised
   `UnsupportedError`.
+- The value of a signature field, and that of a text field written as a
+  stream, are unknown `not-read`; they were `unreadable`, which says that a
+  value could not be read from the file.
 
 ### Conventions
 
@@ -30,6 +38,14 @@ found them.
   appearance for is unknown once the page was rendered: such an appearance
   is drawn only by the document that renders, from which no fact is read
   (consent of the maintainer, 2026-10-06).
+- `docs/architecture.md`, rule 7: the version of the package is the version
+  of the facts' structures, which carry none of their own; a minor version
+  may add fields to a fact and members to an enum; a caller that builds a
+  fact itself is not covered; a name that is to go is deprecated for at
+  least one minor version first. "Three answers" has a fourth reason,
+  `not-read`, and "Forms" uses it. "Glyphs, words and lines": `words()` and
+  `lines()` keep their rules, and other rules come through a keyword or a
+  function of their own. Decisions of the maintainer, 2026-10-06.
 - "Errors" lists what each entry raises, measured, and no longer says that
   every error is a `PdfactsError`: a wrong argument raises `TypeError` or
   `ValueError`, and a page index outside the document `IndexError`, as they
