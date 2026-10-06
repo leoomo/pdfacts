@@ -144,7 +144,7 @@ class PdfiumDocument:
     """A document opened by PDFium.
 
     A GeometryReader, a Renderer, an AnnotationViewer, a DrawingReader and a
-    TextReader. It holds the native handle; no method returns a pypdfium2
+    TextReader. It holds the native handles; no method returns a pypdfium2
     object. A page is opened for one call and closed before the call returns.
     No form environment is ever made: the document that renders must draw as
     M1 recorded.
@@ -160,7 +160,8 @@ class PdfiumDocument:
         self._document = document
         # PDFium reads from these bytes for as long as the document is open.
         self._data = data
-        # The password as PDFium was given it, for the document that renders.
+        # The password as PDFium was given it, for the document that renders;
+        # kept for as long as the document is open, as the bytes are.
         self._secret = secret
         # The document that renders, once a page was rendered.
         self._drawing: pypdfium2.PdfDocument | None = None
@@ -288,9 +289,9 @@ class PdfiumDocument:
         None where PDFium gives no annotation for the entry. `cap` counts the
         objects of all appearances together; reading stops as page_drawing
         stops, and the drawing that stopped is the last one given. PDFium
-        parses an appearance when its objects are first asked for. After a
-        rendering of the page, PDFium draws appearances it generated for
-        annotations that have none (measured, issue G3).
+        parses an appearance when its objects are first asked for. An
+        appearance PDFium generated for an annotation that has none is drawn
+        only by the document that renders, which is not this one (issue A1).
         """
         _check_cap(cap)
         return self._read_page(index, lambda page: _appearance_drawings(page, cap))

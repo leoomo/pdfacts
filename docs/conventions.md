@@ -249,19 +249,19 @@ selects the normal appearance PDFium would draw (`/AS`, else `/V`, else the
 `/V` of `/Parent`, else `/Off`); the text PDFium gives for the annotation's
 normal appearance must equal that stream's data, each byte read through
 PDFDocEncoding as PDFium reads it, and the flags must agree, modulo 2^32, an
-absent `/F` as 0. An `/F` that is not an integer is not compared, and one
-that is not an integer from 0 to 2^32 - 1 leaves the facts' flags unknown,
-`invalid-in-file`. Where the engines do not agree,
-every fact of the annotation is unknown, `engines-disagree`. Where QPDF selects
-no appearance, PDFium must draw none; once the page was rendered, PDFium draws
-appearances it generated for annotations that have none, and those
-annotations are then unknown. Where QPDF cannot tell which appearance PDFium
-draws, and where QPDF cannot decode the appearance stream, the annotation's
-facts are unknown. An annotation whose facts are unknown is given as one path
-and one image, each of its own drawing index, with the annotation's reference
-and every value unknown with the reason, its flags included. Where PDFium draws an annotation that has
-no `/Subtype` to name it by, or an empty one, the page's paths and images are
-unknown.
+absent `/F` as 0. An `/F` that is not an integer is not compared, and one that
+is not an integer from 0 to 2^32 - 1 leaves the facts' flags unknown,
+`invalid-in-file`. Where the engines do not agree, every fact of the
+annotation is unknown, `engines-disagree`. Where QPDF selects no appearance,
+PDFium must draw none; it draws an appearance it generated for an annotation
+that has none only in a document that rendered the page, from which no fact is
+read ("Rendering"). Where QPDF cannot tell which appearance PDFium draws, and
+where QPDF cannot decode the appearance stream, the annotation's facts are
+unknown. An annotation whose facts are unknown is given as one path and one
+image, each of its own drawing index, with the annotation's reference and
+every value unknown with the reason, its flags included. Where PDFium draws an
+annotation that has no `/Subtype` to name it by, or an empty one, the page's
+paths and images are unknown.
 
 An appearance is placed on the page as ISO 32000-1 (12.5.5) places it: its
 `/BBox`, transformed by its `/Matrix`, is scaled and moved onto the
@@ -1108,10 +1108,10 @@ drawn are an annotation flagged hidden (`/F` bit 2) or not to be viewed (bit
 Rendering changes no fact. PDFium adds an appearance to an annotation of some
 kinds that has none as it draws it: a square, a circle, ink, a highlight, an
 underline, a squiggly or struck-out line, a text note, free text (measured,
-2026-10-06); a document that drew it would give it as a path from then on. So
-pages are drawn through a document of their own, which pdfacts opens from the
-same bytes and password when a page is first rendered, and every fact is read
-from a document that never draws.
+2026-10-06); a document that drew it would give it as a path and an image from
+then on. So pages are drawn through a document of their own, which pdfacts
+opens from the same bytes and password when a page is first rendered, and
+every fact is read from a document that never draws.
 
 The region is given in user space, like every fact, and is cut to the
 displayed page; the scale is pixels per user space unit. Pixel coordinates

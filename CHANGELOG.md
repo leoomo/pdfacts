@@ -17,9 +17,9 @@ may break callers.
 - Rendering a page could change the facts read after it. Drawing an
   annotation of some kinds that has no appearance (a square, a circle, ink,
   a highlight, an underline, a squiggly or struck-out line, a text note, free
-  text), PDFium adds one to it, and `paths()` gave it from then on as a path
-  whose values were unknown. Rendering now draws through a document of its
-  own (#111).
+  text), PDFium adds one to it, and `paths()` and `images()` gave it from
+  then on as a path and an image whose values were unknown. Rendering now
+  draws through a document of its own (#111).
 
 ## 0.1.0 (2026-10-06)
 
