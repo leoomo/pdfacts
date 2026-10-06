@@ -10,13 +10,6 @@ The release the first consumer switches on.
 
 ### Added
 
-- `Pages`, the type of `Document.pages`, is exported.
-- `pdfacts.__version__`, and so `engine_info().pdfacts`, is the version of
-  the installed distribution, 0.1.0 for this release; it was 0.0.1 at every
-  commit before.
-- README, "Interface": the interface is `pdfacts.__all__`; facts are carried
-  by `pickle`; the text of details, warnings and messages is not interface.
-
 - Error types: `PdfactsError` and its subclasses, listed under "Errors" in
   `docs/conventions.md`.
 - `Unknown` and `UnknownReason` for values that could not be determined.
@@ -129,6 +122,12 @@ The release the first consumer switches on.
   convention "Decryption" states. It returns `Decryption`; the errors
   `NotEncryptedError` and `DecryptionFailedError`. The capability
   `DECRYPTION`.
+- `Pages`, the type of `Document.pages`, is exported.
+- `pdfacts.__version__` is read from the installed distribution's metadata,
+  as `engine_info().pdfacts` already was; both say 0.1.0 for this release,
+  where `pyproject.toml` said 0.0.1 at every commit before.
+- README, "Interface": the interface is `pdfacts.__all__`; facts are carried
+  by `pickle`; the text of details, warnings and messages is not interface.
 
 ### Changed
 
@@ -413,6 +412,8 @@ The release the first consumer switches on.
 - A warning QPDF gives as it reads an annotation's appearance, that it
   misread an object, was not heeded for that appearance, whose colours were
   given; they are now unknown.
+- "Paths and images" named closed pop-ups among what a rendering does not
+  show; no pop-up is drawn, open or closed (measured, 2026-10-06).
 
 ## 0.0.1
 
