@@ -4,7 +4,9 @@ Every change to the public interface or to a convention is recorded here.
 Versions are 0.x until the first consumer has switched; until then a change
 may break callers.
 
-## Unreleased
+## 0.1.0 (2026-10-06)
+
+The release the first consumer switches on.
 
 ### Added
 
@@ -120,6 +122,12 @@ may break callers.
   convention "Decryption" states. It returns `Decryption`; the errors
   `NotEncryptedError` and `DecryptionFailedError`. The capability
   `DECRYPTION`.
+- `Pages`, the type of `Document.pages`, is exported.
+- `pdfacts.__version__` is read from the installed distribution's metadata,
+  as `engine_info().pdfacts` already was; both say 0.1.0 for this release,
+  where `pyproject.toml` said 0.0.1 at every commit before.
+- README, "Interface": the interface is `pdfacts.__all__`; facts are carried
+  by `pickle`; the text of details, warnings and messages is not interface.
 
 ### Changed
 
@@ -331,6 +339,13 @@ may break callers.
   line break; this holds for the pattern check and the count of
   `max_forms_per_page` too (decisions of the maintainer, 2026-10-05 and
   2026-10-06).
+- "Rendering" states what is drawn: the content and the annotations' normal
+  appearances as PDFium draws them by default; not an annotation flagged
+  hidden or not to be viewed, a pop-up, or a widget, so form fields are not
+  drawn. This was so before and was not written down.
+- "Damaged files" states that iterating `Document.pages` raises at a damaged
+  page and stops there, the pages after it read by their index (decision of
+  the maintainer, 2026-10-06). This was so before and was not written down.
 
 ### Corrected
 
@@ -397,6 +412,8 @@ may break callers.
 - A warning QPDF gives as it reads an annotation's appearance, that it
   misread an object, was not heeded for that appearance, whose colours were
   given; they are now unknown.
+- "Paths and images" named closed pop-ups among what a rendering does not
+  show; no pop-up is drawn, open or closed (measured, 2026-10-06).
 
 ## 0.0.1
 

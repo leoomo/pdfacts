@@ -461,8 +461,29 @@ def test_a_flat_media_box_in_a_file_qpdf_cannot_open_is_letter_from_pdfium():
     assert page.ref.object_number.reason is UnknownReason.UNREADABLE
 
 
+def test_iterating_the_pages_stops_at_a_damaged_page_and_the_others_are_read_by_index():
+    data = document(
+        [
+            PageSpec(b"/MediaBox [0 0 400 300]"),
+            PageSpec(b"/MediaBox [0 0 400 300] /CropBox [0 0 0 300]"),
+            PageSpec(b"/MediaBox [0 0 200 100]"),
+        ]
+    )
+    document_ = pdfacts.open(data)
+    seen = []
+    with pytest.raises(DamagedFileError) as raised:
+        for page in document_.pages:
+            seen.append(page.index)
+    assert seen == [0]
+    assert "page 1" in raised.value.detail
+    assert document_.pages[2].geometry.width == 200
+
+
 def test_page_and_page_ref_are_exported():
-    assert {"Page", "PageRef"} <= set(pdfacts.__all__)
+    assert {"Page", "PageRef", "Pages"} <= set(pdfacts.__all__)
+    assert isinstance(
+        pdfacts.open(document([PageSpec(b"/MediaBox [0 0 400 300]")])).pages, pdfacts.Pages
+    )
 
 
 # --- engines: lock, closing, failures ---------------------------------------------

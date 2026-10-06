@@ -171,7 +171,9 @@ class Pages:
     """The pages of a Document: len(), an index from 0, iteration.
 
     No slices and no negative index. A page is read when it is first asked
-    for, and the deadline is checked before.
+    for, and the deadline is checked before. Iteration raises where reading a
+    page raises, at a damaged page too (DamagedFileError), and stops there;
+    the pages after it are read by their index.
     """
 
     def __init__(self, document: Document) -> None:
