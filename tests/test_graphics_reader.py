@@ -465,19 +465,18 @@ def test_the_page_first_then_each_annotation():
     assert [path.ref.annotation.annotation_index for path in found[1:]] == [0, 1]
 
 
-def test_an_appearance_pdfium_generated_after_a_rendering_is_unknown():
-    """Without /AP QPDF selects none; after a rendering PDFium draws one of its own."""
+def test_an_appearance_pdfium_draws_where_qpdf_selects_none_is_unknown(monkeypatch):
+    """The engines disagree on the appearance: QPDF is made to select none."""
+    from pdfacts.backends import qpdf as qpdf_backend
+
+    monkeypatch.setattr(qpdf_backend, "_selected_appearance", lambda annot: None)
     data = page_file(
-        b"",
-        annots=b"[6 0 R]",
-        objects={6: b"<< /Type /Annot /Subtype /Square /Rect [10 10 210 50] >>"},
+        b"", annots=b"[6 0 R]", objects={6: square(), 7: appearance(b"0 0 100 20 re f")}
     )
-    with pdfacts.open(data) as document:
-        assert paths(document, 0) == ()
-        document.pages[0].render()
-        (path,) = paths(document, 0)
-    assert isinstance(path.subpaths, Unknown)
-    assert path.subpaths.reason is UnknownReason.ENGINES_DISAGREE
+    (path,), _ = read(data)
+    assert path.subpaths == Unknown(
+        UnknownReason.ENGINES_DISAGREE, "PDFium draws an appearance where QPDF selects none"
+    )
 
 
 def test_a_state_named_by_a_real_number_leaves_the_annotation_unknown():

@@ -148,13 +148,22 @@ class PdfiumDocument:
     object. A page is opened for one call and closed before the call returns.
     No form environment is ever made: the document that renders must draw as
     M1 recorded.
+
+    Pages are rendered through a second document, opened from the same bytes
+    and password when a page is first rendered: drawing an annotation of some
+    kinds that has no appearance, PDFium adds one to it, which every later
+    read of the document that drew it would see (measured, issue A1).
     """
 
-    def __init__(self, document: pypdfium2.PdfDocument, data: bytes) -> None:
+    def __init__(self, document: pypdfium2.PdfDocument, data: bytes, secret: bytes | None) -> None:
         # Use open(); this takes a document that is already open.
         self._document = document
         # PDFium reads from these bytes for as long as the document is open.
         self._data = data
+        # The password as PDFium was given it, for the document that renders.
+        self._secret = secret
+        # The document that renders, once a page was rendered.
+        self._drawing: pypdfium2.PdfDocument | None = None
         self._closed = False
 
     @classmethod
@@ -190,7 +199,7 @@ class PdfiumDocument:
                 with suppress(EngineFailure), _translated():
                     document.close()
                 raise
-        return cls(document, data)
+        return cls(document, data, secret)
 
     def page_count(self) -> int:
         self._check_open()
@@ -253,7 +262,7 @@ class PdfiumDocument:
         ValueError when the page at this scale is more pixels than PDFium
         addresses, or when less than one pixel is left after the crop.
         """
-        rendered = self._read_page(index, lambda page: _rendered(page, scale, crop, rgb))
+        rendered = self._read_drawn_page(index, lambda page: _rendered(page, scale, crop, rgb))
         if isinstance(rendered, str):
             raise ValueError(rendered)
         return rendered
@@ -318,6 +327,8 @@ class PdfiumDocument:
         """
         self._closed = True
         with _translated():
+            if self._drawing is not None:
+                self._drawing.close()
             self._document.close()
 
     def _check_open(self) -> None:
@@ -331,6 +342,28 @@ class PdfiumDocument:
         _check_index(index, count)
         with _translated():
             page = self._document[index]
+            try:
+                return read(page)
+            finally:
+                page.close()
+
+    def _read_drawn_page(self, index: int, read: Callable[[pypdfium2.PdfPage], T]) -> T:
+        """As _read_page, the page taken from the document that renders."""
+        count = self.page_count()
+        _check_index(index, count)
+        with _translated():
+            if self._drawing is None:
+                # The same bytes opened as open() opened them, which they were.
+                raw = pdfium_c.FPDF_LoadMemDocument64(self._data, len(self._data), self._secret)
+                if not raw:
+                    code = pdfium_c.FPDF_GetLastError()
+                    raise EngineFailure(
+                        _FAILURE_KINDS.get(code, FailureKind.OTHER),
+                        f"PDFium could not load the document to render: "
+                        f"{_ERROR_NAMES.get(code, 'error')} (code {code})",
+                    )
+                self._drawing = pypdfium2.PdfDocument(raw)
+            page = self._drawing[index]
             try:
                 return read(page)
             finally:

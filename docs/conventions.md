@@ -1105,6 +1105,14 @@ drawn are an annotation flagged hidden (`/F` bit 2) or not to be viewed (bit
 6), a pop-up, and every widget, so form fields are not drawn (measured,
 2026-10-06).
 
+Rendering changes no fact. PDFium adds an appearance to an annotation of some
+kinds that has none as it draws it: a square, a circle, ink, a highlight, an
+underline, a squiggly or struck-out line, a text note, free text (measured,
+2026-10-06); a document that drew it would give it as a path from then on. So
+pages are drawn through a document of their own, which pdfacts opens from the
+same bytes and password when a page is first rendered, and every fact is read
+from a document that never draws.
+
 The region is given in user space, like every fact, and is cut to the
 displayed page; the scale is pixels per user space unit. Pixel coordinates
 count columns and rows from the top left corner. A bitmap of the region
