@@ -25,9 +25,9 @@ found them.
   was never implemented. `configure(font_policy="host")` now raises
   `ValueError`, as any other name that is no policy does; it raised
   `UnsupportedError`.
-- The value of a signature field, and that of a text field written as a
-  stream, are unknown `not-read`; they were `unreadable`, which says that a
-  value could not be read from the file.
+- The value and the default value of a signature field, and those of a text
+  field written as a stream, are unknown `not-read`; they were `unreadable`,
+  which says that a value could not be read from the file.
 
 ### Conventions
 
