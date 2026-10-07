@@ -221,8 +221,10 @@ def test_a_font_without_ascent_or_descent_and_one_whose_ascent_is_below():
         )
     )
     assert found[0].box == Unknown(UnknownReason.UNREADABLE, "the font gives no ascent or descent")
+    # An /Ascent below the baseline, and no /FontBBox to take the top from.
     assert found[1].box == Unknown(
-        UnknownReason.INVALID, "the font's ascent is not above its descent"
+        UnknownReason.INVALID,
+        "the font descriptor's /Ascent is not above the baseline, nor is the top of its /FontBBox",
     )
 
 
