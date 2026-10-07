@@ -193,14 +193,68 @@ interpreter is adopted only if all three hold:
 Otherwise the PDFium text interface is used, and spaces it leaves out are
 inferred from glyph spacing.
 
-Deliverables
-- word and line segmentation with versioned rule sets, thresholds pinned by
-  constructed cases
-- the glyph source chosen by the probe
+The probe ran on 2026-10-06 and 2026-10-07. Its prototype is on the branch
+`probe/m4b-text-interpreter`, under `bench/probes/m4b_text`, and is not
+merged.
 
-Gate
-- word boxes checked against rendering are correct for at least 99% of words
-- median time per file is at most 1.5 times that of the reference engine
+Before the prototype was written, the differences that text makes in the
+consumer's comparison were attributed. They come from three things:
+- line boxes that leave out the tabs and spaces after a label, glyphs that
+  PDFium's text interface does not give;
+- the heights of glyph boxes;
+- rotated text.
+
+How M4a groups glyphs into words and lines was not among them.
+
+Criteria 1 and 3 were measured under the glyph boxes and line boxes of the
+second rule set below:
+- **Criterion 1** holds.
+- **Criterion 3** holds: the prototype reads all 467 pages of the corpus,
+  and PDFium reads them all too.
+- **Criterion 2** was timed per corpus file, on macOS arm64, against the
+  reference engine's text extraction. What was timed is the prototype's
+  glyphs, made into pdfacts' glyph facts and into words and lines by M4a's
+  rules; opening the document with `pdfacts.open` was not in it.
+  - Glyph facts made with every coordinate checked took 1.47 to 1.53 times
+    the reference engine's median time, in two runs.
+  - Made without per-value checks, they took 1.17 times, and were equal
+    page by page.
+  - pdfacts as released, timed through `pdfacts.open` and `lines()`, took
+    2.34 times.
+
+The maintainer counted criterion 2 without per-value checks, since that cost
+is pdfacts' own whatever the glyph source, and adopted the interpreter
+(2026-10-07).
+
+Deliverables
+- versioned rule sets for glyphs, words and lines, thresholds pinned by
+  constructed cases:
+  - `TextRules.V1` is M4a's rule set, unchanged, and is the default of
+    `glyphs()`, `words()` and `lines()`;
+  - `TextRules.V2` comes through their `rules` keyword.
+- `TextRules.V2`:
+  - glyphs read from the content stream through QPDF's tokens, white space
+    included;
+  - a glyph box from the origin to the advance, at least one em tall;
+  - line boxes that take the white space on the line;
+  - upright text only, since rotated text is M5b's, as `TextRules.V3`.
+- facts that pdfacts computes itself are made without per-value checks; a
+  caller who makes a fact keeps every check
+
+Gate, for `TextRules.V2`
+- word boxes checked against rendering are correct for at least 99% of
+  words. The check also compares the one-em glyph boxes with boxes of the
+  font descriptor's height; if the descriptor's height does better, the
+  question goes back to the maintainer (2026-10-07).
+- median time per file, from `pdfacts.open` to the page's lines, is at most
+  1.5 times that of the reference engine
+- PDFium's characters are found among V2's glyphs on the corpus, at the same
+  origin and with the same text. The glyphs V2 has and PDFium leaves out,
+  such as white space and text drawn again at its place, are counted apart.
+  What does not agree is listed in [docs/capabilities.md](docs/capabilities.md)
+  with counts. The check runs at the gate, not at run time.
+- glyph, word and line facts of V2 of every corpus file are identical on
+  three platforms
 
 If the gate is missed, in this order:
 
@@ -226,7 +280,7 @@ first consumer's project.
   operations of it
 - annotation base type and reader for annotations other than widgets: subtype,
   rectangle, flags, contents, colour, appearance, object reference
-- rotated text
+- rotated text, as `TextRules.V3`
 - a one-page design note on how form filling can be added later by adding
   modules only; no code
 
