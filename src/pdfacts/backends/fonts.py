@@ -22,6 +22,11 @@ from pdfacts.backends import adobe_fonts
 INVALID_TEXT = object()
 # What ToUnicode.get gives for a code no entry maps.
 ABSENT = object()
+# The detail of a font whose descriptor's ascent is not above the baseline,
+# nor is the top of its /FontBBox.
+INVALID_HEIGHTS = (
+    "the font descriptor's /Ascent is not above the baseline, nor is the top of its /FontBBox"
+)
 
 
 class FontNotRead(Exception):
@@ -57,6 +62,8 @@ class FontEntries:
     missing_width: float | None = None
     ascent: float | None = None
     descent: float | None = None
+    # /FontBBox of the descriptor: an array of numbers, whatever their count.
+    descriptor_box: tuple[float, ...] | None = None
     embedded: bool = False
     # The clear-text part of an embedded Type 1 font program (/FontFile, the
     # first /Length1 bytes), where the font has one.
@@ -88,6 +95,9 @@ class Font:
     text: Callable[[int], object]
     ascent: float | None
     descent: float | None
+    # The detail where the font's heights are invalid: its descriptor gives no
+    # ascent above the baseline (INVALID_HEIGHTS).
+    heights_invalid: str | None = None
 
     def codes(self, data: bytes) -> list[int]:
         """The codes a string shows: one byte each, or two for a font of
@@ -281,6 +291,27 @@ def _listed_widths(entries: FontEntries, unit: Callable[[float], float]) -> dict
     return {first + offset: unit(value) for offset, value in enumerate(widths)}
 
 
+def _descriptor_heights(entries: FontEntries) -> tuple[float | None, float | None, str | None]:
+    """The descriptor's ascent and descent, in thousandths of the size, and
+    the detail where the font's heights are invalid.
+
+    ISO 32000-1, Table 122, has /Descent negative: one above 0 is read as its
+    negation. An /Ascent at or below 0 is the top of /FontBBox, the larger of
+    its second and fourth numbers, a rectangle's corners being in either
+    order; without a top above 0 the heights are invalid.
+    """
+    ascent, descent = entries.ascent, entries.descent
+    if descent is not None and descent > 0:
+        descent = -descent
+    if ascent is not None and ascent <= 0:
+        box = entries.descriptor_box
+        top = max(box[1], box[3]) if box is not None and len(box) == 4 else None
+        if top is None or top <= 0:
+            return ascent, descent, INVALID_HEIGHTS
+        ascent = top
+    return ascent, descent, None
+
+
 def _simple(entries: FontEntries, to_unicode) -> Font:
     standard = standard_name(entries.base_font) if not entries.embedded else None
     names = _encoding_names(entries, standard)
@@ -298,7 +329,7 @@ def _simple(entries: FontEntries, to_unicode) -> Font:
         default = None
     else:
         raise FontInvalid("a font without /Widths that is not a standard 14 font")
-    ascent, descent = entries.ascent, entries.descent
+    ascent, descent, invalid = _descriptor_heights(entries)
     if standard is not None:
         ascender, descender, box = adobe_fonts.STANDARD_FONTS[standard][:3]
         if ascent is None:
@@ -311,6 +342,7 @@ def _simple(entries: FontEntries, to_unicode) -> Font:
         text=_texts(to_unicode, names, standard == "ZapfDingbats"),
         ascent=ascent / 1000 if ascent is not None else None,
         descent=descent / 1000 if descent is not None else None,
+        heights_invalid=invalid,
     )
 
 
@@ -373,13 +405,14 @@ def _composite(entries: FontEntries, to_unicode) -> Font:
         shown = "a CMap stream" if entries.encoding_dictionary else _shown(entries.encoding)
         raise FontNotRead(f"pdfacts does not read the CMap {shown}")
     default = (entries.default_width if entries.default_width is not None else 1000) / 1000
-    ascent, descent = entries.ascent, entries.descent
+    ascent, descent, invalid = _descriptor_heights(entries)
     return Font(
         two_bytes=True,
         width_of=_cid_width(entries.cid_widths, default),
         text=_texts(to_unicode, None, False),
         ascent=ascent / 1000 if ascent is not None else None,
         descent=descent / 1000 if descent is not None else None,
+        heights_invalid=invalid,
     )
 
 

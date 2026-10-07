@@ -2541,6 +2541,7 @@ def _font_entries(font: pikepdf.Dictionary) -> FontEntries:
                 entries[key] = _number(value)
                 if entries[key] is None:
                     wrong(entry)
+        entries["descriptor_box"] = _numbers_of(descriptor.get("/FontBBox"))
         entries["embedded"] = any(
             descriptor.get(key) is not None for key in ("/FontFile", "/FontFile2", "/FontFile3")
         )
