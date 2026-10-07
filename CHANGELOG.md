@@ -11,7 +11,10 @@ may break callers.
 - `TextRules`, with `V1` (M4a's rules) and `V2`, and `rules` of `glyphs()`:
   `glyphs(document, page_index, rules=TextRules.V2)` gives the codes the
   content shows, read on QPDF's tokens, white space included. `V1` stays the
-  default; `words()` and `lines()` give `V1`'s.
+  default.
+- `rules` of `words()` and `lines()`: with `TextRules.V2`, the words and
+  lines of those glyphs, a line's box holding the white space on the line,
+  a word's text keeping U+0002 as it is.
 
 ### Changed
 
@@ -24,9 +27,10 @@ may break callers.
 ### Conventions
 
 - "Glyphs, words and lines": the glyphs of `TextRules.V2`, their values, and
-  where the text of a page is unknown with them. "Glyph boxes", "Text" and
-  "Fonts" say what differs for them. Decisions of the maintainer,
-  2026-10-06 and 2026-10-07.
+  where the text of a page is unknown with them; its words and lines, and
+  that a page is read once for one rule set. "Word and line boxes": the line
+  boxes of `TextRules.V2`. "Glyph boxes", "Text" and "Fonts" say what
+  differs for them. Decisions of the maintainer, 2026-10-06 and 2026-10-07.
 - `THIRD_PARTY.md`: data extracted from Adobe's Core 14 AFM files and the
   Adobe Glyph List is shipped in `backends/adobe_fonts.py`, with their
   notices (decision of the maintainer, 2026-10-07).
