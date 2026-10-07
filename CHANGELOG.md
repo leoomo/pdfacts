@@ -14,6 +14,16 @@ may break callers.
   about text can still change the interface without a major version.
   Decision of the maintainer, 2026-10-06.
 
+### Conventions
+
+- `docs/architecture.md`, "The two engines": pdfacts interprets content
+  streams itself, on QPDF's tokens, where a fact needs what PDFium's
+  interface does not give: the colour state that confirms a pattern colour,
+  and from M4b the text of a second rule set, `TextRules.V2`. Its glyphs are
+  checked against PDFium's characters on the corpus at the gate of M4b, not
+  at run time. The text probe of M4b decided this; decisions of the
+  maintainer, 2026-10-07.
+
 ## 0.2.0 (2026-10-06)
 
 The interface as the review before 1.0 left it (A1 to A3): rendering
