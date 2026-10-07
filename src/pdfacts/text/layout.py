@@ -17,6 +17,7 @@ from pdfacts.core.refs import _is_int
 from pdfacts.core.values import Unknown
 from pdfacts.text.angles import unit_of
 from pdfacts.text.glyphs import Glyph, _text
+from pdfacts.text.rules import TextRules
 
 # In units of the glyph's size: a gap forward from SPACE on ends a word; a step
 # of LINE or more forward or back, or a baseline off by LINE or more, begins a
@@ -49,8 +50,8 @@ class Word:
     """Glyphs of one line with no space between them.
 
     `glyphs` are the glyphs' indices on the page, in content order, none of
-    them white space. `text` is their text with U+0002 written as "-";
-    unknown where the text of one of them is. `box` holds their boxes.
+    them white space. `text` is their text, with TextRules.V1 U+0002 written
+    as "-"; unknown where the text of one of them is. `box` holds their boxes.
     """
 
     page_index: int
@@ -72,7 +73,8 @@ class Line:
 
     `words` are the words' indices on the page, in content order. `text` is
     their text, one space between two; unknown where the text of one of them
-    is. `box` holds their boxes.
+    is. `box` holds their boxes, and with TextRules.V2 those of the white
+    space glyphs on the line.
     """
 
     page_index: int
@@ -89,9 +91,12 @@ class Line:
 
 
 def words_and_lines(
-    page_index: int, glyphs: Sequence[Glyph]
+    page_index: int, glyphs: Sequence[Glyph], rules: TextRules = TextRules.V1
 ) -> tuple[tuple[Word, ...], tuple[Line, ...]]:
-    """The page's words and lines from its glyphs in content order.
+    """The page's words and lines from its glyphs in content order, by the
+    rule set `rules`: the same steps for both; with TextRules.V1 a word's
+    text writes U+0002 as "-", with TextRules.V2 a line's box also holds the
+    boxes of the white space glyphs on the line.
 
     Only upright glyphs whose box is known take part; the others are passed
     over. For each glyph that takes part after the first, the step from where
@@ -104,6 +109,8 @@ def words_and_lines(
     A line without a word is none.
     """
     lines: list[list[list[int]]] = []
+    # For each line, the corners of the white space glyphs on it.
+    spaces: list[list[Point]] = []
     pen: Point | None = None
     for glyph in glyphs:
         if glyph.upright is not True or isinstance(glyph.box, Unknown):
@@ -113,16 +120,19 @@ def words_and_lines(
         ux, uy = unit_of(glyph.direction)
         if pen is None:
             lines.append([[]])
+            spaces.append([])
         else:
             dx, dy = glyph.origin.x - pen.x, glyph.origin.y - pen.y
             step = (dx * ux + dy * uy) / glyph.size
             off = (-dx * uy + dy * ux) / glyph.size
             if abs(off) >= LINE or abs(step) >= LINE:
                 lines.append([[]])
+                spaces.append([])
             elif step >= SPACE:
                 lines[-1].append([])
         if isinstance(glyph.text, str) and glyph.text.isspace():
             lines[-1].append([])
+            spaces[-1].extend((glyph.box.p1, glyph.box.p2, glyph.box.p3, glyph.box.p4))
         else:
             lines[-1][-1].append(glyph.ref.glyph_index)
         end = max(
@@ -131,16 +141,18 @@ def words_and_lines(
         )
         pen = point(glyph.origin.x + end * ux, glyph.origin.y + end * uy)
     by_index = {glyph.ref.glyph_index: glyph for glyph in glyphs}
+    marker = rules is TextRules.V1
     words: list[Word] = []
     found_lines: list[Line] = []
-    for groups in lines:
+    for groups, white in zip(lines, spaces, strict=True):
         indices = []
         for group in groups:
             if group:
                 indices.append(len(words))
-                words.append(_word(page_index, [by_index[i] for i in group]))
+                words.append(_word(page_index, [by_index[i] for i in group], marker))
         if indices:
-            found_lines.append(_line(page_index, indices, [words[i] for i in indices]))
+            extra = white if rules is TextRules.V2 else []
+            found_lines.append(_line(page_index, indices, [words[i] for i in indices], extra))
     return tuple(words), tuple(found_lines)
 
 
@@ -153,9 +165,11 @@ def _bounds(points: list[Point]) -> Rect:
     )
 
 
-def _word(page_index: int, glyphs: list[Glyph]) -> Word:
+def _word(page_index: int, glyphs: list[Glyph], marker: bool) -> Word:
+    """A word; with `marker`, U+0002, PDFium's line-end hyphen, written as "-"."""
     unknown = next((g.text for g in glyphs if isinstance(g.text, Unknown)), None)
-    text = "".join(g.text.replace("\x02", "-") for g in glyphs if isinstance(g.text, str))
+    texts = (g.text for g in glyphs if isinstance(g.text, str))
+    text = "".join(t.replace("\x02", "-") for t in texts) if marker else "".join(texts)
     corners = [p for g in glyphs for p in (g.box.p1, g.box.p2, g.box.p3, g.box.p4)]  # type: ignore[union-attr]
     return made(
         Word,
@@ -166,10 +180,12 @@ def _word(page_index: int, glyphs: list[Glyph]) -> Word:
     )
 
 
-def _line(page_index: int, indices: list[int], words: list[Word]) -> Line:
+def _line(page_index: int, indices: list[int], words: list[Word], extra: list[Point]) -> Line:
+    """A line; its box holds its words' boxes and the points `extra`."""
     unknown = next((w.text for w in words if isinstance(w.text, Unknown)), None)
     text = unknown if unknown is not None else " ".join(w.text for w in words)  # type: ignore[misc]
     corners = [
         point(x, y) for w in words for x in (w.box.x0, w.box.x1) for y in (w.box.y0, w.box.y1)
     ]
+    corners.extend(extra)
     return made(Line, page_index=page_index, words=tuple(indices), text=text, box=_bounds(corners))
