@@ -231,10 +231,31 @@ list.
 | origin | where the code is shown: the translation of the text rendering matrix. Unknown, `unreadable`, where it lies beyond what a float holds, as then are the direction, size and box |
 | direction | the angle of the text rendering matrix's x axis |
 | size | the text rendering matrix's area over its length along the baseline |
-| box | the advance box: along the baseline, from the origin to the code's width at the size and the horizontal scaling, without `Tc` and `Tw`; the width is the font's `/Widths` from `/FirstChar`, or `/W`, where `/W` gives a code twice the first, else `/MissingWidth` or `/DW`; a standard 14 font's from its AFM file without `/Widths`; a Type 3 font's through its `/FontMatrix`. Across, from the descent to the ascent at the size: the font descriptor's `/Ascent` and `/Descent`; a standard 14 font's AFM `Ascender` or `Descender` where one is absent, its `FontBBox` where the AFM file gives none; a Type 3 font's `/FontBBox` through its `/FontMatrix`. Where the ascent and the descent span less than one size, both are scaled to span one. Unknown, `unreadable`, where the font gives no ascent or descent; `invalid-in-file` where the ascent is not above the descent |
+| box | the advance box: along the baseline, from the origin to the code's width at the size and the horizontal scaling, without `Tc` and `Tw`; the width is the font's `/Widths` from `/FirstChar`, or `/W`, where `/W` gives a code twice the first, else `/MissingWidth` or `/DW`; a standard 14 font's from its AFM file without `/Widths`; a Type 3 font's through its `/FontMatrix`. Across, from the descent to the ascent at the size: the font descriptor's `/Ascent` and `/Descent`, read as the paragraph below says where they are impossible; a standard 14 font's AFM `Ascender` or `Descender` where one is absent, its `FontBBox` where the AFM file gives none; a Type 3 font's `/FontBBox` through its `/FontMatrix`. Where the ascent and the descent span less than one size, both are scaled to span one. Unknown, `invalid-in-file`, where the descriptor's `/Ascent` is at or below 0 and its `/FontBBox` gives no top above 0 (the paragraph below); else `unreadable` where the font gives no ascent or descent, and `invalid-in-file` where the ascent is not above the descent |
 | upright | as for `TextRules.V1` |
 | render mode | as `Tr` sets it; `invalid-in-file` outside 0 to 7 |
 | hyphen | whether the glyph's text is a hyphen, `-` or U+00AD, and no glyph after it on its line is other than white space; the lines are those the rules above make of these glyphs |
+
+Where the descriptor of a Type 1, MMType1 or TrueType font, or of the
+descendant of a Type 0 font, gives an impossible height, the box is made as
+follows. A `/Descent` above 0 is read as its negation; one of 0 is kept. An
+`/Ascent` at or below 0 is replaced by the top of the same descriptor's
+`/FontBBox`: the larger of its second and fourth numbers, as a file may write
+a rectangle's corners in either order. The top counts only where the
+`/FontBBox` is an array of four numbers and the top is above 0. Where there is
+none, the box of every glyph of the font is unknown, `invalid-in-file`, with
+the detail "the font descriptor's /Ascent is not above the baseline, nor is
+the top of its /FontBBox". No default heights are made up. A Type 3 font's
+heights come from the font dictionary's `/FontBBox` through its `/FontMatrix`,
+as before; a standard 14 font's AFM values are used where the descriptor gives
+no `/Ascent` or `/Descent`, as before.
+
+Reason: ISO 32000-1, Table 122, describes `/Descent` as a negative number, and
+PDFium and MuPDF read a positive one as its negation. In a measurement of the
+corpus for M4b (#121), fonts whose `/Ascent` is not above 0 gave boxes wholly
+below the baseline (one file, 262 words), and fonts with a positive `/Descent`
+gave boxes shifted up so that they cut the lower part of their glyphs (14
+files). Decision of the maintainer, 2026-10-07.
 
 The text of the page is unknown as a whole:
 

@@ -305,7 +305,10 @@ def _content_box(
 ) -> Quad | Unknown:
     """From the origin to the advance along the baseline; across, from the
     descent to the ascent at the glyph's size, both scaled so that they span
-    one em where they span less."""
+    one em where they span less. Unknown where the font's heights are
+    invalid."""
+    if code.heights_invalid is not None:
+        return Unknown(_INVALID, code.heights_invalid)
     if code.ascent is None or code.descent is None:
         return Unknown(_UNREADABLE, "the font gives no ascent or descent")
     span = code.ascent - code.descent
