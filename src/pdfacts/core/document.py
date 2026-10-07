@@ -26,6 +26,7 @@ from pdfacts.backends.protocols import (
     AnnotationView,
     AppearanceDrawing,
     Box,
+    ContentText,
     DecryptedOtherwise,
     Drawing,
     EncryptionEntries,
@@ -296,6 +297,12 @@ class FeatureAccess:
         pdfium = self._pdfium_ready()
         self._check_forms(index)
         return _pdfium_call(lambda: pdfium.page_text(index, cap))
+
+    def page_content_text(self, index: int, cap: int | None) -> ContentText:
+        """The codes the page's content shows, read on QPDF's tokens, `cap` at most."""
+        qpdf = self._qpdf_ready()
+        self._check_forms(index)
+        return _qpdf_call(lambda: qpdf.page_content_text(index, cap))
 
     def appearances(self, index: int) -> tuple[AnnotationAppearance, ...]:
         """QPDF's /Annots entries with the normal appearance each would draw."""

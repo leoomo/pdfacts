@@ -509,6 +509,53 @@ class TextReader(Protocol):
     def page_text(self, index: int, cap: int | None) -> PageText: ...
 
 
+@dataclass(frozen=True, slots=True)
+class ContentGlyph:
+    """A code a text-showing operator of a page's content shows, as pdfacts
+    reads the content on QPDF's tokens (TextRules.V2)."""
+
+    # The text the font maps the code to; None where it maps it to none.
+    text: str | None
+    # Set where the font's ToUnicode maps the code to bytes that are not
+    # UTF-16BE; text is then None.
+    text_invalid: bool
+    # The text rendering matrix: text space at the font size, the horizontal
+    # scaling and the rise, to user space (ISO 32000-1, 9.4.4). The origin is
+    # its translation.
+    matrix: Transform
+    # The advance of the code, in text space units at a font size of 1: from
+    # the font's widths, without the character and word spacing.
+    width: float
+    # The font's ascent and descent, in the same units; None where the font
+    # gives none.
+    ascent: float | None
+    descent: float | None
+    # As Tr sets it; ISO 32000-1 allows 0 to 7.
+    render_mode: int
+
+
+@dataclass(frozen=True, slots=True)
+class ContentText:
+    """The codes a page's content shows, in content order: the page's content
+    first, a form's where it is drawn.
+
+    `unread` is set where the content cannot be read so: the reason, one of
+    "not-read", "invalid-in-file" and "unreadable" (pdfacts.UnknownReason),
+    and its detail; `glyphs` are then empty.
+    """
+
+    glyphs: tuple[ContentGlyph, ...]
+    # Set when codes beyond `cap` were left out.
+    stopped: bool
+    unread: tuple[str, str] | None
+
+
+class ContentTextReader(Protocol):
+    """The text pdfacts reads from a page's content itself (TextRules.V2)."""
+
+    def page_content_text(self, index: int, cap: int | None) -> ContentText: ...
+
+
 class AnnotationViewer(Protocol):
     """Annotation dictionaries as an engine that interprets the page reads them."""
 
