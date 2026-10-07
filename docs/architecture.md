@@ -17,7 +17,7 @@ core                  geometry, object references, errors, limits,
 backend protocols     one protocol per capability
    |
 backend modules       pdfium (what needs interpretation)
-                      qpdf   (file structure)
+                      qpdf   (file structure, content-stream tokens)
 ```
 
 Dependencies point downwards. Core never imports a feature package.
@@ -26,7 +26,7 @@ Dependencies point downwards. Core never imports a feature package.
 
 | Engine | Responsible for |
 | --- | --- |
-| PDFium | what needs interpretation: text positions of `TextRules.V1`, paths, rendering |
+| PDFium | what needs interpretation: text positions of `TextRules.V1` (M4b), paths, rendering |
 | QPDF | file structure: objects, dictionaries, streams, rewrite, decryption; the tokens of content streams |
 
 A value that is written directly in a dictionary may be read through QPDF:
@@ -44,8 +44,9 @@ Every document is opened by both engines. They are checked against each other
 at run time, and a value that depends on a failed check is unknown. The checks
 are listed under "Object identity" in [conventions.md](conventions.md). The
 glyphs of `TextRules.V2` are checked against PDFium's characters on the
-corpus at the gate of M4b, not at run time: reading both takes more time
-than the gate allows.
+corpus at the gate of M4b, not at run time. On 2026-10-07, reading both took
+1.93 times the reference engine's median time on a sample of 21 corpus
+files, and the gate allows 1.5.
 
 ## Package layout
 
@@ -130,7 +131,7 @@ A milestone builds only the parts of the skeleton that its own features call.
 | runtime, page references, protocols for geometry, rendering and object access | M1 | open, page geometry, rendering |
 | widget references | M2 | form reader |
 | references for other annotations | M5b | annotation reader |
-| content-stream interpretation for text (`content/`), on QPDF's tokens through the backend | M4b | `glyphs()`, `words()`, `lines()` with `TextRules.V2` |
+| content-stream interpretation for text, on QPDF's tokens; where its code lives is issue F2's | M4b | `glyphs()`, `words()`, `lines()` with `TextRules.V2` |
 | writer protocol, edit session | M5b | rewrite and decrypt, which exist as plain functions from M5a on |
 
 Form filling is the feature the skeleton is measured against. It needs
