@@ -11,7 +11,7 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from pdfacts.backends.protocols import TextCharacter
+from pdfacts.backends.protocols import ContentGlyph, TextCharacter
 from pdfacts.core.geometry import Point, Quad, _finite_float
 from pdfacts.core.made import made, point, quad
 from pdfacts.core.refs import GlyphRef, _is_int
@@ -23,6 +23,7 @@ from pdfacts.text.angles import degrees_of
 UPRIGHT_DEGREES = 1.0
 
 _UNREADABLE = UnknownReason.UNREADABLE
+_INVALID = UnknownReason.INVALID
 
 
 def _known(value: object, kinds: tuple[type, ...], name: str) -> None:
@@ -231,3 +232,94 @@ def _box(
         return point(origin.x + u * ux + v * vx, origin.y + u * uy + v * vy)
 
     return quad(at(start, low), at(end, low), at(end, high), at(start, high))
+
+
+# --- TextRules.V2 ---------------------------------------------------------------------
+
+
+def content_glyphs_of(
+    page_index: int, rotation: int, codes: Sequence[ContentGlyph]
+) -> tuple[Glyph, ...]:
+    """The page's glyphs of TextRules.V2: one for each code the content
+    shows, in content order, white space included (docs/conventions.md,
+    "Glyphs, words and lines"). Whether a glyph is a hyphen at the end of its
+    line follows from the lines; it is False here, and the reader sets it.
+    """
+    return tuple(
+        _content_glyph(page_index, index, rotation, code) for index, code in enumerate(codes)
+    )
+
+
+def _content_glyph(page_index: int, index: int, rotation: int, code: ContentGlyph) -> Glyph:
+    text: str | Unknown
+    if code.text_invalid:
+        text = Unknown(
+            _INVALID, "the font's ToUnicode maps the code to bytes that are not UTF-16BE"
+        )
+    elif code.text:
+        text = code.text
+    else:
+        text = Unknown(_UNREADABLE, "the font maps the code to no text")
+    a, b, c, d, e, f = code.matrix
+    beyond = Unknown(_UNREADABLE, "the glyph lies beyond what a float holds")
+    origin: Point | Unknown = point(e, f) if math.isfinite(e) and math.isfinite(f) else beyond
+    length = math.hypot(a, b)
+    area = abs(a * d - b * c)
+    direction: float | Unknown
+    size: float | Unknown
+    box: Quad | Unknown
+    upright: bool | Unknown
+    if not (math.isfinite(length) and math.isfinite(area)):
+        direction = size = box = upright = beyond
+    elif length == 0 or area == 0:
+        direction = size = box = upright = Unknown(_UNREADABLE, "the glyph matrix has no extent")
+    else:
+        ux, uy = a / length, b / length
+        direction = degrees_of(ux, uy)
+        size = area / length
+        shown = (direction - rotation) % 360
+        upright = min(shown, 360 - shown) <= UPRIGHT_DEGREES
+        if isinstance(origin, Unknown):
+            box = origin
+        else:
+            box = _content_box(origin, (ux, uy), size, code.width * length, code)
+    render_mode: int | Unknown = code.render_mode
+    if not 0 <= code.render_mode <= 7:
+        render_mode = Unknown(_INVALID, "Tr sets a render mode ISO 32000-1 does not allow")
+    return made(
+        Glyph,
+        ref=made(GlyphRef, page_index=page_index, glyph_index=index),
+        text=text,
+        origin=origin,
+        direction=direction,
+        size=size,
+        box=box,
+        upright=upright,
+        render_mode=render_mode,
+        hyphen=False,
+    )
+
+
+def _content_box(
+    origin: Point, along: tuple[float, float], size: float, advance: float, code: ContentGlyph
+) -> Quad | Unknown:
+    """From the origin to the advance along the baseline; across, from the
+    descent to the ascent at the glyph's size, both scaled so that they span
+    one em where they span less."""
+    if code.ascent is None or code.descent is None:
+        return Unknown(_UNREADABLE, "the font gives no ascent or descent")
+    span = code.ascent - code.descent
+    if span <= 0:
+        return Unknown(_INVALID, "the font's ascent is not above its descent")
+    scale = 1.0 / span if span < 1 else 1.0
+    low, high = code.descent * scale * size, code.ascent * scale * size
+    start, end = (0.0, advance) if advance >= 0 else (advance, 0.0)
+    ux, uy = along
+    vx, vy = -uy, ux
+    corners = [
+        (origin.x + u * ux + v * vx, origin.y + u * uy + v * vy)
+        for u, v in ((start, low), (end, low), (end, high), (start, high))
+    ]
+    if not all(math.isfinite(x) and math.isfinite(y) for x, y in corners):
+        return Unknown(_UNREADABLE, "the glyph lies beyond what a float holds")
+    return quad(*(point(x, y) for x, y in corners))
