@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 from pdfacts.backends.protocols import TextCharacter
 from pdfacts.core.geometry import Point, Quad, _finite_float
+from pdfacts.core.made import made, point, quad
 from pdfacts.core.refs import GlyphRef, _is_int
 from pdfacts.core.values import Unknown, UnknownReason
 from pdfacts.text.angles import degrees_of
@@ -143,7 +144,7 @@ def _text_of(cluster: list[TextCharacter]) -> str | Unknown:
 def _glyph(page_index: int, index: int, rotation: int, cluster: list[TextCharacter]) -> Glyph:
     first = cluster[0]
     origin: Point | Unknown = (
-        Point(*first.origin)
+        point(*first.origin)
         if first.origin is not None
         else Unknown(_UNREADABLE, "PDFium gives no origin")
     )
@@ -169,8 +170,9 @@ def _glyph(page_index: int, index: int, rotation: int, cluster: list[TextCharact
     hyphen: bool | Unknown = any(c.hyphen for c in cluster)
     if any(c.hyphen is None for c in cluster):
         hyphen = Unknown(_UNREADABLE, "PDFium does not say whether it is a line-end hyphen")
-    return Glyph(
-        ref=GlyphRef(page_index=page_index, glyph_index=index),
+    return made(
+        Glyph,
+        ref=made(GlyphRef, page_index=page_index, glyph_index=index),
         text=_text_of(cluster),
         origin=origin,
         direction=direction,
@@ -226,6 +228,6 @@ def _box(
     vx, vy = -uy, ux
 
     def at(u: float, v: float) -> Point:
-        return Point(origin.x + u * ux + v * vx, origin.y + u * uy + v * vy)
+        return point(origin.x + u * ux + v * vx, origin.y + u * uy + v * vy)
 
-    return Quad(at(start, low), at(end, low), at(end, high), at(start, high))
+    return quad(at(start, low), at(end, low), at(end, high), at(start, high))
