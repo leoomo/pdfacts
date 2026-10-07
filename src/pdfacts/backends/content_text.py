@@ -174,6 +174,7 @@ class TextMachine:
                     width=width,
                     ascent=font.ascent,
                     descent=font.descent,
+                    heights_invalid=font.heights_invalid,
                     render_mode=state.render_mode,
                 )
             )

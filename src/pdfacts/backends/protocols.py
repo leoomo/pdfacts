@@ -530,6 +530,9 @@ class ContentGlyph:
     # gives none.
     ascent: float | None
     descent: float | None
+    # The detail where the font's heights are invalid; ascent and descent are
+    # then not to be used.
+    heights_invalid: str | None
     # As Tr sets it; ISO 32000-1 allows 0 to 7.
     render_mode: int
 

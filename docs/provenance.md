@@ -46,6 +46,7 @@ This document is an engineering rule, not legal advice.
 | 2026-10-07 | `backends/adobe_fonts.py`, `tools/adobe_fonts.py` | Adobe's Core 14 AFM files and their ReadMe; the Adobe Glyph List (`agl-aglfn`, BSD-3-Clause) | the data the module holds, extracted with the notices, as `THIRD_PARTY.md` lists; WinAnsiEncoding and MacRomanEncoding from Python's `cp1252` and `mac_roman` codecs and ISO 32000-1, Annex D |
 | 2026-10-07 | `backends/fonts.py`, `backends/content_text.py` | ISO 32000-1, 8.4, 9.3, 9.4, 9.6 to 9.10; Adobe Type 1 Font Format, 2.3; the text probe of M4b (`bench/probes/m4b_text` on `probe/m4b-text-interpreter`), written for pdfacts | the text state and the fonts; nothing of a third party's code |
 | 2026-10-07 | `text/glyphs.py` (`TextRules.V2` boxes) | the output of PyMuPDF 1.27.2.3 on the corpus, measured (2026-10-06); its source not read | that a glyph box whose ascent and descent span less than the size is scaled to span it |
+| 2026-10-07 | `backends/fonts.py` (the heights of a font descriptor) | MuPDF source, branch `master`: `source/pdf/pdf-font.c`, `pdf_load_font_descriptor`; `source/fitz/font.c`; `include/mupdf/fitz/font.h` (AGPL); read, nothing copied. PDFium's glyph boxes on the corpus, measured | that a positive `/Descent` is read as its negation, which PDFium does too. Not taken: MuPDF's heights of 0.8 and −0.2 for an `/Ascent` at or below 0, which pdfacts would make up; it takes the top of the descriptor's `/FontBBox` instead |
 
 ## Knowledge gathered before the first implementation
 

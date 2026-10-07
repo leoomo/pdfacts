@@ -31,6 +31,12 @@ may break callers.
   that a page is read once for one rule set. "Word and line boxes": the line
   boxes of `TextRules.V2`. "Glyph boxes", "Text" and "Fonts" say what
   differs for them. Decisions of the maintainer, 2026-10-06 and 2026-10-07.
+- "Glyphs, words and lines": the glyph boxes of `TextRules.V2` for fonts whose
+  ascent and descent come from a font descriptor, Type 1, MMType1 and TrueType
+  fonts and the descendants of Type 0 fonts, changed: a `/Descent` above 0 is
+  read as its negation, an `/Ascent` at or below 0 is the top of the
+  descriptor's `/FontBBox`, and where the box has no top above 0 the box is
+  unknown, `invalid-in-file`. Decision of the maintainer, 2026-10-07 (#121).
 - `THIRD_PARTY.md`: data extracted from Adobe's Core 14 AFM files and the
   Adobe Glyph List is shipped in `backends/adobe_fonts.py`, with their
   notices (decision of the maintainer, 2026-10-07).
