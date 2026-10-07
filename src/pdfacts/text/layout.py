@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from pdfacts.core.geometry import Point, Rect
+from pdfacts.core.made import made, point, rect
 from pdfacts.core.refs import _is_int
 from pdfacts.core.values import Unknown
 from pdfacts.text.angles import unit_of
@@ -128,10 +129,10 @@ def words_and_lines(
             (p.x - glyph.origin.x) * ux + (p.y - glyph.origin.y) * uy
             for p in (glyph.box.p1, glyph.box.p2, glyph.box.p3, glyph.box.p4)
         )
-        pen = Point(glyph.origin.x + end * ux, glyph.origin.y + end * uy)
+        pen = point(glyph.origin.x + end * ux, glyph.origin.y + end * uy)
     by_index = {glyph.ref.glyph_index: glyph for glyph in glyphs}
     words: list[Word] = []
-    made: list[Line] = []
+    found_lines: list[Line] = []
     for groups in lines:
         indices = []
         for group in groups:
@@ -139,12 +140,12 @@ def words_and_lines(
                 indices.append(len(words))
                 words.append(_word(page_index, [by_index[i] for i in group]))
         if indices:
-            made.append(_line(page_index, indices, [words[i] for i in indices]))
-    return tuple(words), tuple(made)
+            found_lines.append(_line(page_index, indices, [words[i] for i in indices]))
+    return tuple(words), tuple(found_lines)
 
 
 def _bounds(points: list[Point]) -> Rect:
-    return Rect(
+    return rect(
         min(p.x for p in points),
         min(p.y for p in points),
         max(p.x for p in points),
@@ -156,7 +157,8 @@ def _word(page_index: int, glyphs: list[Glyph]) -> Word:
     unknown = next((g.text for g in glyphs if isinstance(g.text, Unknown)), None)
     text = "".join(g.text.replace("\x02", "-") for g in glyphs if isinstance(g.text, str))
     corners = [p for g in glyphs for p in (g.box.p1, g.box.p2, g.box.p3, g.box.p4)]  # type: ignore[union-attr]
-    return Word(
+    return made(
+        Word,
         page_index=page_index,
         glyphs=tuple(g.ref.glyph_index for g in glyphs),
         text=unknown if unknown is not None else text,
@@ -168,6 +170,6 @@ def _line(page_index: int, indices: list[int], words: list[Word]) -> Line:
     unknown = next((w.text for w in words if isinstance(w.text, Unknown)), None)
     text = unknown if unknown is not None else " ".join(w.text for w in words)  # type: ignore[misc]
     corners = [
-        Point(x, y) for w in words for x in (w.box.x0, w.box.x1) for y in (w.box.y0, w.box.y1)
+        point(x, y) for w in words for x in (w.box.x0, w.box.x1) for y in (w.box.y0, w.box.y1)
     ]
-    return Line(page_index=page_index, words=tuple(indices), text=text, box=_bounds(corners))
+    return made(Line, page_index=page_index, words=tuple(indices), text=text, box=_bounds(corners))

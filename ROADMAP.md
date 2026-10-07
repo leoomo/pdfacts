@@ -238,8 +238,8 @@ Deliverables
   - a glyph box from the origin to the advance, at least one em tall;
   - line boxes that take the white space on the line;
   - upright text only, since rotated text is M5b's, as `TextRules.V3`.
-- facts that pdfacts computes itself are made without per-value checks; a
-  caller who makes a fact keeps every check
+- the text facts that pdfacts computes itself are made without per-value
+  checks; a caller who makes a fact keeps every check
 
 Gate, for `TextRules.V2`
 - word boxes checked against rendering are correct for at least 99% of
