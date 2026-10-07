@@ -82,6 +82,10 @@ and trailing spaces do not extend a box.
 Reason: PDFium omits about 12% of space glyphs, so a box that includes spaces
 depends on which spaces the engine happened to keep.
 
+Of `TextRules.V2`, whose glyphs are every code the content shows, a line's
+box also holds the boxes of the white space glyphs on the line ("Glyphs,
+words and lines"). A word's box holds no white space either way.
+
 ## Writing direction
 
 Taken from the glyph matrix. `FPDFText_GetCharAngle` has the opposite sign.
@@ -204,7 +208,7 @@ as a direction, is added as rule 7 of `docs/architecture.md` allows.
 `glyphs(document, page_index, rules=TextRules.V2)` gives the glyphs of the
 second rule set; `TextRules.V1`, the default, gives those above. `rules`
 takes the enum or its value, `"v1"` or `"v2"`; any other value raises
-`ValueError`. `words()` and `lines()` give the first rule set's.
+`ValueError`. `words()` and `lines()` take `rules` likewise.
 
 A glyph of `TextRules.V2` is one code a text-showing operator of the page's
 content shows (`Tj`, `'`, `"`, `TJ`), white space included, in content order:
@@ -240,11 +244,26 @@ The text of the page is unknown as a whole:
 | `invalid-in-file` | an operator of text, `q`, `Q`, `cm` or `Do` with operands ISO 32000-1 does not allow; text shown before `Tf` sets a font; `Tf` naming a font the resources do not hold; a font entry written against ISO 32000-1, among them `/Widths` without `/FirstChar` or not ending at `/LastChar`, and a simple font or a Type 3 font without `/Widths` that is not a standard 14 font; a form that draws itself; a form whose `/Matrix` is not six numbers |
 | `unreadable` | QPDF warns while it reads the content, or warns that it mis-read an object of the file; QPDF cannot decode a stream the text needs, the content's or a font's; a form deeper than 40 levels |
 
+The words and lines of `TextRules.V2` are made of its glyphs by the rules of
+the first rule set, the steps and thresholds the same, with two differences.
+A word's text is its glyphs' text as it is, U+0002 included, which is no
+marker here. A line's box holds, besides its words' boxes, the boxes of the
+white space glyphs the rules put on the line, wherever on it they are: before
+its first word, between its words or after its last, the tabs and spaces
+after a label among them. White space on a line of no word is in no line.
+
+`glyphs()`, `words()` and `lines()` called one after another read a page once
+for one rule set: the last page read is kept with its rule set, its glyphs,
+words and lines, until another is read or the document is closed. Two
+threads that ask for the same page at once may each read it. A closed
+document raises `ClosedError`, and the deadline is checked, whatever was
+kept.
+
 Where every value from QPDF is unknown ("Object identity"), the glyphs of
-`TextRules.V2` are that unknown. The codes count against
-`max_items_per_page`, white space among them, and `max_forms_per_page` is
-checked first, as for the first rule set. No value takes the C library's
-trigonometry.
+`TextRules.V2` are that unknown, and so are its words and lines. The codes
+count against `max_items_per_page`, white space among them, and
+`max_forms_per_page` is checked first, as for the first rule set. No value
+takes the C library's trigonometry.
 
 Reason: PDFium's text interface leaves out the white space after a label,
 which shapes the line it is on, and its advance boxes reach to the ink. The
@@ -826,7 +845,7 @@ What each entry raises (measured, 2026-10-06):
 | `recover()` | the argument errors of `open()`; `EmptyInputError`, `NotPdfError`, `PasswordRequiredError`; `RecoveryFailedError` where QPDF cannot rebuild the file or the result fails a check, never `DamagedFileError`; `LimitExceededError` for `max_bytes`, `max_pages`, `max_objects`, `deadline_seconds`; `EngineError` |
 | `decrypt()` | every error of `open()`, then `NotEncryptedError`, `DecryptionFailedError`, the errors of `pages[i]` for a page of the input, `LimitExceededError` for `deadline_seconds`, `max_items_per_page`, `max_render_pixels`, and `EngineError` |
 | `pages[i]`, iterating `Document.pages` | `TypeError` for an index that is not an `int`, a `bool` or a slice too; `IndexError` outside 0 to `page_count - 1`, a negative index too; `ClosedError`; `DamagedFileError` ("Damaged files"); `LimitExceededError` for `deadline_seconds` and `max_forms_per_page`; `LimitUncheckedError` for `max_forms_per_page`; `EngineError`. A page already given raises only `ClosedError`. Iteration stops at the first page that raises |
-| `widgets()`, `paths()`, `images()`, `glyphs()`, `words()`, `lines()` | `TypeError` where the first argument is no `Document`; the errors of `pages[i]`; `LimitExceededError` for `deadline_seconds`, also for a page already given, and for `max_items_per_page`; for `glyphs()`, `ValueError` where `rules` is neither a `TextRules` nor one's value |
+| `widgets()`, `paths()`, `images()`, `glyphs()`, `words()`, `lines()` | `TypeError` where the first argument is no `Document`; the errors of `pages[i]`; `LimitExceededError` for `deadline_seconds`, also for a page already given, and for `max_items_per_page`; for `glyphs()`, `words()` and `lines()`, `ValueError` where `rules` is neither a `TextRules` nor one's value |
 | `fields()`, `inspect()` | `TypeError` where the argument is no `Document`; `ClosedError`; `LimitExceededError` for `deadline_seconds`; `EngineError` |
 | `Page.render()` | `ClosedError`; `TypeError` for a scale that is not a number or a region that is not a `Rect`; `ValueError` for a scale that is not finite and above 0, a colour that is no `Colour`, a region without area on the page, a page of more pixels than PDFium addresses at this scale, or less than a pixel left; `LimitExceededError` for `max_render_pixels`; `EngineError` |
 | `Document.page_count`, `object_count`, `pages`, entering `with`; `Page.index`, `ref`, `geometry` | `ClosedError` |
