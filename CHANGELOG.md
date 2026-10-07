@@ -6,6 +6,13 @@ may break callers.
 
 ## Unreleased
 
+### Added
+
+- `TextRules`, with `V1` (M4a's rules) and `V2`, and `rules` of `glyphs()`:
+  `glyphs(document, page_index, rules=TextRules.V2)` gives the codes the
+  content shows, read on QPDF's tokens, white space included. `V1` stays the
+  default; `words()` and `lines()` give `V1`'s.
+
 ### Changed
 
 - The order of milestones: M4b, the text probe and text in full, comes
@@ -16,6 +23,13 @@ may break callers.
 
 ### Conventions
 
+- "Glyphs, words and lines": the glyphs of `TextRules.V2`, their values, and
+  where the text of a page is unknown with them. "Glyph boxes", "Text" and
+  "Fonts" say what differs for them. Decisions of the maintainer,
+  2026-10-06 and 2026-10-07.
+- `THIRD_PARTY.md`: data extracted from Adobe's Core 14 AFM files and the
+  Adobe Glyph List is shipped in `backends/adobe_fonts.py`, with their
+  notices (decision of the maintainer, 2026-10-07).
 - `docs/architecture.md`, "The two engines": pdfacts interprets content
   streams itself, on QPDF's tokens, where a fact needs what PDFium's
   interface does not give: the colour state that confirms a pattern colour,

@@ -131,7 +131,7 @@ A milestone builds only the parts of the skeleton that its own features call.
 | runtime, page references, protocols for geometry, rendering and object access | M1 | open, page geometry, rendering |
 | widget references | M2 | form reader |
 | references for other annotations | M5b | annotation reader |
-| content-stream interpretation for text, on QPDF's tokens; where its code lives is issue F2's | M4b | `glyphs()`, `words()`, `lines()` with `TextRules.V2` |
+| content-stream interpretation for text, on QPDF's tokens: the walk of the content in `backends/qpdf.py`, the text state in `backends/content_text.py`, the fonts in `backends/fonts.py` with Adobe's data in `backends/adobe_fonts.py` | M4b | `glyphs()` with `TextRules.V2` (F2); `words()` and `lines()` with it (F3) |
 | writer protocol, edit session | M5b | rewrite and decrypt, which exist as plain functions from M5a on |
 
 Form filling is the feature the skeleton is measured against. It needs
