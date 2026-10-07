@@ -47,8 +47,8 @@ change in ways that break callers; each such change is in
 
 | Engine | Binding | Used for |
 | --- | --- | --- |
-| PDFium | pypdfium2 | what needs interpretation: text positions, paths, rendering |
-| QPDF | pikepdf | file structure: objects, dictionaries, streams, rewrite, decryption |
+| PDFium | pypdfium2 | what needs interpretation: text positions of `TextRules.V1` (M4b), paths, rendering |
+| QPDF | pikepdf | file structure: objects, dictionaries, streams, rewrite, decryption; the tokens of content streams, which pdfacts interprets for the colour state that confirms a pattern colour and for the text of `TextRules.V2` (M4b) |
 
 Engine versions are pinned exactly in `pyproject.toml`. Extracted facts depend
 on the engine build, so an upgrade is a reviewed change.
