@@ -9,6 +9,7 @@ import io
 import json
 import math
 import re
+import warnings
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager, suppress
@@ -18,6 +19,8 @@ from types import MappingProxyType
 
 import pikepdf
 
+from pdfacts.backends.content_text import TextMachine, TextUnread, TooMany
+from pdfacts.backends.fonts import Font, FontEntries, FontInvalid, FontNotRead, font_of
 from pdfacts.backends.protocols import (
     Action,
     ActionPlace,
@@ -29,6 +32,7 @@ from pdfacts.backends.protocols import (
     Components,
     ContentsForm,
     ContentStreamLength,
+    ContentText,
     CryptFilterEntry,
     DecryptedBytes,
     DecryptedOtherwise,
@@ -826,6 +830,53 @@ class QpdfDocument:
             if self._heard():
                 return None
             return None if misread else found
+
+    def page_content_text(self, index: int, cap: int | None) -> ContentText:
+        """The codes the page's content shows, as pdfacts reads the content on
+        QPDF's tokens (TextRules.V2): forms where they are drawn, down to
+        _FORM_DEPTH; the glyphs of a Type 3 font and the appearances of
+        annotations are not page content. Unread where QPDF warns while it
+        reads the content or an object (the reason "unreadable"), where the
+        content writes an operator of text, or a font, as ISO 32000-1 does not
+        allow ("invalid-in-file"), and where it uses a font or a part of one
+        pdfacts does not read ("not-read"). Stopped beyond `cap` codes.
+        """
+        self._check_open()
+        objgen = self._annotated_page(index)
+        with _translated():
+            page = self._unwalked.get_object(objgen)
+            resources = _inherited(page, "/Resources")
+            top = _Context(resources, ("page",), resources, ("page",))
+            joined = _ParsedStreams(self._compressed())
+            self.warnings()
+            misread = self._misread()
+            machine = TextMachine(cap)
+            # pikepdf repeats some of QPDF's warnings about the content as
+            # Python warnings; QPDF's queue, read below, holds them too. They
+            # are kept from the caller.
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                try:
+                    _read_text(joined._page_content(page), top, 0, machine, {}, ())
+                except TooMany:
+                    return ContentText(tuple(machine.glyphs[:cap]), True, None)
+                except TextUnread as unread:
+                    return ContentText((), False, (unread.reason, unread.detail))
+                except pikepdf.PdfError as error:
+                    return ContentText(
+                        (),
+                        False,
+                        ("unreadable", f"QPDF cannot read a stream the text needs: {error}"),
+                    )
+            if self._heard() or joined._scratch.get_warnings():
+                return ContentText(
+                    (), False, ("unreadable", "QPDF warns while it reads the content")
+                )
+            if misread:
+                return ContentText(
+                    (), False, ("unreadable", "QPDF warns that it mis-read an object of the file")
+                )
+            return ContentText(tuple(machine.glyphs), False, None)
 
     def _heard(self) -> bool:
         """Whether QPDF gave a warning since its queue was last drained, about
@@ -2223,6 +2274,342 @@ class _ParsedStreams:
         if key is not None:
             self._instructions[key] = found
         return found
+
+
+# The operators of text and of the graphics state the text depends on, with
+# the operands each takes: "n" a number, "i" an integer, "s" a string, "a" an
+# array of strings and numbers, "/" a name (ISO 32000-1, 8.4.4, 9.3, 9.4).
+_TEXT_OPERATORS = {
+    "q": "", "Q": "", "cm": "nnnnnn", "BT": "", "ET": "",
+    "Tc": "n", "Tw": "n", "Tz": "n", "TL": "n", "Tr": "i", "Ts": "n", "Tf": "/n",
+    "Td": "nn", "TD": "nn", "Tm": "nnnnnn", "T*": "", "Tj": "s", "'": "s", '"': "nns",
+    "TJ": "a", "Do": "/",
+}  # fmt: skip
+
+
+def _operands(op: str, operands) -> list:
+    """The operands of `op` as plain values: floats, ints, bytes, names, and
+    for TJ a list of bytes and floats; TextUnread where they are not what
+    ISO 32000-1 has the operator take."""
+    kinds = _TEXT_OPERATORS[op]
+    values: list = []
+    if len(operands) == len(kinds):
+        for kind, operand in zip(kinds, operands, strict=True):
+            if kind == "n":
+                value = _number(operand)
+            elif kind == "i":
+                value = (
+                    operand if isinstance(operand, int) and not isinstance(operand, bool) else None
+                )
+            elif kind == "s":
+                value = bytes(operand) if isinstance(operand, pikepdf.String) else None
+            elif kind == "/":
+                value = (
+                    operand if isinstance(operand, pikepdf.Name) and _name_bytes(operand) else None
+                )
+            else:
+                value = _shown_items(operand)
+            if value is None:
+                break
+            values.append(value)
+        else:
+            return values
+    raise TextUnread("invalid-in-file", f"{op} with operands ISO 32000-1 does not allow")
+
+
+def _shown_items(operand: object) -> list | None:
+    """The strings and numbers of a TJ array; None for anything else."""
+    if not isinstance(operand, pikepdf.Array):
+        return None
+    items: list = []
+    for item in operand:
+        if isinstance(item, pikepdf.String):
+            items.append(bytes(item))
+        else:
+            number = _number(item)
+            if number is None:
+                return None
+            items.append(number)
+    return items
+
+
+def _read_text(
+    owner: pikepdf.Stream,
+    context: _Context,
+    depth: int,
+    machine: TextMachine,
+    fonts: dict,
+    entered: tuple,
+) -> None:
+    """Feed `machine` the text of `owner`, forms where they are drawn."""
+    for instruction in pikepdf.parse_content_stream(owner):
+        if isinstance(instruction, pikepdf.ContentStreamInlineImage):
+            continue
+        op = str(instruction.operator)
+        if op not in _TEXT_OPERATORS:
+            continue
+        values = _operands(op, instruction.operands)
+        if op == "q":
+            machine.save()
+        elif op == "Q":
+            machine.restore()
+        elif op == "cm":
+            machine.concat(tuple(values))
+        elif op == "BT":
+            machine.begin()
+        elif op == "Tc":
+            machine.char_spacing(values[0])
+        elif op == "Tw":
+            machine.word_spacing(values[0])
+        elif op == "Tz":
+            machine.horizontal_scaling(values[0])
+        elif op == "TL":
+            machine.leading(values[0])
+        elif op == "Tr":
+            machine.render_mode(values[0])
+        elif op == "Ts":
+            machine.rise(values[0])
+        elif op == "Tf":
+            machine.font(_font(values[0], context, fonts), values[1])
+        elif op in ("Td", "TD"):
+            if op == "TD":
+                machine.leading(-values[1])
+            machine.move(values[0], values[1])
+        elif op == "Tm":
+            machine.set_matrix(tuple(values))
+        elif op == "T*":
+            machine.next_line()
+        elif op == "Tj":
+            machine.show(values[0])
+        elif op == "'":
+            machine.next_line()
+            machine.show(values[0])
+        elif op == '"':
+            machine.word_spacing(values[0])
+            machine.char_spacing(values[1])
+            machine.next_line()
+            machine.show(values[2])
+        elif op == "TJ":
+            for item in values[0]:
+                if isinstance(item, bytes):
+                    machine.show(item)
+                else:
+                    machine.adjust(item)
+        elif op == "Do":
+            _draw_form(values[0], context, depth, machine, fonts, entered)
+
+
+def _draw_form(
+    name: pikepdf.Name,
+    context: _Context,
+    depth: int,
+    machine: TextMachine,
+    fonts: dict,
+    entered: tuple,
+) -> None:
+    """Do: a form's text, where it is drawn; any other XObject has none."""
+    drawn, _ = context.lookup("/XObject", name)
+    if not (isinstance(drawn, pikepdf.Stream) and _subtype_is(drawn.get("/Subtype"), b"Form")):
+        return
+    if drawn.objgen in entered:
+        raise TextUnread("invalid-in-file", "a form draws itself")
+    if depth >= _FORM_DEPTH:
+        raise TextUnread("unreadable", f"a form lies deeper than {_FORM_DEPTH} levels")
+    matrix = drawn.get("/Matrix")
+    if matrix is None:
+        values = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+    elif isinstance(matrix, pikepdf.Array) and len(matrix) == 6:
+        values = [_number(item) for item in matrix]
+    else:
+        values = [None]
+    if any(value is None for value in values):
+        raise TextUnread("invalid-in-file", "a form whose /Matrix is not six numbers")
+    machine.begin_form(tuple(values))
+    _read_text(drawn, context.drawing(drawn), depth + 1, machine, fonts, (*entered, drawn.objgen))
+    machine.end_form()
+
+
+def _font(name: pikepdf.Name, context: _Context, fonts: dict) -> Font:
+    """The font Tf names, read once for each font object."""
+    found, holder = context.lookup("/Font", name)
+    dictionary = _dict_of(found)
+    if dictionary is None:
+        raise TextUnread("invalid-in-file", "Tf names a font the resources do not hold")
+    key = dictionary.objgen if dictionary.is_indirect else (holder, bytes(name))
+    if key not in fonts:
+        try:
+            fonts[key] = font_of(_font_entries(dictionary))
+        except FontNotRead as error:
+            raise TextUnread("not-read", str(error)) from None
+        except FontInvalid as error:
+            raise TextUnread("invalid-in-file", str(error)) from None
+    return fonts[key]
+
+
+def _name_or_none(value: object) -> bytes | None:
+    return _name_bytes(value) if isinstance(value, pikepdf.Name) else None
+
+
+def _numbers_of(value: object) -> tuple[float, ...] | None:
+    """An array of numbers as floats; None for anything else."""
+    if not isinstance(value, pikepdf.Array):
+        return None
+    numbers = tuple(_number(item) for item in value)
+    return None if any(n is None for n in numbers) else numbers  # type: ignore[return-value]
+
+
+def _font_entries(font: pikepdf.Dictionary) -> FontEntries:
+    """The entries of a font dictionary the text of TextRules.V2 reads."""
+    entries: dict = {"subtype": _name_or_none(font.get("/Subtype"))}
+    entries["base_font"] = _name_or_none(font.get("/BaseFont"))
+    invalid: str | None = None
+
+    def wrong(entry: str) -> None:
+        nonlocal invalid
+        invalid = invalid or f"a font whose {entry} ISO 32000-1 does not allow"
+
+    descriptor_owner = font
+    if entries["subtype"] == b"Type0":
+        descendants = font.get("/DescendantFonts")
+        if not isinstance(descendants, pikepdf.Array) or len(descendants) != 1:
+            wrong("/DescendantFonts")
+            descendant = None
+        else:
+            descendant = _dict_of(descendants[0])
+            if descendant is None:
+                wrong("/DescendantFonts")
+        if descendant is not None:
+            descriptor_owner = descendant
+            entries["descendant"] = _name_or_none(descendant.get("/Subtype"))
+            dw = descendant.get("/DW")
+            if dw is not None:
+                entries["default_width"] = _number(dw)
+                if entries["default_width"] is None:
+                    wrong("/DW")
+            runs = _cid_widths(descendant.get("/W"))
+            if runs is None:
+                wrong("/W")
+            else:
+                entries["cid_widths"] = runs
+    encoding = font.get("/Encoding")
+    if isinstance(encoding, pikepdf.Name):
+        entries["encoding"] = _name_or_none(encoding)
+    elif isinstance(encoding, pikepdf.Dictionary):
+        entries["encoding_dictionary"] = True
+        base = encoding.get("/BaseEncoding")
+        if base is not None:
+            entries["base_encoding"] = _name_or_none(base)
+            if entries["base_encoding"] is None:
+                wrong("/BaseEncoding")
+        differences = _differences(encoding.get("/Differences"))
+        if differences is None:
+            wrong("/Differences")
+        else:
+            entries["differences"] = differences
+    elif encoding is not None:
+        wrong("/Encoding")
+    for key, entry in (("first_char", "/FirstChar"), ("last_char", "/LastChar")):
+        value = font.get(entry)
+        if value is not None:
+            if isinstance(value, int) and not isinstance(value, bool):
+                entries[key] = value
+            else:
+                wrong(entry)
+    widths = font.get("/Widths")
+    if widths is not None:
+        entries["widths"] = _numbers_of(widths)
+        if entries["widths"] is None:
+            wrong("/Widths")
+    if entries["subtype"] == b"Type3":
+        entries["font_matrix"] = _numbers_of(font.get("/FontMatrix"))
+        entries["font_box"] = _numbers_of(font.get("/FontBBox"))
+    descriptor = _dict_of(descriptor_owner.get("/FontDescriptor"))
+    if descriptor is not None:
+        flags = descriptor.get("/Flags")
+        if flags is not None:
+            if isinstance(flags, int) and not isinstance(flags, bool):
+                entries["flags"] = flags
+            else:
+                wrong("/Flags")
+        for key, entry in (
+            ("missing_width", "/MissingWidth"),
+            ("ascent", "/Ascent"),
+            ("descent", "/Descent"),
+        ):
+            value = descriptor.get(entry)
+            if value is not None:
+                entries[key] = _number(value)
+                if entries[key] is None:
+                    wrong(entry)
+        entries["embedded"] = any(
+            descriptor.get(key) is not None for key in ("/FontFile", "/FontFile2", "/FontFile3")
+        )
+        program = descriptor.get("/FontFile")
+        if isinstance(program, pikepdf.Stream):
+            data = program.read_bytes()
+            clear = program.get("/Length1")
+            if isinstance(clear, int) and not isinstance(clear, bool) and 0 < clear <= len(data):
+                data = data[:clear]
+            entries["type1_program"] = data
+    to_unicode = font.get("/ToUnicode")
+    if isinstance(to_unicode, pikepdf.Stream):
+        entries["to_unicode"] = to_unicode.read_bytes()
+    return FontEntries(**entries, invalid=invalid)
+
+
+def _differences(value: object) -> tuple[tuple[int, bytes], ...] | None:
+    """/Differences as (code, glyph name); () where absent, None where it is
+    not an array of integers and names that starts with an integer."""
+    if value is None:
+        return ()
+    if not isinstance(value, pikepdf.Array):
+        return None
+    out: list[tuple[int, bytes]] = []
+    code: int | None = None
+    for item in value:
+        if isinstance(item, int) and not isinstance(item, bool):
+            code = item
+        elif isinstance(item, pikepdf.Name) and code is not None:
+            name = _name_bytes(item)
+            if name is None:
+                return None
+            out.append((code, name))
+            code += 1
+        else:
+            return None
+    return tuple(out)
+
+
+def _cid_widths(value: object) -> tuple[tuple[int, int, float], ...] | None:
+    """/W as runs (first, last, width); () where absent, None where it is not
+    written as ISO 32000-1, 9.7.4.3, has it."""
+    if value is None:
+        return ()
+    if not isinstance(value, pikepdf.Array):
+        return None
+    items = list(value)
+    out: list[tuple[int, int, float]] = []
+    i = 0
+    while i < len(items):
+        first = items[i]
+        if not isinstance(first, int) or isinstance(first, bool) or i + 1 >= len(items):
+            return None
+        following = items[i + 1]
+        if isinstance(following, pikepdf.Array):
+            numbers = _numbers_of(following)
+            if numbers is None:
+                return None
+            out.extend((first + k, first + k, width) for k, width in enumerate(numbers))
+            i += 2
+        else:
+            if i + 2 >= len(items) or not isinstance(following, int) or isinstance(following, bool):
+                return None
+            width = _number(items[i + 2])
+            if width is None:
+                return None
+            out.append((first, following, width))
+            i += 3
+    return tuple(out)
 
 
 def _normal_appearances(annot: object, compressed: frozenset[int]) -> list[pikepdf.Stream]:

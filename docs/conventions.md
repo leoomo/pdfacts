@@ -59,6 +59,7 @@ be read, the value is unknown, not 1.
 | --- | --- |
 | advance box | along the writing direction, the extent of PDFium's loose box: as a rule from the origin, or from the ink where it begins before, to the end of the advance, or of the ink where it reaches further; for some glyphs, mostly hyphens in fonts the file embeds, the ink alone. Across, from the font's descent to its ascent at the glyph's size |
 | ink box | tight bounds of the glyph outline |
+| advance box of `TextRules.V2` | along the writing direction, from the origin to the advance the font's width gives; across, from the font's descent to its ascent at the glyph's size, both scaled to span one size where they span less ("Glyphs, words and lines") |
 
 Height from the font's ascent and descent placed the top edge within 0.5 pt of
 the reference for 98.6% of glyphs. The engine's own loose box reached 89.7%.
@@ -93,6 +94,9 @@ The raw characters are kept. Normalized text is provided next to them:
 | --- | --- |
 | U+0002 for a hyphen at the end of a line | U+002D, flagged as a line-end hyphen |
 | a ligature expanded into several characters at one origin | kept as one cluster |
+
+The text of `TextRules.V2` is the font's own mapping, not normalized: a soft
+hyphen stays U+00AD, and a control character the font maps a code to stays.
 
 ## Glyphs, words and lines
 
@@ -194,6 +198,59 @@ annotation appearances.
 that is not upright or from another source of glyphs, gives them through a
 keyword or a function of its own; a field it adds to `Word` or `Line`, such
 as a direction, is added as rule 7 of `docs/architecture.md` allows.
+
+### The glyphs of `TextRules.V2`
+
+`glyphs(document, page_index, rules=TextRules.V2)` gives the glyphs of the
+second rule set; `TextRules.V1`, the default, gives those above. `rules`
+takes the enum or its value, `"v1"` or `"v2"`; any other value raises
+`ValueError`. `words()` and `lines()` give the first rule set's.
+
+A glyph of `TextRules.V2` is one code a text-showing operator of the page's
+content shows (`Tj`, `'`, `"`, `TJ`), white space included, in content order:
+the page's content first, a form's where `Do` draws it. pdfacts reads the
+content on QPDF's tokens and keeps the text state itself (ISO 32000-1, 8.4,
+9.3, 9.4): a form is drawn as `q`, its `/Matrix`, its content and `Q`, down to
+40 levels, and a `Q` of the form restores nothing saved before it; a `Q`
+without its `q` is passed over. A name is looked up in the form's own
+`/Resources`, or in those of where it is drawn where it has none; where these
+hold no dictionary of that kind of name, in the page's, as for the colours of
+paths ("Paths and images"). Nothing is left out: text drawn again stays, and
+nothing is clipped. The procedures of a Type 3 font's glyphs and the
+appearances of annotations are not the page's content. A glyph's index is its
+place among the glyphs of `TextRules.V2`; those of `TextRules.V1` are another
+list.
+
+| Value | Rule |
+| --- | --- |
+| text | the text the font's `/ToUnicode` maps the code to, none where its entry maps it to none; where `/ToUnicode` has no entry for the code, the text of its glyph name. The name is the font's encoding's: `StandardEncoding`, `WinAnsiEncoding` or `MacRomanEncoding`, with `/Differences` over its base, which is the font's own where `/BaseEncoding` names none: a standard 14 font's from its AFM file, an embedded Type 1 program's as its clear-text part declares it, `StandardEncoding` for a font neither embedded nor symbolic (Table 114); Symbol and ZapfDingbats keep their own under `/Differences`, whatever `/Encoding` or `/BaseEncoding` names. A name's text is the Adobe Glyph List specification's: the part before a full stop, its components between underscores each by the ZapfDingbats list (for that font), the glyph list, `uniXXXX` or `uXXXX`. Where the encoding is known and names no glyph for a code 9, 10, 12 or 13, that ASCII white space. Several characters where `/ToUnicode` maps a code to several, as for a ligature. Unknown, `unreadable`, where none of these gives text; `invalid-in-file` where `/ToUnicode` maps the code to bytes that are not UTF-16BE, or where a `bfrange` destination would step past its last byte, which 9.10.3 leaves undefined |
+| origin | where the code is shown: the translation of the text rendering matrix. Unknown, `unreadable`, where it lies beyond what a float holds, as then are the direction, size and box |
+| direction | the angle of the text rendering matrix's x axis |
+| size | the text rendering matrix's area over its length along the baseline |
+| box | the advance box: along the baseline, from the origin to the code's width at the size and the horizontal scaling, without `Tc` and `Tw`; the width is the font's `/Widths` from `/FirstChar`, or `/W`, where `/W` gives a code twice the first, else `/MissingWidth` or `/DW`; a standard 14 font's from its AFM file without `/Widths`; a Type 3 font's through its `/FontMatrix`. Across, from the descent to the ascent at the size: the font descriptor's `/Ascent` and `/Descent`; a standard 14 font's AFM `Ascender` or `Descender` where one is absent, its `FontBBox` where the AFM file gives none; a Type 3 font's `/FontBBox` through its `/FontMatrix`. Where the ascent and the descent span less than one size, both are scaled to span one. Unknown, `unreadable`, where the font gives no ascent or descent; `invalid-in-file` where the ascent is not above the descent |
+| upright | as for `TextRules.V1` |
+| render mode | as `Tr` sets it; `invalid-in-file` outside 0 to 7 |
+| hyphen | whether the glyph's text is a hyphen, `-` or U+00AD, and no glyph after it on its line is other than white space; the lines are those the rules above make of these glyphs |
+
+The text of the page is unknown as a whole:
+
+| Reason | Where |
+| --- | --- |
+| `not-read` | a font of another subtype than Type1, MMType1, TrueType, Type3 and Type0; a Type0 font whose `/Encoding` is not `Identity-H`, vertical writing among them; an encoding of another name than the three above; a Type 3 font whose `/FontMatrix` turns or skews; a code of a standard 14 font without `/Widths` whose glyph its AFM file lacks |
+| `invalid-in-file` | an operator of text, `q`, `Q`, `cm` or `Do` with operands ISO 32000-1 does not allow; text shown before `Tf` sets a font; `Tf` naming a font the resources do not hold; a font entry written against ISO 32000-1, among them `/Widths` without `/FirstChar` or not ending at `/LastChar`, and a simple font or a Type 3 font without `/Widths` that is not a standard 14 font; a form that draws itself; a form whose `/Matrix` is not six numbers |
+| `unreadable` | QPDF warns while it reads the content, or warns that it mis-read an object of the file; QPDF cannot decode a stream the text needs, the content's or a font's; a form deeper than 40 levels |
+
+Where every value from QPDF is unknown ("Object identity"), the glyphs of
+`TextRules.V2` are that unknown. The codes count against
+`max_items_per_page`, white space among them, and `max_forms_per_page` is
+checked first, as for the first rule set. No value takes the C library's
+trigonometry.
+
+Reason: PDFium's text interface leaves out the white space after a label,
+which shapes the line it is on, and its advance boxes reach to the ink. The
+text probe of M4b measured the second rule set's glyphs against the first's
+(`ROADMAP.md`); the box scaled to span one size is the approach of the engine
+the first consumer uses, measured, not copied (`docs/provenance.md`).
 
 ## Appearance streams
 
@@ -388,6 +445,12 @@ policy. It is installed before the first document is opened, and
 Reason: 28 of 104 files gave different glyph facts on macOS and Linux. With
 host fonts ignored, all 104 were identical on macOS arm64, Linux arm64 and
 Linux x86_64, compared at 0.001 pt.
+
+The text of `TextRules.V2` reads no font program but the clear-text part of
+an embedded Type 1 program, for the encoding it declares. The metrics of the
+standard 14 fonts and the glyph names it takes are Adobe's, extracted from the
+Core 14 AFM files and the Adobe Glyph List and shipped with pdfacts
+(`THIRD_PARTY.md`); no host font and no engine font is used.
 
 ## Object identity
 
@@ -763,7 +826,7 @@ What each entry raises (measured, 2026-10-06):
 | `recover()` | the argument errors of `open()`; `EmptyInputError`, `NotPdfError`, `PasswordRequiredError`; `RecoveryFailedError` where QPDF cannot rebuild the file or the result fails a check, never `DamagedFileError`; `LimitExceededError` for `max_bytes`, `max_pages`, `max_objects`, `deadline_seconds`; `EngineError` |
 | `decrypt()` | every error of `open()`, then `NotEncryptedError`, `DecryptionFailedError`, the errors of `pages[i]` for a page of the input, `LimitExceededError` for `deadline_seconds`, `max_items_per_page`, `max_render_pixels`, and `EngineError` |
 | `pages[i]`, iterating `Document.pages` | `TypeError` for an index that is not an `int`, a `bool` or a slice too; `IndexError` outside 0 to `page_count - 1`, a negative index too; `ClosedError`; `DamagedFileError` ("Damaged files"); `LimitExceededError` for `deadline_seconds` and `max_forms_per_page`; `LimitUncheckedError` for `max_forms_per_page`; `EngineError`. A page already given raises only `ClosedError`. Iteration stops at the first page that raises |
-| `widgets()`, `paths()`, `images()`, `glyphs()`, `words()`, `lines()` | `TypeError` where the first argument is no `Document`; the errors of `pages[i]`; `LimitExceededError` for `deadline_seconds`, also for a page already given, and for `max_items_per_page` |
+| `widgets()`, `paths()`, `images()`, `glyphs()`, `words()`, `lines()` | `TypeError` where the first argument is no `Document`; the errors of `pages[i]`; `LimitExceededError` for `deadline_seconds`, also for a page already given, and for `max_items_per_page`; for `glyphs()`, `ValueError` where `rules` is neither a `TextRules` nor one's value |
 | `fields()`, `inspect()` | `TypeError` where the argument is no `Document`; `ClosedError`; `LimitExceededError` for `deadline_seconds`; `EngineError` |
 | `Page.render()` | `ClosedError`; `TypeError` for a scale that is not a number or a region that is not a `Rect`; `ValueError` for a scale that is not finite and above 0, a colour that is no `Colour`, a region without area on the page, a page of more pixels than PDFium addresses at this scale, or less than a pixel left; `LimitExceededError` for `max_render_pixels`; `EngineError` |
 | `Document.page_count`, `object_count`, `pages`, entering `with`; `Page.index`, `ref`, `geometry` | `ClosedError` |

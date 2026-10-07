@@ -79,6 +79,7 @@ from pdfacts.inspection.report import (
 from pdfacts.text.glyphs import Glyph
 from pdfacts.text.layout import Line, Word
 from pdfacts.text.reader import glyphs, lines, words
+from pdfacts.text.rules import TextRules
 
 # The version of the installed distribution, which pyproject.toml gives.
 __version__ = _metadata.version("pdfacts")
@@ -158,6 +159,7 @@ __all__ = [
     "SegmentKind",
     "ShapeKind",
     "Subpath",
+    "TextRules",
     "Unknown",
     "UnknownReason",
     "UnsupportedError",
