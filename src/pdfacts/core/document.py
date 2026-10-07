@@ -356,6 +356,9 @@ class Document:
         # Pages whose count passed max_forms_per_page; QPDF counts each once.
         self._forms_passed: set[int] = set()
         self._read: dict[int, Page] = {}
+        # The text reader's last page: the page and the rule set, and its
+        # glyphs, words and lines.
+        self._last_text: tuple[object, object] | None = None
         self._pages = Pages(self)
         self._closed = False
         # A document dropped without close() is closed under the engine lock,
@@ -408,6 +411,7 @@ class Document:
             # finalizer stays until the engines have closed the document, so
             # that a close interrupted before that is still finished.
             self._closed = True
+            self._last_text = None
             if not self._finalizer.alive:
                 return
             failures: list[EngineError] = []
