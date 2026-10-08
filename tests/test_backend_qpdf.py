@@ -28,7 +28,7 @@ from pdfacts.backends.protocols import (
 )
 from pdfacts.backends.qpdf import QpdfDocument, rewrite_recovered
 from synthetic import cases
-from synthetic.builder import PageSpec, build, document, stream
+from synthetic.builder import FONT_OBJECT, PageSpec, build, document, stream
 
 CATALOG = b"<< /Type /Catalog /Pages 2 0 R >>"
 
@@ -608,6 +608,16 @@ def test_after_close_every_method_fails_and_close_does_nothing(monkeypatch):
         assert (raised.value.kind, raised.value.detail) == (FailureKind.OTHER, "closed")
     document_.close()
     assert len(engine_closes) == 2
+
+
+def test_close_drops_the_fonts_read_for_the_text_of_the_pages():
+    data = document([PageSpec(b"", b"BT /F1 10 Tf 0 0 Td (A) Tj ET")])
+    document_ = opened(data)
+    assert [g.text for g in document_.page_content_text(0, None).glyphs] == ["A"]
+    # The font of the page, kept by the object of its dictionary.
+    assert list(document_._fonts) == [(FONT_OBJECT, 0)]
+    document_.close()
+    assert document_._fonts == {}
 
 
 def test_close_closes_the_second_view_when_the_first_fails(monkeypatch):

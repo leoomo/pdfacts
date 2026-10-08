@@ -5,8 +5,10 @@ A constructor checks every value a caller gives it. For the values pdfacts
 computes, the computation already holds what the checks would: the reader
 passes floats it computed, in the order the fact states. Only finiteness is
 not held by the computation, and `point` and `rect` check it, raising what
-the constructors raise. A caller who makes a fact goes through the
-constructor and keeps every check. ROADMAP.md, M4b.
+the constructors raise; a caller that has already found its floats finite
+makes a point with `finite_point`, which does not check again. A caller who
+makes a fact goes through the constructor and keeps every check. ROADMAP.md,
+M4b.
 """
 
 from __future__ import annotations
@@ -35,6 +37,11 @@ def _finite(value: float, name: str) -> float:
 def point(x: float, y: float) -> Point:
     """Point(x, y) of two floats pdfacts computed."""
     return made(Point, x=_finite(x, "x"), y=_finite(y, "y"))
+
+
+def finite_point(x: float, y: float) -> Point:
+    """Point(x, y) of two floats the caller has found finite, which is not checked again."""
+    return made(Point, x=x + 0.0, y=y + 0.0)  # turns -0.0 into 0.0, as _finite does
 
 
 def rect(x0: float, y0: float, x1: float, y1: float) -> Rect:
