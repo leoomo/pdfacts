@@ -1,7 +1,7 @@
 """Compare gate receipts: what each platform read, and whether it agrees.
 
-Takes two or more receipts that one gate wrote (m1.py, m4a.py or m5a.py,
-named in the receipt), refuses those that would not answer the question
+Takes two or more receipts that one gate wrote (m1.py, m4a.py, m4b.py or
+m5a.py, named in the receipt), refuses those that would not answer the question
 (partial, another gate, other engines, another commit, no file), prints the
 numbers of each receipt and one table over the files of all receipts
 together, and says with its exit status whether every cell is identical.
@@ -61,6 +61,24 @@ GATES = {
         ),
         failed=("pdfium_differences", str, "pages whose characters differ from PDFium's"),
         tallies=("unknown", "known", "breaks"),
+    ),
+    "m4b": Gate(
+        counts=(
+            ("page_count", "pages"),
+            ("glyph_count", "glyphs"),
+            ("word_count", "words"),
+            ("line_count", "lines"),
+        ),
+        digests=("glyphs", "words", "lines"),
+        columns=(
+            ("glyphs", ("glyphs",)),
+            ("words", ("words",)),
+            ("lines", ("lines",)),
+            ("agreement", ("agreement", "unknown", "pages_unknown")),
+            ("render", ("render",)),
+        ),
+        failed=("pages_unknown", str, "pages whose text is unknown as a whole"),
+        tallies=("agreement", "unknown", "render"),
     ),
     "m5a": Gate(
         counts=(

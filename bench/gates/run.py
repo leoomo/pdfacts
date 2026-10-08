@@ -1,6 +1,6 @@
 """Run a gate on three platforms and write one receipt per platform.
 
-The gate is one compare.py knows, m1, m4a or m5a: bench/gates/<gate>.py. The
+The gate is one compare.py knows, m1, m4a, m4b or m5a: bench/gates/<gate>.py. The
 dependency group "bench" is installed for each, the libraries a gate compares
 with; the library's own tests run without it (tools/checks.py). The host
 (macOS) runs in a fresh copy of the working tree, Linux arm64 and Linux
