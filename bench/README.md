@@ -73,24 +73,26 @@ installed the font policy. What is there:
 | --- | --- |
 | `digest.py` | SHA-256 over int, float and str values; the module states the encoding |
 | `gates/m1.py` | reads the corpus and writes one receipt: per file a geometry digest, a glyph digest, counts, warnings |
-| `gates/compare.py` | compares two or more receipts of one gate, the M1, the M4a or the M5a gate, prints one table per file and column: identical, differs, missing, error |
+| `gates/compare.py` | compares two or more receipts of one gate, the M1, the M4a, the M4b or the M5a gate, prints one table per file and column: identical, differs, missing, error |
 | `gates/m2.py`, `gates/m2_referee.py` | the M2 gate: the widgets and fields of the corpus, against a referee that reads the dictionaries with pikepdf |
 | `gates/m3.py` | the M3 gate: the paths and images of the corpus, read twice, their numbers against PDFium's own |
 | `gates/m4a.py` | the M4a gate: the glyphs, words and lines of the corpus, digested for comparing platforms, their characters against PDFium's own count, and what the rule set leaves out or may get wrong, counted |
+| `gates/m4b.py` | the M4b gate: the glyphs, words and lines of `TextRules.V2` of the corpus, digested for comparing platforms; PDFium's characters looked for among the glyphs at the same origin, and what V2 has that PDFium leaves out, counted apart; the word boxes measured against a rendering of the text alone, for the boxes of V2 and for the boxes of the font descriptor's height |
+| `gates/m4b_time.py` | the time gate of M4b, on the host alone: the processor time per file of PyMuPDF's text extraction, of `pdfacts.open` to the page's lines with `TextRules.V2`, and with the default rules |
 | `gates/m5a.py` | the M5a gate: what `pdfacts.inspect()` finds, checked with pikepdf; the encrypted files decrypted, and read and written by pypdf and PyMuPDF; faults introduced into the results of `decrypt()` and `recover()` |
 
-The M2, M3, M4a and M5a gates take the same `--commit`, `--out`, `--only`
-and `--corpus` as the M1 gate and refuse a run on the same grounds; the font
-policy is checked by the M4a and M5a gates as well, not by the M2 and M3
-gates, which run on one machine. The M5a gate reads with pypdf and PyMuPDF,
+The M2, M3, M4a, M4b and M5a gates take the same `--commit`, `--out`,
+`--only` and `--corpus` as the M1 gate and refuse a run on the same grounds;
+the font policy is checked by the M4a, M4b and M5a gates as well, not by the
+M2 and M3 gates, which run on one machine. The M5a gate reads with pypdf and PyMuPDF,
 the dependency group `bench`, and refuses a run without it:
 
 ```bash
 uv run --group bench python bench/gates/m5a.py --commit "$(git rev-parse HEAD)" --out bench/out/m5a-manual.json
 ```
 
-The rest of this section is about the M1 gate; the M4a and M5a gates run on
-three platforms and are compared the same way.
+The rest of this section is about the M1 gate; the M4a, M4b and M5a gates run
+on three platforms and are compared the same way.
 
 Run the gate on one machine, from the repository root, with the corpus in
 place (`bench/corpus/fetch.py --verify-only` reports `104 files: ok 104`):
@@ -126,7 +128,7 @@ never a warning text.
 python3 bench/gates/run.py m1
 ```
 
-`run.py` takes the gate, `m1`, `m4a` or `m5a`, and runs
+`run.py` takes the gate, `m1`, `m4a`, `m4b` or `m5a`, and runs
 `bench/gates/<gate>.py` on
 macOS natively (in a fresh copy of the working tree) and in the Linux arm64
 and Linux x86_64 containers of `tools/checks.py`, all three over the same
@@ -161,6 +163,55 @@ differ from PDFium's and the pages not compared:
 ```bash
 uv run python bench/gates/compare.py bench/out/m4a-darwin-arm64.json bench/out/m4a-linux-arm64.json bench/out/m4a-linux-amd64.json
 ```
+
+For the M4b gate, `python3 bench/gates/run.py m4b` writes
+`m4b-darwin-arm64.json`, `m4b-linux-arm64.json` and `m4b-linux-amd64.json`.
+The comparison has a column for each of the glyph, the word and the line
+digests of `TextRules.V2`, one for the agreement with PDFium's characters (the
+classes, the unknown values and the pages unknown as a whole) and one for the
+word boxes measured against the rendering. PDFium's characters are looked for
+among the glyphs of V2 white space included. The rendering is PDFium's on each
+platform, rounded up to whole pixels with the page stretched over them, and
+points are mapped by that scale; the last column says also whether the three
+platforms render the text alone to the same counts. The gate reads the images with numpy and scipy,
+pinned in the dependency group `dev`, which `uv sync` installs; their versions
+are in the receipt's `engine_info`, and a comparison of receipts made with
+other versions is refused. The gate prints the totals, the classes of the
+agreement, the counts of the word boxes for both heights, and two verdict
+lines, `word boxes correct: N of M (x.xx%), at least 99%: yes/no` and `the
+descriptor's height does better: yes/no`. It exits 0 only when no file had an
+error, no page's text was unknown as a whole, the rendering of every page was
+mapped as PDFium maps it, at least 99% of the word boxes judged were correct,
+and the descriptor's height does not do better; where it does, the gate exits
+1, since the question goes back to the maintainer (`ROADMAP.md`, M4b). A word
+box is judged unless all the glyphs of its word are invisible, which take no
+ink; a visible word with no ink of its own is judged and not correct, and
+counted apart.
+
+```bash
+uv run python bench/gates/compare.py bench/out/m4b-darwin-arm64.json bench/out/m4b-linux-arm64.json bench/out/m4b-linux-amd64.json
+```
+
+The time gate of M4b is run on the host alone, on a quiet machine: look at
+`uptime` and `top` first, and leave the machine alone while it runs. It needs
+PyMuPDF from the group `bench`, imported where it is used, and refuses a run
+without it. For each file it takes turns, for `--rounds` rounds (5 if not
+given), between PyMuPDF's text page (its dict, raw dict and words), `pdfacts`
+from `open` to the lines of every page with `TextRules.V2`, and the same with
+the default rules, and keeps the fastest processor time of each:
+
+```bash
+uv run --group bench python bench/gates/m4b_time.py --commit "$(git rev-parse HEAD)" --out bench/out/m4b-time-manual.json
+```
+
+It prints a line for each file with the three times, then the medians of the
+three, the ratios over PyMuPDF's of the medians and the medians of the ratios
+per file, the files where V2 takes more than 1.5 times as long, and the verdict
+line `median time per file, ratio of the medians: x.xxx, at most 1.5: yes/no;
+median of the ratios per file: y.yyy`. It exits 0 only when no file had an
+error, at least one file was timed and that ratio is at most 1.5. Its receipt
+names the gate `m4b-time`; `compare.py` does not compare it, since times differ
+from run to run.
 
 For the M5a gate, `python3 bench/gates/run.py m5a` installs the group
 `bench` on each platform and writes `m5a-darwin-arm64.json`,
