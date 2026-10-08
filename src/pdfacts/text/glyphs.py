@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 from pdfacts.backends.protocols import ContentGlyph, TextCharacter
 from pdfacts.core.geometry import Point, Quad, _finite_float
-from pdfacts.core.made import made, point, quad
+from pdfacts.core.made import finite_point, made, point, quad
 from pdfacts.core.refs import GlyphRef, _is_int
 from pdfacts.core.values import Unknown, UnknownReason
 from pdfacts.text.angles import degrees_of
@@ -262,7 +262,9 @@ def _content_glyph(page_index: int, index: int, rotation: int, code: ContentGlyp
         text = Unknown(_UNREADABLE, "the font maps the code to no text")
     a, b, c, d, e, f = code.matrix
     beyond = Unknown(_UNREADABLE, "the glyph lies beyond what a float holds")
-    origin: Point | Unknown = point(e, f) if math.isfinite(e) and math.isfinite(f) else beyond
+    origin: Point | Unknown = (
+        finite_point(e, f) if math.isfinite(e) and math.isfinite(f) else beyond
+    )
     length = math.hypot(a, b)
     area = abs(a * d - b * c)
     direction: float | Unknown
@@ -325,4 +327,4 @@ def _content_box(
     ]
     if not all(math.isfinite(x) and math.isfinite(y) for x, y in corners):
         return Unknown(_UNREADABLE, "the glyph lies beyond what a float holds")
-    return quad(*(point(x, y) for x, y in corners))
+    return quad(*(finite_point(x, y) for x, y in corners))

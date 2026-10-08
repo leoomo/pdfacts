@@ -17,11 +17,11 @@ from pathlib import Path
 import pytest
 
 import pdfacts
-from pdfacts.backends.protocols import TextCharacter
+from pdfacts.backends.protocols import ContentGlyph, TextCharacter
 from pdfacts.core.geometry import Point, Quad, Rect
-from pdfacts.core.made import made, point, quad, rect
+from pdfacts.core.made import finite_point, made, point, quad, rect
 from pdfacts.core.refs import GlyphRef
-from pdfacts.text.glyphs import Glyph, glyphs_of
+from pdfacts.text.glyphs import Glyph, content_glyphs_of, glyphs_of
 from pdfacts.text.layout import Line, Word, words_and_lines
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -51,6 +51,27 @@ def assert_as_constructed(facts) -> None:
 def test_point_is_the_constructors():
     assert point(1.5, -2.0) == Point(1.5, -2.0)
     assert repr(point(-0.0, 3.0)) == repr(Point(-0.0, 3.0)) == "Point(x=0.0, y=3.0)"
+
+
+def test_finite_point_is_the_constructors_for_what_is_finite():
+    found = finite_point(1.5, -2.0)
+    assert type(found) is Point
+    assert (found.x, found.y) == (1.5, -2.0)
+    assert found == Point(1.5, -2.0)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        found.x = 3.0  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    ("x", "y", "written"),
+    [
+        (-0.0, 3.0, "Point(x=0.0, y=3.0)"),
+        (3.0, -0.0, "Point(x=3.0, y=0.0)"),
+        (-0.0, -0.0, "Point(x=0.0, y=0.0)"),
+    ],
+)
+def test_finite_point_turns_negative_zero_into_zero_as_the_constructor(x, y, written):
+    assert repr(finite_point(x, y)) == repr(Point(x, y)) == written
 
 
 @pytest.mark.parametrize("bad", [math.inf, -math.inf, math.nan])
@@ -135,6 +156,68 @@ def test_glyphs_words_and_lines_are_as_constructed(seed):
     assert_as_constructed(lines)
     assert all(type(g) is Glyph for g in glyphs)
     assert all(type(w) is Word for w in words) and all(type(x) is Line for x in lines)
+
+
+def content_glyph(matrix) -> ContentGlyph:
+    return ContentGlyph(
+        text="A",
+        text_invalid=False,
+        matrix=matrix,
+        width=0.5,
+        ascent=0.9,
+        descent=-0.2,
+        heights_invalid=None,
+        render_mode=0,
+    )
+
+
+@pytest.mark.parametrize(("e", "f"), [(-0.0, 5.0), (5.0, -0.0), (-0.0, -0.0)])
+@pytest.mark.parametrize(
+    "turn", [(1.0, 0.0, 0.0, 1.0), (-1.0, 0.0, 0.0, -1.0), (0.0, 1.0, -1.0, 0.0)]
+)
+def test_a_content_glyph_at_negative_zero_is_as_constructed(e, f, turn):
+    """The origin, whose -0.0 is 0.0 as the constructor makes it; no corner can be -0.0."""
+    (glyph,) = content_glyphs_of(0, 0, [content_glyph((*turn, e, f))])
+    assert glyph.origin == Point(e, f)
+    assert repr(glyph.origin) == repr(Point(e, f))
+    assert isinstance(glyph.box, Quad)
+    assert_as_constructed([glyph])
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        {"origin": (math.inf, 0.0)},
+        {"origin": (0.0, math.nan)},
+        # With no matrix there is no box to compute, so only the origin is checked.
+        {"origin": (math.inf, 0.0), "matrix": None},
+        {"origin": (0.0, math.nan), "matrix": None},
+        # The far end of the box lies beyond what a float holds.
+        {"origin": (-1.7e308, 0.0), "loose_box": (1.7e308, -2.0, 1.7e308, 7.0)},
+    ],
+    ids=[
+        "an infinite origin",
+        "an origin that is not a number",
+        "an infinite origin and no box",
+        "an origin that is not a number and no box",
+        "a box beyond a float",
+    ],
+)
+def test_the_reader_of_pdfiums_text_still_refuses_what_is_not_finite(changed):
+    values = {
+        "code": 0x41,
+        "map_error": False,
+        "hyphen": False,
+        "origin": (0.0, 0.0),
+        "matrix": (1.0, 0.0, 0.0, 1.0, 0.0, 0.0),
+        "font_size": 10.0,
+        "loose_box": (0.0, -2.0, 5.0, 7.0),
+        "ascent": 0.9,
+        "descent": -0.2,
+        "render_mode": 0,
+    }
+    with pytest.raises(ValueError, match="must be finite"):
+        glyphs_of(0, 0, [TextCharacter(**{**values, **changed})])
 
 
 def page(content: bytes, rotate: int = 0) -> bytes:

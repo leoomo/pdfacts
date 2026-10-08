@@ -353,6 +353,12 @@ class QpdfDocument:
         self._known_warnings: set[str] = set()
         # The numbers of the compressed objects, read once (parsed_streams).
         self._compressed_objects: frozenset[int] | None = None
+        # The fonts the text of the last page read used, whose dictionaries
+        # are indirect objects, by those objects: the next page takes them
+        # instead of reading them again. Replaced at the end of each page
+        # (page_content_text) and dropped at close(), so that the fonts held
+        # are those of one page, not those of the document (_PageFonts).
+        self._fonts: dict[tuple[int, int], Font] = {}
         # The input, for the view of structure().
         self._data = data
         self._password = password
@@ -839,7 +845,8 @@ class QpdfDocument:
         reads the content or an object (the reason "unreadable"), where the
         content writes an operator of text, or a font, as ISO 32000-1 does not
         allow ("invalid-in-file"), and where it uses a font or a part of one
-        pdfacts does not read ("not-read"). Stopped beyond `cap` codes.
+        pdfacts does not read ("not-read"). Stopped beyond `cap` codes. The fonts
+        the page used are kept for the next page, and no others (_PageFonts).
         """
         self._check_open()
         objgen = self._annotated_page(index)
@@ -851,32 +858,39 @@ class QpdfDocument:
             self.warnings()
             misread = self._misread()
             machine = TextMachine(cap)
-            # pikepdf repeats some of QPDF's warnings about the content as
-            # Python warnings; QPDF's queue, read below, holds them too. They
-            # are kept from the caller.
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                try:
-                    _read_text(joined._page_content(page), top, 0, machine, {}, ())
-                except TooMany:
-                    return ContentText(tuple(machine.glyphs[:cap]), True, None)
-                except TextUnread as unread:
-                    return ContentText((), False, (unread.reason, unread.detail))
-                except pikepdf.PdfError as error:
+            fonts = _PageFonts(self._fonts, self._heard)
+            try:
+                # pikepdf repeats some of QPDF's warnings about the content as
+                # Python warnings; QPDF's queue, read below, holds them too.
+                # They are kept from the caller.
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    try:
+                        _read_text(joined._page_content(page), top, 0, machine, fonts, ())
+                    except TooMany:
+                        return ContentText(tuple(machine.glyphs[:cap]), True, None)
+                    except TextUnread as unread:
+                        return ContentText((), False, (unread.reason, unread.detail))
+                    except pikepdf.PdfError as error:
+                        return ContentText(
+                            (),
+                            False,
+                            ("unreadable", f"QPDF cannot read a stream the text needs: {error}"),
+                        )
+                if self._heard() or fonts.heard or joined._scratch.get_warnings():
+                    return ContentText(
+                        (), False, ("unreadable", "QPDF warns while it reads the content")
+                    )
+                if misread:
                     return ContentText(
                         (),
                         False,
-                        ("unreadable", f"QPDF cannot read a stream the text needs: {error}"),
+                        ("unreadable", "QPDF warns that it mis-read an object of the file"),
                     )
-            if self._heard() or joined._scratch.get_warnings():
-                return ContentText(
-                    (), False, ("unreadable", "QPDF warns while it reads the content")
-                )
-            if misread:
-                return ContentText(
-                    (), False, ("unreadable", "QPDF warns that it mis-read an object of the file")
-                )
-            return ContentText(tuple(machine.glyphs), False, None)
+                return ContentText(tuple(machine.glyphs), False, None)
+            finally:
+                # However the page ended, the document keeps the fonts it used.
+                self._fonts = fonts.kept
 
     def _heard(self) -> bool:
         """Whether QPDF gave a warning since its queue was last drained, about
@@ -980,6 +994,7 @@ class QpdfDocument:
         if self._closed:
             return
         self._closed = True
+        self._fonts.clear()
         try:
             with _translated():
                 self._walked.close()
@@ -2338,7 +2353,7 @@ def _read_text(
     context: _Context,
     depth: int,
     machine: TextMachine,
-    fonts: dict,
+    fonts: _PageFonts,
     entered: tuple,
 ) -> None:
     """Feed `machine` the text of `owner`, forms where they are drawn."""
@@ -2404,7 +2419,7 @@ def _draw_form(
     context: _Context,
     depth: int,
     machine: TextMachine,
-    fonts: dict,
+    fonts: _PageFonts,
     entered: tuple,
 ) -> None:
     """Do: a form's text, where it is drawn; any other XObject has none."""
@@ -2429,21 +2444,74 @@ def _draw_form(
     machine.end_form()
 
 
-def _font(name: pikepdf.Name, context: _Context, fonts: dict) -> Font:
-    """The font Tf names, read once for each font object."""
+class _PageFonts:
+    """The fonts the text of one page uses, and whether QPDF warned while the
+    page's text was read.
+
+    A font whose dictionary is an indirect object, read while QPDF gave no
+    warning, is clean. The clean fonts the page uses are `kept`: those it
+    reads, and those it finds in `shared`, which holds the fonts the page
+    before it used. The document keeps `kept` in place of `shared` when the
+    page ends, so a font is read once for as long as consecutive pages use
+    it, and the fonts held are those of one page.
+
+    A direct dictionary is read once for the page, by the resources that hold
+    it, and kept in `own`; so is an indirect one that was read while QPDF
+    warned. A page is unreadable where QPDF warns while its text is read
+    (page_content_text), so such a font is not passed to the next page:
+    every page that uses it reads it again, once, and is as unreadable as
+    it was when each page read its fonts. `heard` is whether QPDF warned
+    between the start of the page's read and the end of the last font read;
+    a warning after that is asked for when the page ends.
+    """
+
+    __slots__ = ("shared", "kept", "own", "heard", "listen")
+
+    def __init__(self, shared: dict[tuple[int, int], Font], listen: Callable[[], bool]) -> None:
+        self.shared = shared
+        self.kept: dict[tuple[int, int], Font] = {}
+        self.own: dict[tuple, Font] = {}
+        self.heard = False
+        # Whether QPDF warned since it was last asked; the warnings are
+        # collected (QpdfDocument._heard).
+        self.listen = listen
+
+
+def _font(name: pikepdf.Name, context: _Context, fonts: _PageFonts) -> Font:
+    """The font Tf names. An indirect font read clean is read once while
+    consecutive pages use it; a direct one, and one read while QPDF warned,
+    once for each page."""
     found, holder = context.lookup("/Font", name)
     dictionary = _dict_of(found)
     if dictionary is None:
         raise TextUnread("invalid-in-file", "Tf names a font the resources do not hold")
-    key = dictionary.objgen if dictionary.is_indirect else (holder, bytes(name))
-    if key not in fonts:
-        try:
-            fonts[key] = font_of(_font_entries(dictionary))
-        except FontNotRead as error:
-            raise TextUnread("not-read", str(error)) from None
-        except FontInvalid as error:
-            raise TextUnread("invalid-in-file", str(error)) from None
-    return fonts[key]
+    indirect = dictionary.is_indirect
+    # The key of an indirect dictionary is its object number and generation,
+    # two ints; that of a direct one is the key of the resources that hold it
+    # and its name. The two kinds do not meet.
+    key = dictionary.objgen if indirect else (holder, bytes(name))
+    if key in fonts.kept:
+        return fonts.kept[key]
+    if key in fonts.shared:
+        fonts.kept[key] = fonts.shared[key]
+        return fonts.kept[key]
+    if key in fonts.own:
+        return fonts.own[key]
+    # What QPDF said until now is the page's, not this font's.
+    fonts.heard |= fonts.listen()
+    try:
+        font = font_of(_font_entries(dictionary))
+    except FontNotRead as error:
+        raise TextUnread("not-read", str(error)) from None
+    except FontInvalid as error:
+        raise TextUnread("invalid-in-file", str(error)) from None
+    warned = fonts.listen()
+    fonts.heard |= warned
+    if indirect and not warned:
+        fonts.kept[key] = font
+    else:
+        fonts.own[key] = font
+    return font
 
 
 def _name_or_none(value: object) -> bytes | None:
