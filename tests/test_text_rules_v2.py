@@ -12,13 +12,16 @@ from __future__ import annotations
 
 import dataclasses
 import math
+import struct
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 
 import pdfacts
 from pdfacts import Glyph, LimitExceededError, Limits, Quad, TextRules, Unknown, UnknownReason
+from pdfacts.backends import qpdf as qpdf_backend
 
 sys.path.insert(0, str(Path(__file__).parent))
 from synthetic.builder import build, build_with_object_stream, stream  # noqa: E402
@@ -520,6 +523,193 @@ def test_every_value_from_qpdf_unknown_leaves_the_text_unknown():
         found = pdfacts.glyphs(document, 0, rules=TextRules.V2)
         assert found == document._qpdf_unknown
         assert found.reason is UnknownReason.INVALID
+
+
+# --- fonts read once for the document ------------------------------------------------
+
+# The data of a /ToUnicode stream, and the same data as a Flate stream that
+# ends before it should: a stored block that promises all its bytes and holds
+# all but three, with no checksum. QPDF decodes what is there and warns, each
+# time it decodes the stream.
+CMAP = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap endcmap end end"
+CUT_FLATE = b"\x78\x01\x01" + struct.pack("<HH", len(CMAP), len(CMAP) ^ 0xFFFF) + CMAP[:-3]
+WITH_TO_UNICODE = (
+    b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding"
+    b" /ToUnicode 7 0 R >>"
+)
+
+
+def pages(
+    contents: Sequence[bytes],
+    *,
+    fonts: Sequence[bytes] | None = None,
+    resources: Sequence[bytes] | None = None,
+    objects: dict[int, bytes] | None = None,
+) -> bytes:
+    """A file with a page for each of `contents`. A page knows /F1 as the
+    indirect font 5, or, with `fonts`, as that page's value for /F1 (a
+    dictionary written in its resources, or another object); with
+    `resources`, its whole /Resources are that page's."""
+    # The pages are the objects from 10, their contents those from 20; the
+    # objects below 10 are the fonts.
+    assert len(contents) < 10
+    numbers = [10 + index for index in range(len(contents))]
+    made: dict[int, bytes] = {
+        1: b"<< /Type /Catalog /Pages 2 0 R >>",
+        2: b"<< /Type /Pages /Kids [%s] /Count %d >>"
+        % (b" ".join(b"%d 0 R" % number for number in numbers), len(contents)),
+        5: HELVETICA,
+        8: TABS,
+        9: TABS_DESCRIPTOR,
+        **(objects or {}),
+    }
+    for index, (number, content) in enumerate(zip(numbers, contents, strict=True)):
+        font = fonts[index] if fonts is not None else b"5 0 R"
+        own = resources[index] if resources is not None else b"<< /Font << /F1 %s >> >>" % font
+        made[number] = (
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents %d 0 R"
+            b" /Resources %s >>" % (number + 10, own)
+        )
+        made[number + 10] = content if content.startswith(b"<<") else stream(content)
+    return build(made, 1)
+
+
+def read_pages(data: bytes, count: int):
+    """glyphs() of the first `count` pages of one document."""
+    with pdfacts.open(data) as document:
+        return [pdfacts.glyphs(document, index, rules=TextRules.V2) for index in range(count)]
+
+
+@pytest.fixture
+def font_reads(monkeypatch):
+    """The fonts the QPDF backend reads: one entry each time it does."""
+    reads: list[object] = []
+    original = qpdf_backend.font_of
+
+    def counting(entries):
+        reads.append(entries)
+        return original(entries)
+
+    monkeypatch.setattr(qpdf_backend, "font_of", counting)
+    return reads
+
+
+def test_an_indirect_font_is_read_once_for_as_many_pages_as_use_it(font_reads):
+    two = b"BT /F1 10 Tf 0 0 Td (AB) Tj ET"
+    found = read_pages(pages([b"BT /F1 10 Tf 0 0 Td (A) Tj ET", two, two]), 3)
+    assert [[g.text for g in page_] for page_ in found] == [["A"], ["A", "B"], ["A", "B"]]
+    # The later pages take A's width, 667 of 1000 at size 10, from the font
+    # the first read.
+    assert [[g.origin.x for g in page_] for page_ in found[1:]] == [[0.0, 6.67]] * 2
+    assert len(font_reads) == 1
+
+
+def test_a_direct_font_is_read_for_each_page(font_reads):
+    widths = (
+        b"<< /Type /Font /Subtype /TrueType /BaseFont /ABCDEF+Tabs /Encoding /WinAnsiEncoding"
+        b" /FirstChar 65 /LastChar 66 /Widths [500 600] /FontDescriptor 9 0 R >>"
+    )
+    show = b"BT /F1 10 Tf 0 0 Td (AB) Tj ET"
+    found = read_pages(pages([show, show], fonts=[HELVETICA, widths]), 2)
+    # Both pages name their font /F1, in resources of the same kind, and each
+    # has its own: A is 667 wide in the first and 500 in the second.
+    assert [[g.origin.x for g in page_] for page_ in found] == [[0.0, 6.67], [0.0, 5.0]]
+    assert len(font_reads) == 2
+
+
+def test_a_font_whose_read_makes_qpdf_warn_is_read_again_by_each_page(font_reads):
+    objects = {5: WITH_TO_UNICODE, 7: stream(CUT_FLATE, b"/Filter /FlateDecode")}
+    show = b"BT /F1 10 Tf 0 0 Td (A) Tj ET"
+    found = read_pages(pages([show, show], objects=objects), 2)
+    # "unreadable", docs/conventions.md: QPDF warns while it reads the content, as it does each
+    # time it decodes the cut stream.
+    warns = Unknown(UnknownReason.UNREADABLE, "QPDF warns while it reads the content")
+    assert found == [warns, warns]
+    assert len(font_reads) == 2
+
+
+def test_a_warning_given_once_while_a_font_was_read_leaves_the_next_page_unreadable(font_reads):
+    # "unreadable", docs/conventions.md: a wrong /Length is a warning that names an object, QPDF
+    # mis-read it; it warns once, as it reads the stream, so the first page hears it while it
+    # reads the content and the next begins with it collected.
+    objects = {5: WITH_TO_UNICODE, 7: b"<< /Length 5 >>\nstream\n" + CMAP + b"\nendstream"}
+    show = b"BT /F1 10 Tf 0 0 Td (A) Tj ET"
+    found = read_pages(pages([show, show], objects=objects), 2)
+    assert found == [
+        Unknown(UnknownReason.UNREADABLE, "QPDF warns while it reads the content"),
+        Unknown(UnknownReason.UNREADABLE, "QPDF warns that it mis-read an object of the file"),
+    ]
+    assert len(font_reads) == 2
+
+
+def test_a_font_whose_read_warns_is_read_once_for_each_page_however_often_tf_names_it(font_reads):
+    objects = {5: WITH_TO_UNICODE, 7: stream(CUT_FLATE, b"/Filter /FlateDecode")}
+    show = b"BT /F1 10 Tf 0 0 Td (A) Tj /F1 12 Tf (B) Tj /F1 14 Tf (C) Tj ET"
+    found = read_pages(pages([show, show], objects=objects), 2)
+    warns = Unknown(UnknownReason.UNREADABLE, "QPDF warns while it reads the content")
+    assert found == [warns, warns]
+    # Two pages, six Tf: one read for each page.
+    assert len(font_reads) == 2
+
+
+TIMES = b"<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman /Encoding /WinAnsiEncoding >>"
+
+
+def test_pages_that_name_different_fonts_by_one_name_read_each_their_own(font_reads):
+    show = b"BT /F1 10 Tf 0 0 Td (AA) Tj ET"
+    found = read_pages(pages([show, show], fonts=[b"5 0 R", b"6 0 R"], objects={6: TIMES}), 2)
+    # The advance of A at size 10, from the AFM files: 667 in Helvetica, 722 in Times-Roman.
+    assert [[round(g.origin.x, 6) for g in page_] for page_ in found] == [[0.0, 6.67], [0.0, 7.22]]
+    assert len(font_reads) == 2
+
+
+def test_one_font_under_two_names_and_in_the_resources_of_a_form_is_read_once(font_reads):
+    inner = form(b"BT /G 10 Tf 0 0 Td (A) Tj ET", b"/Resources << /Font << /G 5 0 R >> >>")
+    show = b"BT /F1 10 Tf 0 0 Td (A) Tj /F9 12 Tf (A) Tj ET /Fm Do"
+    own = b"<< /Font << /F1 5 0 R /F9 5 0 R >> /XObject << /Fm 30 0 R >> >>"
+    found = read_pages(pages([show, show], resources=[own, own], objects={30: inner}), 2)
+    assert [[g.text for g in page_] for page_ in found] == [["A", "A", "A"]] * 2
+    assert len(font_reads) == 1
+
+
+def test_a_direct_font_that_three_tf_name_is_read_once_for_its_page(font_reads):
+    show = b"BT /F1 10 Tf 0 0 Td (A) Tj /F1 12 Tf (A) Tj /F1 14 Tf (A) Tj ET"
+    (found,) = read_pages(pages([show], fonts=[HELVETICA]), 1)
+    assert [g.text for g in found] == ["A", "A", "A"]
+    assert len(font_reads) == 1
+
+
+@pytest.mark.parametrize(
+    ("between", "shown"),
+    [
+        (b"BT ET", ()),
+        (
+            b"BT 5 Tj ET",
+            Unknown(UnknownReason.INVALID, "Tj with operands ISO 32000-1 does not allow"),
+        ),
+        (b"BT ET )", Unknown(UnknownReason.UNREADABLE, "QPDF warns while it reads the content")),
+    ],
+    ids=["no text", "text that is invalid", "content QPDF warns about"],
+)
+def test_a_font_is_kept_for_the_next_page_and_no_longer(font_reads, between, shown):
+    show = b"BT /F1 10 Tf 0 0 Td (A) Tj ET"
+    found = read_pages(pages([show, between, show, show]), 4)
+    assert found[1] == shown
+    assert [[g.text for g in page_] for page_ in (found[0], found[2], found[3])] == [["A"]] * 3
+    # Read for page 0, dropped when page 1 ended without it, read again for
+    # page 2, which page 3 takes over.
+    assert len(font_reads) == 2
+
+
+def test_a_warning_given_before_a_font_is_read_is_the_pages_and_not_the_fonts(font_reads):
+    # The stray ) is read, and warned of, before the first Tf is: "unreadable", docs/conventions.md,
+    # QPDF warns while it reads the content.
+    found = read_pages(
+        pages([b"BT /F1 10 Tf 0 0 Td (A) Tj ET )", b"BT /F1 10 Tf 0 0 Td (B) Tj ET"]), 2
+    )
+    assert found[0] == Unknown(UnknownReason.UNREADABLE, "QPDF warns while it reads the content")
+    assert [g.text for g in found[1]] == ["B"]
+    assert len(font_reads) == 1
 
 
 # --- limits and arguments -----------------------------------------------------------
