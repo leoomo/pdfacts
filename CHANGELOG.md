@@ -15,6 +15,10 @@ may break callers.
 - `rules` of `words()` and `lines()`: with `TextRules.V2`, the words and
   lines of those glyphs, a line's box holding the white space on the line,
   a word's text keeping U+0002 as it is.
+- `TextRules.V3`, and `rules` of `glyphs()`, `words()` and `lines()`: with
+  it the rotated glyphs take part in the words and lines, each line holding
+  one direction; its glyphs are V2's. V1 and V2 are unchanged (decision of
+  the maintainer, 2026-10-09, #137).
 - `annotations(document, page_index)`: the annotations of a page other than
   widgets, with their `/Rect`, `/F`, `/Contents`, `/C` colour and the
   appearance their `/AP` selects, as the convention "Annotations" states.

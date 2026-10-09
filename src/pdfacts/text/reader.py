@@ -3,8 +3,9 @@
 The rules are those of docs/conventions.md, "Glyphs, words and lines". With
 TextRules.V1: the characters PDFium reads from the page's content, in content
 order, made into glyphs, words and lines by pdfacts.text.glyphs and
-pdfacts.text.layout. With TextRules.V2: the codes the content shows, read on
-QPDF's tokens, made into glyphs, words and lines likewise.
+pdfacts.text.layout. From TextRules.V2 on: the codes the content shows, read
+on QPDF's tokens, made into glyphs, words and lines likewise; with
+TextRules.V3 the rotated glyphs take part in the words and lines.
 
 Called one after another, they read a page once for one rule set: the last
 page read is kept with its glyphs, words and lines until another is read or
@@ -69,13 +70,15 @@ def _read(document: Document, page_index: int, rules: TextRules) -> _Read:
         if last is not None and last[0] == key:
             return last[1]  # type: ignore[return-value]
         cap = access.max_items_per_page
-        if rules is TextRules.V2:
+        if rules is not TextRules.V1:
             unknown = access.qpdf_unknown
             content = access.page_content_text(page_index, cap) if unknown is None else None
         else:
             characters = access.page_text(page_index, cap)
-    if rules is TextRules.V2:
-        read = unknown if content is None else _from_content(page_index, rotation, content, cap)
+    if rules is not TextRules.V1:
+        read = (
+            unknown if content is None else _from_content(page_index, rotation, content, cap, rules)
+        )
     else:
         read = _from_pdfium(page_index, rotation, characters, cap)
     document._last_text = (key, read)
@@ -102,17 +105,17 @@ def _from_pdfium(page_index: int, rotation: int, text, cap: int | None) -> _Read
     return found, made_words, made_lines
 
 
-def _from_content(page_index: int, rotation: int, text, cap: int | None) -> _Read:
-    """TextRules.V2: the codes of the content. A glyph is a hyphen at the end
-    of its line where its text is a hyphen or a soft hyphen and no glyph of
-    its line that is not white space comes after it."""
+def _from_content(page_index: int, rotation: int, text, cap: int | None, rules: TextRules) -> _Read:
+    """TextRules.V2 and V3: the codes of the content. A glyph is a hyphen at
+    the end of its line where its text is a hyphen or a soft hyphen and no
+    glyph of its line that is not white space comes after it."""
     if text.stopped:
         raise _stopped(cap)
     if text.unread is not None:
         reason, detail = text.unread
         return Unknown(UnknownReason(reason), detail)
     found = list(content_glyphs_of(page_index, rotation, text.glyphs))
-    made_words, made_lines = words_and_lines(page_index, found, TextRules.V2)
+    made_words, made_lines = words_and_lines(page_index, found, rules)
     for line in made_lines:
         index = made_words[line.words[-1]].glyphs[-1]
         if found[index].text in _HYPHENS:

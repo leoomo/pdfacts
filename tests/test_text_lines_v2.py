@@ -148,7 +148,7 @@ def test_the_first_rule_sets_lines_leave_their_white_space_out():
 def test_a_rule_set_that_is_none(read_with):
     with pdfacts.open(page(b"BT /F1 10 Tf (A) Tj ET")) as document:
         with pytest.raises(ValueError):
-            read_with(document, 0, rules="v3")
+            read_with(document, 0, rules="v4")
 
 
 def test_the_facts_are_those_the_constructors_make():
