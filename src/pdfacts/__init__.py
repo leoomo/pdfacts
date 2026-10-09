@@ -2,7 +2,8 @@
 
 from importlib import metadata as _metadata
 
-from pdfacts.annotations.model import Annotation
+from pdfacts.annotation.model import Annotation, AnnotationAppearance
+from pdfacts.annotation.reader import annotations
 from pdfacts.core.bitmap import Bitmap, Colour
 from pdfacts.core.capabilities import Capability, capabilities, require
 from pdfacts.core.decryption import Decryption, decrypt
@@ -90,6 +91,7 @@ __all__ = [
     "ActionTrigger",
     "ActiveContent",
     "Annotation",
+    "AnnotationAppearance",
     "AnnotationRef",
     "Bitmap",
     "BorderStyle",
@@ -167,6 +169,7 @@ __all__ = [
     "Word",
     "__version__",
     "capabilities",
+    "annotations",
     "configure",
     "decrypt",
     "engine_info",

@@ -246,6 +246,8 @@ def test_the_entry_its_rect_flags_box_and_matrix_as_written():
     assert found.rect == Written("array", tuple(Written("integer", v) for v in (0, 0, 100, 100)))
     assert found.flags == Written("integer", 4)
     assert found.appearance == SelectedAppearance(
+        object_number=14,
+        generation=0,
         data=YES,
         bbox=Written("array", tuple(Written("integer", v) for v in (0, 0, 100, 100))),
         matrix=Written("array", tuple(Written("integer", v) for v in (2, 0, 0, 2, 0, 0))),
@@ -690,6 +692,8 @@ def test_no_engine_type_leaves_the_backend():
 
 def test_the_types_have_their_fields_and_are_frozen():
     assert [f.name for f in dataclasses.fields(SelectedAppearance)] == [
+        "object_number",
+        "generation",
         "data",
         "bbox",
         "matrix",
@@ -702,7 +706,9 @@ def test_the_types_have_their_fields_and_are_frozen():
         "appearance",
         "undecided",
     ]
-    selected = SelectedAppearance(data=b"", bbox=None, matrix=None, uses_pattern=False)
+    selected = SelectedAppearance(
+        object_number=4, generation=0, data=b"", bbox=None, matrix=None, uses_pattern=False
+    )
     with pytest.raises(dataclasses.FrozenInstanceError):
         selected.data = None  # type: ignore[misc]
 

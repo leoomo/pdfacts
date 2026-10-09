@@ -752,6 +752,7 @@ def test_it_implements_the_object_reader():
     assert members == {
         "annotation_count",
         "annotations",
+        "annotations_other",
         "field_tree",
         "page_count",
         "object_count",

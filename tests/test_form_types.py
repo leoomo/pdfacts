@@ -13,7 +13,7 @@ import pytest
 
 import pdfacts  # noqa: E402
 from pdfacts import Unknown  # noqa: E402
-from pdfacts.annotations.model import Annotation  # noqa: E402
+from pdfacts.annotation.model import Annotation  # noqa: E402
 from pdfacts.core.geometry import Rect  # noqa: E402
 from pdfacts.core.refs import AnnotationRef, FieldRef  # noqa: E402
 from pdfacts.core.strings import decode_name  # noqa: E402
