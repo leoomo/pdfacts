@@ -15,6 +15,15 @@ may break callers.
 - `rules` of `words()` and `lines()`: with `TextRules.V2`, the words and
   lines of those glyphs, a line's box holding the white space on the line,
   a word's text keeping U+0002 as it is.
+- `annotations(document, page_index)`: the annotations of a page other than
+  widgets, with their `/Rect`, `/F`, `/Contents`, `/C` colour and the
+  appearance their `/AP` selects, as the convention "Annotations" states.
+  The types `Annotation` gains `contents`, `colour` and `appearance`
+  (fields with defaults; `Widget` unchanged in what it fills), the new
+  `AnnotationAppearance`, and the capability `ANNOTATIONS`. `DeviceColour`
+  moved from `pdfacts.forms.model` to `pdfacts.core.geometry`; the name
+  `pdfacts.DeviceColour` and `pdfacts.forms.model.DeviceColour` are as
+  before.
 
 ### Changed
 
