@@ -312,6 +312,115 @@ the gate ran on: 3224 tests on macOS arm64, and 3223 on Linux arm64 and on
 Linux x86_64, where one test that needs macOS is skipped. The commit that
 records the run changes documents only.
 
+## Milestone M4b: gate
+
+Run on 2026-10-09 with `bench/gates/run.py m4b` on commit
+`58cca132df38cbbde5edd91fb63b0b50b1b28dda`, over the 104 files of
+`bench/corpus/manifest.csv`, after the runtime installed the font policy.
+Every platform reported pypdfium2 5.13.0, PDFium 153.0.7999.0, pikepdf
+10.14.0, QPDF 12.4.1 and the font policy embedded-only. The gate reads the
+glyphs, words and lines of `TextRules.V2` of every page through
+`pdfacts.glyphs`, `pdfacts.words` and `pdfacts.lines`, looks PDFium's
+characters up among the glyphs, and renders each page's text alone to check
+the word boxes against its ink, for the boxes of `TextRules.V2` and for the
+font descriptor's unscaled heights.
+
+| Platform | `uname -m` | Python | Files read | Pages | Glyphs | Words | Lines | Seconds |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| macOS arm64, natively | arm64 | 3.13.5 | 104 | 467 | 1139030 | 155329 | 31950 | 100.8 |
+| Linux arm64, container `python:3.13.5-slim` | aarch64 | 3.13.5 | 104 | 467 | 1139030 | 155329 | 31950 | 114.0 |
+| Linux x86_64, container `python:3.13.5-slim`, emulated on an arm64 host | x86_64 | 3.13.5 | 104 | 467 | 1139030 | 155329 | 31950 | 196.8 |
+
+| Compared on all three platforms | Files identical |
+| --- | --- |
+| glyphs, every value of every glyph | 104 of 104 |
+| words | 104 of 104 |
+| lines | 104 of 104 |
+| the agreement of PDFium's characters with the glyphs | 104 of 104 |
+| the word boxes judged against the rendering | 104 of 104 |
+
+The gate printed these lines on every platform:
+
+```
+104 files, 467 pages: 1139030 glyphs, 155329 words, 31950 lines
+unknown: glyph text unreadable 10, line text unreadable 7, word text unreadable 10
+pages unknown as a whole: 0 in 0 files
+PDFium's characters, among the glyphs of V2: same text 1101606, line-end hyphen marker 2162, soft hyphen read as a hyphen 71, same text under NFKC 57, V2 text unknown 10, same first character 2, other text at the place 0, no glyph at the place 0
+glyphs of V2 that are no white space: a PDFium character at the place 993465, drawn again 0, invisible 43, other 12
+counted apart: PDFium: text unknown 0, PDFium: origin unknown 0, V2: white space 145500, V2: origin unknown 0, pages without PDFium's characters 0, V2: text unknown unreadable 10
+pages measured 467, pages not mapped 0, pages where D groups otherwise 0
+word boxes of V2, one em at the least: 155329 words, 30 not horizontal, 6 outside the page, 155293 measured; 3829 all invisible, not judged; judged 151464: correct 151332, without ink of their own 30, failing vertically 47, failing horizontally 65, into another line 1173; unattributed ink: 2322 components, 273449 pixels
+word boxes of D, the descriptor's height: 155329 words, 30 not horizontal, 6 outside the page, 155293 measured; 3829 all invisible, not judged; judged 151464: correct 151297, without ink of their own 30, failing vertically 82, failing horizontally 65, into another line 1170; unattributed ink: 2322 components, 273449 pixels
+good in V2 and not in D: 35, good in D and not in V2: 3
+word boxes correct: 151332 of 151464 (99.91%), at least 99%: yes
+the descriptor's height does better: no
+```
+
+No file failed, no page was unknown as a whole, and none of PDFium's
+characters was at a place where V2 has no glyph. Seconds are the time the
+gate script took over the corpus.
+
+The time gate, `bench/gates/m4b_time.py`, run on the host on the same
+commit over the same corpus, gave a median of 0.0455 s per file for the
+reference engine (PyMuPDF), 0.0645 for `TextRules.V2` and 0.0909 for
+`TextRules.V1`: the ratio of the medians for V2 is 1.418, at most the 1.5
+the gate allows, the median of the ratios per file 1.612. It was run with
+the containers of the three-platform run still going about their work;
+on a quiet machine the same method gave 1.398 and 1.404 (F5, #132), and
+1.474 and 1.481 before it.
+
+### What does not agree with PDFium, by category
+
+PDFium's characters are looked up among the glyphs of V2 at the same
+origin, within 0.01 pt, and the categories are those of the gate. The
+glyphs V2 has and PDFium does not give are counted apart, white space
+among them: PDFium's text interface leaves out about 12% of the space
+glyphs ("What the engines provide"), which is why the second rule set
+exists.
+
+| Category | Counted on the corpus |
+| --- | --- |
+| the same text at the same origin | 1101606 characters in 103 files |
+| PDFium's U+0002, the marker it gives for a line-end hyphen, where V2's glyph is `-` | 2162 characters in 66 files |
+| a soft hyphen, U+00AD, where PDFium reads `-` | 71 characters in 5 files |
+| the same text once composed (NFKC), ligatures among them | 57 characters in 5 files |
+| the glyph's text unknown where the character's is read | 10 characters in 1 file, all on pages whose text is unknown as a whole |
+| the first character of the glyph's text alone where PDFium expanded a ligature into several at one origin | 2 characters in 1 file |
+| another text at the place; no glyph at the place; the character's or the glyph's origin unknown | none |
+| of the glyphs of V2 that are no white space: a character of PDFium at the place | 993465 glyphs |
+| of the glyphs of V2 that are no white space: invisible text | 43 glyphs in 1 file |
+| of the glyphs of V2 that are no white space: drawn again where PDFium leaves it out | none |
+| of the glyphs of V2 that are no white space: other | 12 glyphs in 2 files |
+| white space glyphs of V2, counted apart | 145500 |
+
+### The words whose boxes fail the rendering
+
+Of the 155329 words, 30 are not horizontal and 6 lie outside the page, so
+their ink cannot be measured; 3829 hold invisible glyphs only and are not
+judged. Of the 151464 judged: 151332 are correct, their own ink reaching
+out of their box by no more than 0.1 em on every side; 30 words of visible
+glyphs have no ink of their own, and are judged and not correct; 47 fail
+across the baseline, 65 along it, and 1173 hold the ink of another line
+deeper than 0.1 em, which the gate counts apart. The boxes of the font
+descriptor's unscaled heights judged the same words 151297 correct, 82
+failing across the baseline: 35 words are correct in V2 and not with them,
+3 the other way, so the descriptor's height does not do better. 2322
+components of ink, 273449 pixels, belong to no measured word. Which words
+fail is in the receipts of the run, `bench/out/m4b-*.json`, which the
+corpus alone can name.
+
+| Part of the gate in `ROADMAP.md` | Shown by |
+| --- | --- |
+| word boxes checked against rendering correct for at least 99% of words | 151332 of 151464 (99.91%) on every platform; the boxes of the descriptor's unscaled heights do not do better (151297 of 151464), so the question of ROADMAP.md does not go back to the maintainer |
+| median time per file at most 1.5 times the reference engine's | `bench/gates/m4b_time.py`: the ratio of the medians 1.418 (1.398 and 1.404 on a quiet machine, F5); the median of the ratios per file 1.612. `TextRules.V1` took 2.000 for the same corpus, read as the ratio of the medians |
+| PDFium's characters found among V2's glyphs, what does not agree listed by category | the table above: every character of PDFium was found, none at a place where V2 has no glyph and none with another text there; 2162 line-end hyphen markers, 71 soft hyphens and 57 NFKC differences among them |
+| glyph, word and line facts of V2 identical on three platforms | the run above: 104 of 104 files for glyphs, words and lines, for the agreement and for the word boxes judged |
+
+The tests ran with `python3 tools/checks.py --all` on `58cca13`, the commit
+the gate ran on: 3920 tests on macOS arm64, and 3919 on Linux arm64
+and on Linux x86_64, where one test that needs macOS is skipped. The commit
+that records the run changes documents only.
+
 ## What the engines provide
 
 Measured before the first implementation, on 109 files (104 official German
