@@ -15,7 +15,7 @@ with form fields, later for documents without.
 | 4 | M3 | paths and images | done 2026-10-01 |
 | 5 | M4a | text, first level | done 2026-10-02 |
 | 6 | M5a | inspection, repair and decryption | done 2026-10-05 |
-| 7 | M4b | text probe, then text in full | in progress |
+| 7 | M4b | text probe, then text in full | done 2026-10-09 |
 | 8 | M6 | the first consumer switches for documents with form fields; version 1.0 | releases 0.1.0 and 0.2.0 made; the switch waits in the first consumer's project |
 | 9 | M5b | what was left out on the way: edit session, annotations, rotated text | planned |
 | - | M7 | checks before going public | no date |
@@ -261,6 +261,8 @@ If the gate is missed, in this order:
 1. the cases that do not work are recorded as unsupported
 2. the gate is relaxed, and every remaining difference is reviewed one by one
 3. a third text source is added
+
+Recorded results are in [docs/capabilities.md](docs/capabilities.md).
 
 ## M6 Integration
 
