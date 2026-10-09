@@ -539,6 +539,38 @@ refuses, as QPDF reads it, without a note.
 Reason: a wrong object number is worse than none. A later change to the file
 would address the wrong object.
 
+## Annotations
+
+`annotations(document, page_index)` gives the annotations of a page other
+than widgets, in the order of the page's `/Annots`, each with its place and
+its object, its `/Rect` and `/F` as the file writes them, its `/Contents`
+decoded as "Text strings and names" decodes, its `/C` colour, and the
+appearance its `/AP` selects as the widget reader selects a widget's. A
+widget is the form reader's (`widgets()`), not this one's.
+
+An entry is listed only where its `/Subtype` is a name with bytes other
+than `Widget`: one without a `/Subtype`, or with a name a `#` leaves
+without bytes, is not — a widget reader assumes its subtype, a general one
+cannot. The page's annotation count is compared between the engines and
+held to `max_items_per_page` as `widgets()` holds it, over the whole
+`/Annots` array, widgets included.
+
+| Value | Rule |
+| --- | --- |
+| rect | `/Rect` as QPDF reads it, four numbers, in user space; unknown, `invalid-in-file`, where absent or not four numbers. PDFium is not asked: it gives zeros for a `/Rect` it cannot use, as for a widget's |
+| annotation_flags | `/F` as written, an integer; unknown, `invalid-in-file`, where absent or not an integer |
+| contents | `/Contents` decoded as "Text strings and names" decodes; None where absent; unknown, `invalid-in-file`, where it is not a string |
+| colour | `/C`, 0, 1, 3 or 4 numbers each from 0 to 1, as the widget reader reads a colour of `/MK`; None where absent; unknown, `invalid-in-file`, where it is not such an array. PDFium's colour interface does not answer `/C` (measured, 2026-10-09), so the colour is as written, like a widget's `/V` |
+| appearance | the appearance QPDF selects as PDFium draws it, with the object it is written in and its `/BBox` and `/Matrix` as numbers; None where `/AP` selects none; unknown, `unreadable`, where QPDF cannot tell which one PDFium draws |
+
+Where every value from QPDF is unknown ("Object identity"), the
+annotations of the page are that unknown, as the widgets are.
+
+Not read: the geometry annotations carry beyond `/Rect` (`/QuadPoints`,
+`/InkList`, `/Vertices`); the action of a Link's `/A` (the inspection's
+active content lists it); the `/Parent` of a Popup beyond its object
+reference; writing any annotation.
+
 ## Forms
 
 ### Text strings and names

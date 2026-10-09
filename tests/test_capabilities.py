@@ -20,6 +20,7 @@ def test_the_members_are_exactly_these():
         "TEXT",
         "INSPECTION",
         "DECRYPTION",
+        "ANNOTATIONS",
         "FONT_POLICY_EMBEDDED_ONLY",
     ]
 
@@ -48,6 +49,7 @@ def test_nothing_is_claimed_that_is_not_implemented():
         Capability.TEXT,
         Capability.INSPECTION,
         Capability.DECRYPTION,
+        Capability.ANNOTATIONS,
         Capability.FONT_POLICY_EMBEDDED_ONLY,
     }
 
