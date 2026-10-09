@@ -232,6 +232,19 @@ class WidgetEntry:
 
 
 @dataclass(frozen=True, slots=True)
+class OtherAnnotation:
+    """One entry of a page's /Annots whose /Subtype is not /Widget, as the file
+    writes it (annotations other than widgets, M5b)."""
+
+    annotation: AnnotationEntry
+    # Of b"Rect", b"F", b"Contents", b"C": those present.
+    entries: Mapping[bytes, Written]
+    # The appearance QPDF selects, as for a widget (SelectedAppearance); a str
+    # where QPDF cannot tell which one; None where /AP selects none.
+    appearance: SelectedAppearance | str | None
+
+
+@dataclass(frozen=True, slots=True)
 class PageAnnotations:
     """The /Annots of one page and its widgets, as the file writes them."""
 
@@ -321,6 +334,10 @@ class Painted:
 class SelectedAppearance:
     """The normal appearance QPDF selects for an annotation, as the file writes it."""
 
+    # The object the appearance stream is written in; None where it is
+    # written directly in the /N entry's place.
+    object_number: int | None
+    generation: int | None
     data: bytes | None  # the stream's data decoded; None where QPDF cannot decode it
     bbox: Written | None  # /BBox; None when absent
     matrix: Written | None  # /Matrix; None when absent
@@ -889,6 +906,10 @@ class ObjectReader(Protocol):
 
     def annotations(self, index: int) -> PageAnnotations:
         """The page's /Annots entries and its widgets, as the file writes them."""
+        ...
+
+    def annotations_other(self, index: int) -> tuple[OtherAnnotation, ...]:
+        """The page's /Annots entries other than widgets, with their own values."""
         ...
 
     def field_tree(self) -> FieldTree | None:

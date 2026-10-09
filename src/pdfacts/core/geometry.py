@@ -51,6 +51,24 @@ class Point:
 
 
 @dataclass(frozen=True, slots=True)
+class DeviceColour:
+    """A colour of the device space: 0, 1, 3 or 4 components, each from 0 to 1."""
+
+    components: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        if type(self.components) is not tuple:
+            raise TypeError(f"components must be a tuple, not {type(self.components).__name__}")
+        if len(self.components) not in (0, 1, 3, 4):
+            raise ValueError(f"a colour has 0, 1, 3 or 4 components, not {len(self.components)}")
+        components = tuple(_finite_float(component, "a component") for component in self.components)
+        for component in components:
+            if not 0 <= component <= 1:
+                raise ValueError(f"a component is between 0 and 1, not {component}")
+        object.__setattr__(self, "components", components)
+
+
+@dataclass(frozen=True, slots=True)
 class Rect:
     """A rectangle with x0 <= x1 and y0 <= y1; the corners are put in order."""
 

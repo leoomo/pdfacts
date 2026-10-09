@@ -34,6 +34,7 @@ from pdfacts.backends.protocols import (
     FailureKind,
     FieldTree,
     FileStructure,
+    OtherAnnotation,
     PageAnnotations,
     PageObject,
     PageText,
@@ -261,6 +262,10 @@ class FeatureAccess:
     def annotations(self, index: int) -> PageAnnotations:
         """QPDF's entries of the page's /Annots and its widgets, as written."""
         return _qpdf_call(lambda: self._qpdf_ready().annotations(index))
+
+    def annotations_other(self, index: int) -> tuple[OtherAnnotation, ...]:
+        """QPDF's /Annots entries other than widgets, with their own values."""
+        return _qpdf_call(lambda: self._qpdf_ready().annotations_other(index))
 
     def field_tree(self) -> FieldTree | None:
         """QPDF's field tree from /AcroForm /Fields; None without /AcroForm."""

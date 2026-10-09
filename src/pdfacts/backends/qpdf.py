@@ -47,6 +47,7 @@ from pdfacts.backends.protocols import (
     KidEntry,
     Kids,
     ObjectCounts,
+    OtherAnnotation,
     PageAnnotations,
     PageContents,
     PageObject,
@@ -524,6 +525,27 @@ class QpdfDocument:
                 widgets.append(one)
             return PageAnnotations(tuple(entries), False, tuple(widgets))
 
+    def annotations_other(self, index: int) -> tuple[OtherAnnotation, ...]:
+        """The page's /Annots entries other than widgets, with their own values:
+        /Rect, /F, /Contents and /C as Written, and the appearance QPDF
+        selects as for a widget. In /Annots order."""
+        self._check_open()
+        objgen = self._annotated_page(index)
+        with _translated():
+            annots = self._unwalked.get_object(objgen).get("/Annots")
+            if not isinstance(annots, pikepdf.Array):
+                return ()
+            resources = _inherited(self._unwalked.get_object(objgen), "/Resources")
+            top = _Context(resources, ("page",), resources, ("page",))
+            found: list[OtherAnnotation] = []
+            for position, item in enumerate(annots):
+                entry = _annotation_entry(position, item)
+                if isinstance(entry.subtype, bytes) and entry.subtype != b"Widget":
+                    found.append(
+                        _other_annotation(item, entry, top, self._kept, self._compressed())
+                    )
+            return tuple(found)
+
     def field_tree(self) -> FieldTree | None:
         """The document's field tree from /AcroForm /Fields; None without /AcroForm."""
         self._check_open()
@@ -752,6 +774,8 @@ class QpdfDocument:
                     misread = self._misread()
                 if misread and appearance is not None:
                     appearance = SelectedAppearance(
+                        object_number=appearance.object_number,
+                        generation=appearance.generation,
                         data=appearance.data,
                         bbox=appearance.bbox,
                         matrix=appearance.matrix,
@@ -2760,6 +2784,29 @@ def _selected_appearance(annot: pikepdf.Dictionary) -> pikepdf.Stream | str | No
     return chosen if isinstance(chosen, pikepdf.Stream) else None
 
 
+def _other_annotation(
+    item: pikepdf.Dictionary,
+    entry: AnnotationEntry,
+    page: _Context,
+    kept: _Kept,
+    compressed: frozenset[int],
+) -> OtherAnnotation:
+    """One non-widget annotation's own values, as the file writes them."""
+    entries: dict[bytes, Written] = {}
+    for key in ("/Rect", "/F", "/Contents", "/C"):
+        value = item.get(key)
+        if value is not None:
+            entries[key.encode("ascii")[1:]] = _written(value, 0, kept)
+    values = entries
+    selected = _selected_appearance(item)
+    appearance: SelectedAppearance | str | None
+    if isinstance(selected, pikepdf.Stream):
+        appearance = _appearance(selected, page, kept, compressed)
+    else:
+        appearance = selected
+    return OtherAnnotation(annotation=entry, entries=values, appearance=appearance)
+
+
 def _state_text(value: object, where: str) -> bytes | str:
     """What PDFium reads as the name of a state: b"" where it reads nothing.
 
@@ -2790,9 +2837,12 @@ def _appearance(
         data: bytes | None = stream.read_bytes()
     except pikepdf.PdfError:
         data = None
+    objgen = stream.objgen if stream.is_indirect else None
     bbox = stream.get("/BBox")
     matrix = stream.get("/Matrix")
     return SelectedAppearance(
+        object_number=None if objgen is None else int(objgen[0]),
+        generation=None if objgen is None else int(objgen[1]),
         data=data,
         bbox=None if bbox is None else _written(bbox, 0, kept),
         matrix=None if matrix is None else _written(matrix, 0, kept),
