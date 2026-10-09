@@ -17,7 +17,7 @@ with form fields, later for documents without.
 | 6 | M5a | inspection, repair and decryption | done 2026-10-05 |
 | 7 | M4b | text probe, then text in full | done 2026-10-09 |
 | 8 | M6 | the first consumer switches for documents with form fields; version 1.0 | releases 0.1.0 and 0.2.0 made; the switch waits in the first consumer's project |
-| 9 | M5b | what was left out on the way: edit session, annotations, rotated text | planned |
+| 9 | M5b | what was left out on the way: edit session, annotations, rotated text | in progress |
 | - | M7 | checks before going public | no date |
 
 Until M6 nothing is built that the switch does not need, except M4b: on
@@ -277,6 +277,12 @@ interface as the review before 1.0 left it. The switch itself waits in the
 first consumer's project.
 
 ## M5b What was left out on the way
+
+Begun on 2026-10-09, while the first consumer's switch stays parked in its
+project (#137, the maintainer's decision of that day; the switch and 1.0
+wait in #106). The sub-issues, in the order #137 proposes: B1 annotations
+other than widgets, B2 `TextRules.V3`, B3 the edit session, B4 the design
+note #15, written from the interface as it is then.
 
 - edit session with verification after writing; rewrite and decrypt become
   operations of it
