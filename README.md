@@ -8,8 +8,8 @@ and forms, each with explicit geometry.
 > or a region of it to raw bytes, `pdfacts.widgets()` and `pdfacts.fields()`
 > read its form fields and widgets, `pdfacts.paths()` and `pdfacts.images()`
 > what a page draws, `pdfacts.glyphs()`, `pdfacts.words()` and
-> `pdfacts.lines()` the text of its content, of its own rule set
-> `TextRules.V2` among them through `rules`, and `pdfacts.inspect()` its
+> `pdfacts.lines()` the text of its content, `TextRules.V2`
+> among its rule sets through `rules`, and `pdfacts.inspect()` its
 > structure, encryption and active content; `pdfacts.recover()` rebuilds a
 > damaged file, and `pdfacts.decrypt()` writes an encrypted one anew without
 > its encryption. Nothing else described below exists yet. See

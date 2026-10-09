@@ -364,8 +364,8 @@ The time gate, `bench/gates/m4b_time.py`, run on the host on the same
 commit over the same corpus, gave a median of 0.0455 s per file for the
 reference engine (PyMuPDF), 0.0645 for `TextRules.V2` and 0.0909 for
 `TextRules.V1`: the ratio of the medians for V2 is 1.418, at most the 1.5
-the gate allows, the median of the ratios per file 1.612. It was run with
-the containers of the three-platform run still going about their work;
+the gate allows, the median of the ratios per file 1.612. It was run immediately
+after the three-platform run, OrbStack still up and its containers idle;
 on a quiet machine the same method gave 1.398 and 1.404 (F5, #132), and
 1.474 and 1.481 before it.
 
@@ -381,10 +381,10 @@ exists.
 | Category | Counted on the corpus |
 | --- | --- |
 | the same text at the same origin | 1101606 characters in 103 files |
-| PDFium's U+0002, the marker it gives for a line-end hyphen, where V2's glyph is `-` | 2162 characters in 66 files |
+| PDFium's U+0002, the marker it gives for a line-end hyphen, where V2's glyph is `-` or a soft hyphen | 2162 characters in 66 files |
 | a soft hyphen, U+00AD, where PDFium reads `-` | 71 characters in 5 files |
 | the same text once composed (NFKC), ligatures among them | 57 characters in 5 files |
-| the glyph's text unknown where the character's is read | 10 characters in 1 file, all on pages whose text is unknown as a whole |
+| the glyph's text unknown where the character's is read | 10 characters in 1 file, the font mapping their codes to no text |
 | the first character of the glyph's text alone where PDFium expanded a ligature into several at one origin | 2 characters in 1 file |
 | another text at the place; no glyph at the place; the character's or the glyph's origin unknown | none |
 | of the glyphs of V2 that are no white space: a character of PDFium at the place | 993465 glyphs |
@@ -392,6 +392,7 @@ exists.
 | of the glyphs of V2 that are no white space: drawn again where PDFium leaves it out | none |
 | of the glyphs of V2 that are no white space: other | 12 glyphs in 2 files |
 | white space glyphs of V2, counted apart | 145500 |
+| glyphs of V2 whose text is unknown, unreadable, counted apart | 10 in 1 file |
 
 ### The words whose boxes fail the rendering
 
@@ -403,11 +404,11 @@ glyphs have no ink of their own, and are judged and not correct; 47 fail
 across the baseline, 65 along it, and 1173 hold the ink of another line
 deeper than 0.1 em, which the gate counts apart. The boxes of the font
 descriptor's unscaled heights judged the same words 151297 correct, 82
-failing across the baseline: 35 words are correct in V2 and not with them,
+failing across the baseline: 35 words are good in V2 and not with them,
 3 the other way, so the descriptor's height does not do better. 2322
-components of ink, 273449 pixels, belong to no measured word. Which words
-fail is in the receipts of the run, `bench/out/m4b-*.json`, which the
-corpus alone can name.
+components of ink, 273449 pixels, belong to no measured word. The receipts of the run, `bench/out/m4b-*.json`, name the files
+whose words fail and how many each way; the words themselves the corpus
+alone can name.
 
 | Part of the gate in `ROADMAP.md` | Shown by |
 | --- | --- |
@@ -416,10 +417,11 @@ corpus alone can name.
 | PDFium's characters found among V2's glyphs, what does not agree listed by category | the table above: every character of PDFium was found, none at a place where V2 has no glyph and none with another text there; 2162 line-end hyphen markers, 71 soft hyphens and 57 NFKC differences among them |
 | glyph, word and line facts of V2 identical on three platforms | the run above: 104 of 104 files for glyphs, words and lines, for the agreement and for the word boxes judged |
 
-The tests ran with `python3 tools/checks.py --all` on `58cca13`, the commit
-the gate ran on: 3920 tests on macOS arm64, and 3919 on Linux arm64
-and on Linux x86_64, where one test that needs macOS is skipped. The commit
-that records the run changes documents only.
+The tests ran with `python3 tools/checks.py --all` twice: on `de82c99`,
+whose tree is that of `58cca13`, the commit the gate ran on, and on
+`6b742ee`, the commit that records the run, which differs from it in
+documents only. Each gave 3920 tests on macOS arm64, and 3919 on Linux
+arm64 and on Linux x86_64, where one test that needs macOS is skipped.
 
 ## What the engines provide
 
