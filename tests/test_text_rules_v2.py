@@ -743,8 +743,11 @@ def test_the_rules_by_their_value_and_v1_by_default():
             == pdfacts.glyphs(document, 0, rules="v1")
         )
         assert [g.text for g in first] == ["A", " ", "B"]
+        assert pdfacts.glyphs(document, 0, rules=TextRules.V3) == pdfacts.glyphs(
+            document, 0, rules="v3"
+        )
         with pytest.raises(ValueError):
-            pdfacts.glyphs(document, 0, rules="v3")
+            pdfacts.glyphs(document, 0, rules="v4")
 
 
 def test_no_glyph_takes_the_c_librarys_trigonometry(monkeypatch):

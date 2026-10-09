@@ -11,3 +11,6 @@ class TextRules(StrEnum):
     V1 = "v1"
     # M4b's rules: the codes the content shows, read on QPDF's tokens.
     V2 = "v2"
+    # M5b's rules: V2's glyphs, and its words and lines take the rotated
+    # ones too, each line holding one direction.
+    V3 = "v3"
