@@ -280,6 +280,18 @@ threads that ask for the same page at once may each read it. A closed
 document raises `ClosedError`, and the deadline is checked, whatever was
 kept.
 
+With `TextRules.V3` the words and lines take the rotated glyphs too: every
+glyph whose box is known takes part, and a line holds one direction — the
+direction its first glyph has; a glyph whose direction turns from the
+line's by more than a glyph stays upright (one degree) begins a new line,
+which then holds its direction. The corpus's 2572 rotated glyphs (measured,
+2026-10-10: 2510 at 90°, 49 at 180°, 6 at 270°, 6 at 1.82°, 1 at 13°) join
+the words and lines of `TextRules.V3` — 155720 words and 32099 lines
+against V2's 155329 and 31950, which pass the rotated glyphs over; the
+steps and thresholds are the same for both, and text of one direction
+groups exactly as V2 groups upright text. `TextRules.V3`'s glyphs are
+`TextRules.V2`'s; `V1` and `V2` are unchanged.
+
 Where every value from QPDF is unknown ("Object identity"), the glyphs of
 `TextRules.V2` are that unknown, and so are its words and lines. The codes
 count against `max_items_per_page`, white space among them, and

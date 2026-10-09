@@ -16,7 +16,7 @@ from pdfacts.core.made import made, point, rect
 from pdfacts.core.refs import _is_int
 from pdfacts.core.values import Unknown
 from pdfacts.text.angles import unit_of
-from pdfacts.text.glyphs import Glyph, _text
+from pdfacts.text.glyphs import UPRIGHT_DEGREES, Glyph, _text
 from pdfacts.text.rules import TextRules
 
 # In units of the glyph's size: a gap forward from SPACE on ends a word; a step
@@ -90,30 +90,47 @@ class Line:
             raise TypeError(f"box must be a Rect, not {type(self.box).__name__}")
 
 
+def _turned(direction: float, held: float | None) -> bool:
+    """Whether `direction` turns from `held` by more than a glyph stays
+    upright (UPRIGHT_DEGREES), the shorter way round."""
+    if held is None:
+        return False
+    turn = abs(direction - held) % 360
+    return min(turn, 360 - turn) > UPRIGHT_DEGREES
+
+
 def words_and_lines(
     page_index: int, glyphs: Sequence[Glyph], rules: TextRules = TextRules.V1
 ) -> tuple[tuple[Word, ...], tuple[Line, ...]]:
     """The page's words and lines from its glyphs in content order, by the
-    rule set `rules`: the same steps for both; with TextRules.V1 a word's
-    text writes U+0002 as "-", with TextRules.V2 a line's box also holds the
-    boxes of the white space glyphs on the line.
+    rule set `rules`: the same steps for all; with TextRules.V1 a word's
+    text writes U+0002 as "-", from V2 on a line's box also holds the boxes
+    of the white space glyphs on the line; with TextRules.V3 the rotated
+    glyphs take part too.
 
-    Only upright glyphs whose box is known take part; the others are passed
-    over. For each glyph that takes part after the first, the step from where
-    the glyph before that took part ended along its baseline to this glyph's
-    origin is measured in units of this glyph's size, along its baseline and
-    across it. Across by LINE or more either way, or along by LINE or more
-    either way, begins a new line; along by SPACE or more forward ends a word;
-    a smaller step, or a step back, keeps the glyph in the word. A glyph of
-    white space ends a word and is in none, and moves the pen like any glyph.
-    A line without a word is none.
+    With V1 and V2 only upright glyphs whose box is known take part; the
+    others are passed over. With V3 every glyph whose box is known takes
+    part, and a line holds one direction: a glyph whose direction turns
+    from the direction its line holds by more than UPRIGHT_DEGREES begins
+    a new line, which then holds its direction. For each glyph that takes
+    part after the first, the step from where the glyph before that took
+    part ended along its baseline to this glyph's origin is measured in
+    units of this glyph's size, along its baseline and across it. Across by
+    LINE or more either way, or along by LINE or more either way, begins a
+    new line; along by SPACE or more forward ends a word; a smaller step, or
+    a step back, keeps the glyph in the word. A glyph of white space ends a
+    word and is in none, and moves the pen like any glyph. A line without a
+    word is none.
     """
     lines: list[list[list[int]]] = []
     # For each line, the corners of the white space glyphs on it.
     spaces: list[list[Point]] = []
+    # The direction the line being built holds (V3); unused before it begins.
+    held: float | None = None
     pen: Point | None = None
+    turned = rules is TextRules.V3
     for glyph in glyphs:
-        if glyph.upright is not True or isinstance(glyph.box, Unknown):
+        if (not turned and glyph.upright is not True) or isinstance(glyph.box, Unknown):
             continue
         assert not isinstance(glyph.origin, Unknown)
         assert not isinstance(glyph.size, Unknown) and not isinstance(glyph.direction, Unknown)
@@ -121,18 +138,21 @@ def words_and_lines(
         if pen is None:
             lines.append([[]])
             spaces.append([])
+            held = glyph.direction
         else:
             dx, dy = glyph.origin.x - pen.x, glyph.origin.y - pen.y
             step = (dx * ux + dy * uy) / glyph.size
             off = (-dx * uy + dy * ux) / glyph.size
-            if abs(off) >= LINE or abs(step) >= LINE:
+            if abs(off) >= LINE or abs(step) >= LINE or (turned and _turned(glyph.direction, held)):
                 lines.append([[]])
                 spaces.append([])
+                held = glyph.direction
             elif step >= SPACE:
                 lines[-1].append([])
         if isinstance(glyph.text, str) and glyph.text.isspace():
             lines[-1].append([])
-            spaces[-1].extend((glyph.box.p1, glyph.box.p2, glyph.box.p3, glyph.box.p4))
+            if rules is not TextRules.V1:
+                spaces[-1].extend((glyph.box.p1, glyph.box.p2, glyph.box.p3, glyph.box.p4))
         else:
             lines[-1][-1].append(glyph.ref.glyph_index)
         end = max(
@@ -151,7 +171,7 @@ def words_and_lines(
                 indices.append(len(words))
                 words.append(_word(page_index, [by_index[i] for i in group], marker))
         if indices:
-            extra = white if rules is TextRules.V2 else []
+            extra = white if rules is not TextRules.V1 else []
             found_lines.append(_line(page_index, indices, [words[i] for i in indices], extra))
     return tuple(words), tuple(found_lines)
 
