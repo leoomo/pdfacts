@@ -262,7 +262,6 @@ If the gate is missed, in this order:
 2. the gate is relaxed, and every remaining difference is reviewed one by one
 3. a third text source is added
 
-
 Recorded results are in [docs/capabilities.md](docs/capabilities.md).
 
 ## M6 Integration
