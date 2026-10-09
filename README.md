@@ -3,12 +3,13 @@
 Structured, verifiable facts from PDF files: text, paths, images, annotations
 and forms, each with explicit geometry.
 
-> **Status: private, pre-alpha (milestone M5a done).** `pdfacts.open()` reads
+> **Status: private, pre-alpha (milestone M4b done).** `pdfacts.open()` reads
 > a document and the geometry and object numbers of its pages, renders a page
 > or a region of it to raw bytes, `pdfacts.widgets()` and `pdfacts.fields()`
 > read its form fields and widgets, `pdfacts.paths()` and `pdfacts.images()`
 > what a page draws, `pdfacts.glyphs()`, `pdfacts.words()` and
-> `pdfacts.lines()` the text of its content, and `pdfacts.inspect()` its
+> `pdfacts.lines()` the text of its content, `TextRules.V2`
+> among its rule sets through `rules`, and `pdfacts.inspect()` its
 > structure, encryption and active content; `pdfacts.recover()` rebuilds a
 > damaged file, and `pdfacts.decrypt()` writes an encrypted one anew without
 > its encryption. Nothing else described below exists yet. See
