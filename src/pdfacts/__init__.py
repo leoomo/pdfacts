@@ -34,6 +34,7 @@ from pdfacts.core.refs import AnnotationRef, FieldRef, GlyphRef, GraphicRef, Obj
 from pdfacts.core.runtime import FontPolicy, configure
 from pdfacts.core.strings import Name, NameEncoding
 from pdfacts.core.values import Unknown, UnknownReason
+from pdfacts.edit import Decrypt, Edited, EditSession, Rewrite
 from pdfacts.forms.model import (
     BorderStyle,
     ChoiceOption,
@@ -108,11 +109,14 @@ __all__ = [
     "CryptMethod",
     "DamagedFileError",
     "Dash",
+    "Decrypt",
     "Decryption",
     "DecryptionFailedError",
     "DeviceColour",
     "DisplayColour",
     "Document",
+    "EditSession",
+    "Edited",
     "EmbeddedFile",
     "EmptyInputError",
     "Encryption",
@@ -155,6 +159,7 @@ __all__ = [
     "Point",
     "Quad",
     "Recovery",
+    "Rewrite",
     "RecoveryFailedError",
     "Rect",
     "Segment",

@@ -57,6 +57,7 @@ from pdfacts.backends.protocols import (
     StateKeys,
     WidgetEntry,
     Written,
+    WrittenBytes,
 )
 
 # How far from the end QPDF looks for startxref (measured: it finds one that
@@ -1091,6 +1092,53 @@ def _readable_offset(data: bytes, at: int) -> int | None:
         return None
     digits = match.group(1).lstrip(b"0") or b"0"
     return None if len(digits) > _OFFSET_DIGITS else int(digits)
+
+
+def rewrite_written(data: bytes, password: str | None, decrypting: bool) -> WrittenBytes:
+    """The file `data`, written anew by QPDF for the edit session: rebuilt
+    with recovery on where `decrypting` is true — a damaged file is opened
+    for the session as recover() opens it, an intact one as decrypt() does
+    (measured: one such write of a damaged encrypted file equals rebuilding
+    it and writing it again without encryption, byte for byte) — and written
+    without its encryption where `decrypting` is true, keeping it otherwise.
+
+    A FORMAT failure when QPDF cannot open or write the file; the /Size and
+    /ID rules are rewrite_recovered's and rewrite_decrypted's."""
+    sources: list[_Input] = []
+    try:
+        with _translated():
+            pdf = _opened(
+                data,
+                password,
+                sources,
+                attempt_recovery=decrypting,
+                inherit_page_attributes=False,
+            )
+            try:
+                page_count = len(pdf.pages)
+                if decrypting and _lost_encryption(pdf):
+                    raise EngineFailure(
+                        FailureKind.FORMAT,
+                        "the file is encrypted, and QPDF did not find the trailer that names "
+                        "its encryption dictionary",
+                    )
+                # Any value: QPDF writes the number of objects it writes.
+                pdf.trailer["/Size"] = 1
+                written = io.BytesIO()
+                encrypted = pdf.is_encrypted if not decrypting else False
+                pdf._save(
+                    written,
+                    encryption=encrypted,
+                    deterministic_id=not encrypted,
+                    fix_metadata_version=False,
+                )
+                reported = tuple(str(message) for message in pdf.get_warnings())
+            finally:
+                pdf.close()
+    finally:
+        for source in sources:
+            source.close()
+    return WrittenBytes(data=written.getvalue(), page_count=page_count, warnings=reported)
 
 
 def rewrite_recovered(data: bytes, password: str | None) -> RecoveredBytes:
