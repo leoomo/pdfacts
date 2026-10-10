@@ -427,7 +427,7 @@ arm64 and on Linux x86_64, where one test that needs macOS is skipped.
 ## Milestone M5b: verification
 
 Run on 2026-10-10 with `bench/gates/run.py m5b` on commit
-`986e0c841306d32d1bb140a19b50b7a5002ce2df`, over the 104 files of
+`5bc607594fdffce3d78da5d63f0093e3c8ef244d`, over the 104 files of
 `bench/corpus/manifest.csv`, after the runtime installed the font policy.
 Every platform reported pypdfium2 5.13.0, PDFium 153.0.7999.0, pikepdf
 10.14.0, QPDF 12.4.1 and the font policy embedded-only. The gate reads the
@@ -441,9 +441,9 @@ the new facts, proven the way M4b proved V2's.
 
 | Platform | `uname -m` | Python | Files read | Pages | Annotations | Words | Lines | Seconds |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| macOS arm64, natively | arm64 | 3.13.5 | 104 | 467 | 118 | 155720 | 32099 | 24.4 |
-| Linux arm64, container `python:3.13.5-slim` | aarch64 | 3.13.5 | 104 | 467 | 118 | 155720 | 32099 | 28.6 |
-| Linux x86_64, container `python:3.13.5-slim`, emulated on an arm64 host | x86_64 | 3.13.5 | 104 | 467 | 118 | 155720 | 32099 | 52.1 |
+| macOS arm64, natively | arm64 | 3.13.5 | 104 | 467 | 118 | 155720 | 32099 | 25.7 |
+| Linux arm64, container `python:3.13.5-slim` | aarch64 | 3.13.5 | 104 | 467 | 118 | 155720 | 32099 | 27.9 |
+| Linux x86_64, container `python:3.13.5-slim`, emulated on an arm64 host | x86_64 | 3.13.5 | 104 | 467 | 118 | 155720 | 32099 | 51.7 |
 
 | Compared on all three platforms | Files identical |
 | --- | --- |
