@@ -9,13 +9,12 @@ and forms, each with explicit geometry.
 > read its form fields and widgets, `pdfacts.paths()` and `pdfacts.images()`
 > what a page draws, `pdfacts.glyphs()`, `pdfacts.words()` and
 > `pdfacts.lines()` the text of its content, `TextRules.V2` and `V3` among
-> its rule sets through `rules`, `TextRules.V2`
-> among its rule sets through `rules`, and `pdfacts.inspect()` its
+> its rule sets through `rules`, and `pdfacts.inspect()` its
 > structure, encryption and active content; `pdfacts.recover()` rebuilds a
 > damaged file, and `pdfacts.decrypt()` writes an encrypted one anew without
 > its encryption; `pdfacts.annotations()` reads the annotations other than
 > widgets, and `pdfacts.EditSession` applies the operations `Rewrite` and
-> `Decrypt` in one verified write Nothing else described below exists yet. See
+> `Decrypt` in one verified write. Nothing else described below exists yet. See
 > [ROADMAP.md](ROADMAP.md) for what is planned and how each step is accepted.
 
 ## What it is for
