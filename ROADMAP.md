@@ -314,7 +314,8 @@ forms wait for M7 itself; the switch and version 1.0 still come first.
 - a license has been chosen and its text is in the repository; the intended
   license is Apache-2.0
 - provenance review against [docs/provenance.md](docs/provenance.md)
-- the history contains no secrets, private samples or user data
+- the history contains no secrets, private samples or user data (audited
+  2026-10-10, #150)
 - documentation, examples, versioning and deprecation policy, security contact
 - contribution policy
 - a comparison with other libraries on the same files
