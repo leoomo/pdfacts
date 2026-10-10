@@ -137,7 +137,8 @@ A milestone builds only the parts of the skeleton that its own features call.
 Form filling is the feature the skeleton is measured against. It needs
 appearance generation, font embedding and, for signed files, incremental
 saving, which makes it the hardest of the planned write features. A one-page
-note that shows how it can be added by adding modules only is written in M5b.
+note that shows how it can be added by adding modules only is written in M5b:
+[docs/design/form-filling.md](design/form-filling.md).
 
 ## Saving
 
