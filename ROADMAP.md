@@ -18,7 +18,7 @@ with form fields, later for documents without.
 | 7 | M4b | text probe, then text in full | done 2026-10-09 |
 | 8 | M6 | the first consumer switches for documents with form fields; version 1.0 | releases 0.1.0 and 0.2.0 made; the switch waits in the first consumer's project |
 | 9 | M5b | what was left out on the way: edit session, annotations, rotated text | done 2026-10-10 |
-| - | M7 | checks before going public | no date |
+| - | M7 | checks before going public | preparation begun 2026-10-10 (#148); the switch and 1.0 come first |
 
 Until M6 nothing is built that the switch does not need, except M4b: on
 2026-10-06, with the switch waiting in the first consumer's project, the
@@ -301,6 +301,15 @@ record left open, was proven the same day by the M5b gate
   modules only; no code
 
 ## M7 Before going public
+
+Prepared from 2026-10-10 while the first consumer's switch stays parked in
+its project (#106) and this repository's work stands done through M5b: the
+items that need no other project — the audits of the history and of the
+provenance, the contribution policy, the documents of versioning and
+contact, the platforms statement, and the license once the maintainer
+confirms the choice — are prepared in the sub-issues of #148. The
+comparison with other libraries and the corpus beyond official German
+forms wait for M7 itself; the switch and version 1.0 still come first.
 
 - a license has been chosen and its text is in the repository; the intended
   license is Apache-2.0
