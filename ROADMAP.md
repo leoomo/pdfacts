@@ -288,7 +288,9 @@ answer is that the list of existing public names a write feature would have
 to change is empty. M5b was planned with no gate of its own (#137); the
 record of its facts is in
 [docs/capabilities.md](docs/capabilities.md), the evidence each feature's
-pull request states.
+pull request states. The three-platform identity of those facts, which the
+record left open, was proven the same day by the M5b gate
+(`bench/gates/m5b.py`), whose run is recorded there as well.
 
 - edit session with verification after writing; rewrite and decrypt become
   operations of it
