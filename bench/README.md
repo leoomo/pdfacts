@@ -73,26 +73,27 @@ installed the font policy. What is there:
 | --- | --- |
 | `digest.py` | SHA-256 over int, float and str values; the module states the encoding |
 | `gates/m1.py` | reads the corpus and writes one receipt: per file a geometry digest, a glyph digest, counts, warnings |
-| `gates/compare.py` | compares two or more receipts of one gate, the M1, the M4a, the M4b or the M5a gate, prints one table per file and column: identical, differs, missing, error |
+| `gates/compare.py` | compares two or more receipts of one gate, the M1, the M4a, the M4b, the M5a or the M5b gate, prints one table per file and column: identical, differs, missing, error |
 | `gates/m2.py`, `gates/m2_referee.py` | the M2 gate: the widgets and fields of the corpus, against a referee that reads the dictionaries with pikepdf |
 | `gates/m3.py` | the M3 gate: the paths and images of the corpus, read twice, their numbers against PDFium's own |
 | `gates/m4a.py` | the M4a gate: the glyphs, words and lines of the corpus, digested for comparing platforms, their characters against PDFium's own count, and what the rule set leaves out or may get wrong, counted |
 | `gates/m4b.py` | the M4b gate: the glyphs, words and lines of `TextRules.V2` of the corpus, digested for comparing platforms; PDFium's characters looked for among the glyphs at the same origin, and what V2 has that PDFium leaves out, counted apart; the word boxes measured against a rendering of the text alone, for the boxes of V2 and for the boxes of the font descriptor's height |
 | `gates/m4b_time.py` | the time gate of M4b, on the host alone: the processor time per file of PyMuPDF's text extraction, of `pdfacts.open` to the page's lines with `TextRules.V2`, and with the default rules |
 | `gates/m5a.py` | the M5a gate: what `pdfacts.inspect()` finds, checked with pikepdf; the encrypted files decrypted, and read and written by pypdf and PyMuPDF; faults introduced into the results of `decrypt()` and `recover()` |
+| `gates/m5b.py` | the M5b gate: the annotations other than widgets and the words and lines of `TextRules.V3` of the corpus, digested for comparing platforms; per file an EditSession with `Decrypt` alone and one with `Rewrite` alone, each compared with the function it replaces |
 
-The M2, M3, M4a, M4b and M5a gates take the same `--commit`, `--out`,
+The M2, M3, M4a, M4b, M5a and M5b gates take the same `--commit`, `--out`,
 `--only` and `--corpus` as the M1 gate and refuse a run on the same grounds;
-the font policy is checked by the M4a, M4b and M5a gates as well, not by the
-M2 and M3 gates, which run on one machine. The M5a gate reads with pypdf and PyMuPDF,
+the font policy is checked by the M4a, M4b, M5a and M5b gates as well, not by
+the M2 and M3 gates, which run on one machine. The M5a gate reads with pypdf and PyMuPDF,
 the dependency group `bench`, and refuses a run without it:
 
 ```bash
 uv run --group bench python bench/gates/m5a.py --commit "$(git rev-parse HEAD)" --out bench/out/m5a-manual.json
 ```
 
-The rest of this section is about the M1 gate; the M4a, M4b and M5a gates run
-on three platforms and are compared the same way.
+The rest of this section is about the M1 gate; the M4a, M4b, M5a and M5b
+gates run on three platforms and are compared the same way.
 
 Run the gate on one machine, from the repository root, with the corpus in
 place (`bench/corpus/fetch.py --verify-only` reports `104 files: ok 104`):
@@ -128,7 +129,7 @@ never a warning text.
 python3 bench/gates/run.py m1
 ```
 
-`run.py` takes the gate, `m1`, `m4a`, `m4b` or `m5a`, and runs
+`run.py` takes the gate, `m1`, `m4a`, `m4b`, `m5a` or `m5b`, and runs
 `bench/gates/<gate>.py` on
 macOS natively (in a fresh copy of the working tree) and in the Linux arm64
 and Linux x86_64 containers of `tools/checks.py`, all three over the same
@@ -221,6 +222,19 @@ faults introduced:
 
 ```bash
 uv run python bench/gates/compare.py bench/out/m5a-darwin-arm64.json bench/out/m5a-linux-arm64.json bench/out/m5a-linux-amd64.json
+```
+
+For the M5b gate, `python3 bench/gates/run.py m5b` writes
+`m5b-darwin-arm64.json`, `m5b-linux-arm64.json` and `m5b-linux-amd64.json`.
+The comparison has a column for each of the annotation, the word and the line
+digests, and one for the edit session's equivalence with `decrypt()` and
+`recover()`. The encrypted files are compared through `decrypt()` only, for an
+encrypted write is never the same twice; the others through `recover()`. It
+exits 0 only when no file had an error and no page's facts were unknown as a
+whole, and every session's result equalled the function's:
+
+```bash
+uv run python bench/gates/compare.py bench/out/m5b-darwin-arm64.json bench/out/m5b-linux-arm64.json bench/out/m5b-linux-amd64.json
 ```
 
 ## Comparison with other libraries

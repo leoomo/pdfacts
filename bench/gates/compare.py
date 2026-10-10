@@ -1,7 +1,7 @@
 """Compare gate receipts: what each platform read, and whether it agrees.
 
-Takes two or more receipts that one gate wrote (m1.py, m4a.py, m4b.py or
-m5a.py, named in the receipt), refuses those that would not answer the question
+Takes two or more receipts that one gate wrote (m1.py, m4a.py, m4b.py,
+m5a.py or m5b.py, named in the receipt), refuses those that would not answer the question
 (partial, another gate, other engines, another commit, no file), prints the
 numbers of each receipt and one table over the files of all receipts
 together, and says with its exit status whether every cell is identical.
@@ -95,6 +95,22 @@ GATES = {
         ),
         failed=("failed", str, "conditions failed"),
         tallies=("contents", "findings"),
+    ),
+    "m5b": Gate(
+        counts=(
+            ("page_count", "pages"),
+            ("annotation_count", "annotations"),
+            ("word_count", "words"),
+            ("line_count", "lines"),
+        ),
+        digests=("annotations", "words", "lines"),
+        columns=(
+            ("annotations", ("annotation_count", "annotations")),
+            ("words", ("word_count", "words")),
+            ("lines", ("line_count", "lines")),
+            ("session", ("session",)),
+        ),
+        failed=("pages_unknown", str, "pages whose facts are unknown as a whole"),
     ),
 }
 
