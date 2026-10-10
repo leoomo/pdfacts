@@ -20,6 +20,7 @@ import compare  # noqa: E402
 import m1  # noqa: E402
 import m4a  # noqa: E402
 import m4b  # noqa: E402
+import m5b  # noqa: E402
 
 from synthetic import cases  # noqa: E402
 
@@ -599,7 +600,7 @@ def test_not_a_receipt_of_the_m4a_gate(tmp_path, capsys, mangle):
     assert status == 2
 
 
-@pytest.mark.parametrize("name", ["m1", "m4a", "m4b"])
+@pytest.mark.parametrize("name", ["m1", "m4a", "m4b", "m5b"])
 def test_the_receipts_a_gate_writes(tmp_path, capsys, monkeypatch, name):
     """The gate run twice over a corpus of one file: compare.py takes both
     receipts, and every cell is identical."""
@@ -614,7 +615,8 @@ def test_the_receipts_a_gate_writes(tmp_path, capsys, monkeypatch, name):
     monkeypatch.setattr(m1, "ROOT", tmp_path)
     monkeypatch.setattr(m4a, "MANIFEST", manifest)
     monkeypatch.setattr(m4b, "MANIFEST", manifest)
-    gate = {"m1": m1, "m4a": m4a, "m4b": m4b}[name]
+    monkeypatch.setattr(m5b, "MANIFEST", manifest)
+    gate = {"m1": m1, "m4a": m4a, "m4b": m4b, "m5b": m5b}[name]
     paths = []
     for number in range(2):
         out = tmp_path / f"{name}-{number}.json"

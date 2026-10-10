@@ -142,6 +142,20 @@ def test_5_a_session_not_equal_fails(monkeypatch):
     assert m5b.exit_status({"errors": {}, "files": {"a.pdf": entry}}) == 1
 
 
+def test_6_a_session_with_nothing_to_compare_fails(monkeypatch):
+    """Both functions made to refuse the file: the session is empty, which is
+    a failure, not a vacuous pass."""
+
+    def refused(data):
+        raise pdfacts.DamagedFileError()
+
+    monkeypatch.setattr(pdfacts, "decrypt", refused)
+    monkeypatch.setattr(pdfacts, "recover", refused)
+    entry = m5b.read_file(PLAIN)
+    assert entry["session"] == {}
+    assert m5b.exit_status({"errors": {}, "files": {"a.pdf": entry}}) == 1
+
+
 def corpus(tmp_path, monkeypatch, files: dict[str, bytes], listed=None) -> Path:
     """`files` in a folder, and a manifest that lists them, ids 01, 02, ...;
     `listed` gives other bytes to hash for a file."""
@@ -163,7 +177,7 @@ def run(folder: Path, out: Path, *more: str) -> int:
     return m5b.main(["--commit", "0" * 40, "--out", str(out), "--corpus", str(folder), *more])
 
 
-def test_6_the_receipt(tmp_path, monkeypatch, capsys):
+def test_7_the_receipt(tmp_path, monkeypatch, capsys):
     folder = corpus(tmp_path, monkeypatch, {"a.pdf": ANNOTATED, "b.pdf": ENCRYPTED})
     out = tmp_path / "receipt.json"
     assert run(folder, out) == 0
@@ -184,7 +198,7 @@ def test_6_the_receipt(tmp_path, monkeypatch, capsys):
     assert receipt["environment"]["engine_info"]["font_policy"] == "embedded-only"
 
 
-def test_7_an_error_fails_the_run(tmp_path, monkeypatch):
+def test_8_an_error_fails_the_run(tmp_path, monkeypatch):
     folder = corpus(tmp_path, monkeypatch, {"a.pdf": PLAIN, "b.pdf": b"%PDF-1.7\nnothing"})
     out = tmp_path / "receipt.json"
     assert run(folder, out) == 1
@@ -192,7 +206,7 @@ def test_7_an_error_fails_the_run(tmp_path, monkeypatch):
     assert receipt["errors"] == {"b.pdf": "DamagedFileError"}
 
 
-def test_8_two_receipts_compared(tmp_path, monkeypatch, capsys):
+def test_9_two_receipts_compared(tmp_path, monkeypatch, capsys):
     folder = corpus(tmp_path, monkeypatch, {"a.pdf": ANNOTATED, "b.pdf": ENCRYPTED})
     first, second = tmp_path / "first.json", tmp_path / "second.json"
     assert run(folder, first) == run(folder, second) == 0
@@ -205,7 +219,7 @@ def test_8_two_receipts_compared(tmp_path, monkeypatch, capsys):
     assert "| a.pdf | identical | differs | identical | identical |" in capsys.readouterr().out
 
 
-def test_9_only_the_files_named(tmp_path, monkeypatch):
+def test_10_only_the_files_named(tmp_path, monkeypatch):
     folder = corpus(tmp_path, monkeypatch, {"a.pdf": PLAIN, "b.pdf": ENCRYPTED})
     out = tmp_path / "receipt.json"
     assert run(folder, out, "--only", "02") == 0
@@ -215,7 +229,7 @@ def test_9_only_the_files_named(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("refusal", ["another hash", "an id not listed", "fonts of the host"])
-def test_10_a_run_refused(tmp_path, monkeypatch, refusal):
+def test_11_a_run_refused(tmp_path, monkeypatch, refusal):
     listed = {"a.pdf": b"other"} if refusal == "another hash" else None
     folder = corpus(tmp_path, monkeypatch, {"a.pdf": PLAIN}, listed)
     if refusal == "fonts of the host":

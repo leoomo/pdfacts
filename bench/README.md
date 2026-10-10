@@ -229,9 +229,10 @@ For the M5b gate, `python3 bench/gates/run.py m5b` writes
 The comparison has a column for each of the annotation, the word and the line
 digests, and one for the edit session's equivalence with `decrypt()` and
 `recover()`. The encrypted files are compared through `decrypt()` only, for an
-encrypted write is never the same twice; the others through `recover()`. It
-exits 0 only when no file had an error and no page's facts were unknown as a
-whole, and every session's result equalled the function's:
+encrypted write is never the same twice; the others through `recover()`. The
+gate exits 0 only when no file had an error, no page's facts were unknown as a
+whole, and every session's result equalled the function's — so a platform
+whose gate fails leaves `run.py` no receipt to compare:
 
 ```bash
 uv run python bench/gates/compare.py bench/out/m5b-darwin-arm64.json bench/out/m5b-linux-arm64.json bench/out/m5b-linux-amd64.json
