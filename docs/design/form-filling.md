@@ -20,11 +20,13 @@ writing side; `Rect` and `DeviceColour` for the appearance geometry;
 list of names that would have to change is empty** — the skeleton holds:
 every need above is an existing name used as it is.
 
-**3. Pointing at the field.** A caller reads `fields()`, matches on the
-qualified name or the export value, and holds the `Field`'s `ref` (M2's
-`FieldRef`: page, index and object number — rule 1, everything
-addressable). One field may have several widgets; the caller picks them
-from `widgets()` by `Widget.field`'s equality with the field's `ref`.
+**3. Pointing at the field.** A caller reads `fields()` (M2), matches on
+the qualified name or the export value, and holds the `Field`'s `ref`
+(M2's `FieldRef`: object number and generation — rule 1, everything
+addressable; the page and the index within it are the widget's own
+`AnnotationRef`, M1's geometry). One field may have several widgets; the
+caller picks them from `widgets()` by `widget.field.ref`'s equality with
+the field's `ref`, where its `object_number` is an int.
 
 **4. The operation and the session.** A `Fill(field_ref, value)` operation
 in `forms/edit/` (rule 3: a change is expressed as an operation; facts are
