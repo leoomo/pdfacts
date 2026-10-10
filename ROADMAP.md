@@ -17,7 +17,7 @@ with form fields, later for documents without.
 | 6 | M5a | inspection, repair and decryption | done 2026-10-05 |
 | 7 | M4b | text probe, then text in full | done 2026-10-09 |
 | 8 | M6 | the first consumer switches for documents with form fields; version 1.0 | releases 0.1.0 and 0.2.0 made; the switch waits in the first consumer's project |
-| 9 | M5b | what was left out on the way: edit session, annotations, rotated text | in progress |
+| 9 | M5b | what was left out on the way: edit session, annotations, rotated text | done 2026-10-10 |
 | - | M7 | checks before going public | no date |
 
 Until M6 nothing is built that the switch does not need, except M4b: on
@@ -282,7 +282,13 @@ Begun on 2026-10-09, while the first consumer's switch stays parked in its
 project (#137, the maintainer's decision of that day; the switch and 1.0
 wait in #106). The sub-issues, in the order #137 proposes: B1 annotations
 other than widgets, B2 `TextRules.V3`, B3 the edit session, B4 the design
-note #15, written from the interface as it is then.
+note #15, written from the interface as it is then. All four were merged on
+2026-10-10: B1 as #140, B2 as #142, B3 as #144 and B4 as #145; the note's
+answer is that the list of existing public names a write feature would have
+to change is empty. M5b was planned with no gate of its own (#137); the
+record of its facts is in
+[docs/capabilities.md](docs/capabilities.md), the evidence each feature's
+pull request states.
 
 - edit session with verification after writing; rewrite and decrypt become
   operations of it
