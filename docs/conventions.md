@@ -1044,6 +1044,32 @@ dictionary for every page. None of them has part of a revision, or a
 the last 4096 bytes, so more than about 4 KB of white space after `%%EOF` makes
 it rebuild the table, and the file counts as damaged.
 
+## The edit session
+
+`EditSession(data, password=None)` collects operations and `apply()` writes
+the file with all of them applied in one step, reopening the result and
+checking every operation against its expected outcome
+(`docs/architecture.md`, rules 3 and 4). `recover()` and `decrypt()` stay
+as they are: each is one operation applied alone, and what they do is
+expressible here beside them — `Rewrite` is recover()'s write and check,
+`Decrypt` is decrypt()'s. A `Decrypt` alone refuses what decrypt() refuses
+— an input that is not encrypted (`NotEncryptedError`), a password that
+does not open it, a damaged file (`DamagedFileError`) — reading the input
+through `open()` before anything is written. A damaged encrypted file, which
+neither function can handle alone (decrypt() refuses the damage, recover()
+keeps the encryption), is rebuilt and decrypted in one write when a
+`Rewrite` stands beside the `Decrypt`; the result is then checked on its
+own — it opens, PDFium reads it as not encrypted, it has `/Size`, no
+warning, and as many pages as QPDF wrote for it — for against the damaged
+input no engine can compare pages. The result of any session with a
+`Decrypt` is never encrypted; of one with `Rewrite` alone it keeps the
+input's encryption, written anew (and an encrypted write is never the same
+twice, as recover()'s is). The order of the operations in one session does
+not change the written file. The errors are the operations' own, in their
+order; `max_bytes` holds the input, `max_pages` and `max_objects` the
+result, and `deadline_seconds` counts from the start of `apply()`. An empty
+session writes the file anew as it is, checked as `Rewrite` checks it.
+
 ## Decryption
 
 `open()` reads an encrypted file as it is: the engines decrypt what they read.
