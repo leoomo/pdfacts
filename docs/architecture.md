@@ -1,6 +1,6 @@
 # Architecture
 
-Status: design; M4b is done. The package layout below is the target, not
+Status: design; M5b is done. The package layout below is the target, not
 a list of what exists.
 
 ## Layers
