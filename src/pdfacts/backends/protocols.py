@@ -74,6 +74,17 @@ class RawBitmap:
 
 
 @dataclass(frozen=True, slots=True)
+class WrittenBytes:
+    """A file written by QPDF for the edit session."""
+
+    data: bytes
+    # Pages in the written file.
+    page_count: int
+    # What QPDF reported while it read and wrote.
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class RecoveredBytes:
     """A damaged file as QPDF rebuilt it, written anew."""
 
