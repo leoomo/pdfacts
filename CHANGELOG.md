@@ -19,6 +19,11 @@ may break callers.
   it the rotated glyphs take part in the words and lines, each line holding
   one direction; its glyphs are V2's. V1 and V2 are unchanged (decision of
   the maintainer, 2026-10-09, #137).
+- `EditSession(data, password=None)`, its operations `Rewrite` and
+  `Decrypt`, and the `Edited` result: operations collected and applied in
+  one verified write, as the convention "The edit session" states. A damaged
+  encrypted file is rebuilt and decrypted in one write (`Rewrite` beside
+  `Decrypt`), which neither `recover()` nor `decrypt()` can do alone.
 - `annotations(document, page_index)`: the annotations of a page other than
   widgets, with their `/Rect`, `/F`, `/Contents`, `/C` colour and the
   appearance their `/AP` selects, as the convention "Annotations" states.
