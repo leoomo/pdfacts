@@ -23,11 +23,11 @@ on. Three states are used throughout:
 | Rendering a page or a region (`RENDERING`) | proven | `tests/test_render.py`; the first pages of five corpus files gave the same bytes on macOS arm64, Linux arm64 and Linux x86_64 |
 | Form fields and widgets (`FORMS`) | proven | `tests/test_forms.py`; on the corpus, 7934 widgets in 75 files with the run-time check passing on all of them, and 6960 terminal fields in 75 files; the M2 gate |
 | Paths and images (`GRAPHICS`) | proven | `tests/test_graphics_reader.py`, `tests/test_graphics_shapes.py`, `tests/test_graphics_cases.py`; on the corpus, 63472 paths and 1884 images on 467 pages, their numbers equal to PDFium's own for every page's content and every annotation's appearance; the M3 gate |
-| Text: glyphs, words and lines (`TEXT`), by `rules` the glyph source and the grouping: `TextRules.V1` (default), `V2` the codes the content shows, `V3` with the rotated ones | proven | `tests/test_text_rules.py`, `tests/test_text_rules_v2.py`, `tests/test_text_lines_v2.py`, `tests/test_text_lines_v3.py`, `tests/test_text_reader.py`, `tests/test_text_cases.py`, `tests/test_text_angles.py`; on the corpus, V1: 1103908 glyphs, 154208 words and 32496 lines on 467 pages, the glyphs holding PDFium's characters in 104 of 104 files, every value identical on macOS arm64, Linux arm64 and Linux x86_64; the M4a gate; V2: 1139030 glyphs, 155329 words, 31950 lines, the M4b gate; V3: 155720 words, 32099 lines, the rotated glyphs among them (#141's run; the suite on three platforms) |
+| Text: glyphs, words and lines (`TEXT`), by `rules` the glyph source and the grouping: `TextRules.V1` (default), `V2` the codes the content shows, `V3` with the rotated ones | proven | `tests/test_text_rules.py`, `tests/test_text_rules_v2.py`, `tests/test_text_lines_v2.py`, `tests/test_text_lines_v3.py`, `tests/test_text_reader.py`, `tests/test_text_cases.py`, `tests/test_text_angles.py`; on the corpus, V1: 1103908 glyphs, 154208 words and 32496 lines on 467 pages, the glyphs holding PDFium's characters in 104 of 104 files, every value identical on macOS arm64, Linux arm64 and Linux x86_64; the M4a gate; V2: 1139030 glyphs, 155329 words, 31950 lines, the M4b gate; V3: 155720 words, 32099 lines, the rotated glyphs among them (#141's run); every value identical on macOS arm64, Linux arm64 and Linux x86_64; the M5b gate |
 | Recovering a damaged file (`RECOVERY`) | proven | `tests/test_recovery.py`. Every corpus file with its end damaged six ways (`%%EOF` removed, its last byte cut, cut right after the offset of its last `startxref`, junk, Ctrl-Z or a vertical tab appended) recovered with the geometry of the original. The 32 files with an incremental update, cut 200 bytes into it: 30 refused as ending inside an update; two updates were shorter. Five corpus forms cut at 70 % and 95 %: one of the ten recovered, with the geometry and the form fields of the original; two refused as ending inside an update; seven refused, QPDF finding no `/Kids` in the root of the page tree. All five keep objects in object streams |
 | Inspecting a file's structure, encryption and active content (`INSPECTION`) | proven | `tests/test_inspection.py`, `tests/test_inspection_checks.py`, `tests/test_backend_qpdf_structure.py`, `tests/test_backend_qpdf_active_content.py`; on the corpus, the `/Contents` of each of 467 pages as pikepdf reads it apart from pdfacts, its streams and its array, 7 of them indirect arrays, and each of 1287 actions, 1258 entries that name them, 38 XFA streams and 2 embedded files in the object the report names; every value identical on macOS arm64, Linux arm64 and Linux x86_64; the M5a gate |
 | Decrypting a file (`DECRYPTION`) | proven | `tests/test_decryption.py`, `tests/test_passwords.py`; the 14 encrypted corpus files decrypted to the same bytes on three platforms, and read by pypdf and by PyMuPDF with the field names and rectangles of the original, 1038 widgets, on each page as many as pikepdf finds, and by pypdf with the 1020 names of the field trees, also after each wrote the file anew; in the 13 with a text field, a value set and read back by each; 82 faults introduced into the results, each refused, and the right result returned, also when written anew by pikepdf; the M5a gate |
-| Annotations other than widgets (`ANNOTATIONS`) | proven | `tests/test_annotations.py`; on the corpus, the 118 annotations other than widgets on 81 pages of 55 files — 112 `/Link`, 3 `/Highlight`, 3 `/Popup` — each with its `/Rect`, `/F`, `/Contents`, `/C` colour and the appearance its `/AP` selects, 4 colours, 65 contents and 3 appearances among them, the page's annotation count compared between the engines and held to `max_items_per_page` (#139's run; the suite on three platforms) |
+| Annotations other than widgets (`ANNOTATIONS`) | proven | `tests/test_annotations.py`; on the corpus, the 118 annotations other than widgets on 81 pages of 55 files — 112 `/Link`, 3 `/Highlight`, 3 `/Popup` — each with its `/Rect`, `/F`, `/Contents`, `/C` colour and the appearance its `/AP` selects, 4 colours, 65 contents and 3 appearances among them, the page's annotation count compared between the engines and held to `max_items_per_page` (#139's run); every value identical on macOS arm64, Linux arm64 and Linux x86_64; the M5b gate |
 | Everything else | planned | [ROADMAP.md](../ROADMAP.md) |
 
 ## Milestone M0: install gate
@@ -423,6 +423,47 @@ whose tree is that of `58cca13`, the commit the gate ran on, and on
 `6b742ee`, the commit that records the run, which differs from it in
 documents only. Each gave 3920 tests on macOS arm64, and 3919 on Linux
 arm64 and on Linux x86_64, where one test that needs macOS is skipped.
+
+## Milestone M5b: verification
+
+Run on 2026-10-10 with `bench/gates/run.py m5b` on commit
+`5bc607594fdffce3d78da5d63f0093e3c8ef244d`, over the 104 files of
+`bench/corpus/manifest.csv`, after the runtime installed the font policy.
+Every platform reported pypdfium2 5.13.0, PDFium 153.0.7999.0, pikepdf
+10.14.0, QPDF 12.4.1 and the font policy embedded-only. The gate reads the
+annotations other than widgets and the words and lines of `TextRules.V3` of
+every page, digests each fact kind over the file — the digests hold no value
+and no text of a document — and applies per file an `EditSession` with
+`Decrypt` alone and one with `Rewrite` alone, comparing each with the
+function it replaces. This closes the gap the M5b record left when B1 to B4
+were merged on one platform's runs (#146): the three-platform identity of
+the new facts, proven the way M4b proved V2's.
+
+| Platform | `uname -m` | Python | Files read | Pages | Annotations | Words | Lines | Seconds |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| macOS arm64, natively | arm64 | 3.13.5 | 104 | 467 | 118 | 155720 | 32099 | 25.7 |
+| Linux arm64, container `python:3.13.5-slim` | aarch64 | 3.13.5 | 104 | 467 | 118 | 155720 | 32099 | 27.9 |
+| Linux x86_64, container `python:3.13.5-slim`, emulated on an arm64 host | x86_64 | 3.13.5 | 104 | 467 | 118 | 155720 | 32099 | 51.7 |
+
+| Compared on all three platforms | Files identical |
+| --- | --- |
+| annotations, every value of every annotation | 104 of 104 |
+| words of `TextRules.V3` | 104 of 104 |
+| lines of `TextRules.V3` | 104 of 104 |
+| the edit session's equivalence with `decrypt()` and `recover()` | 104 of 104 |
+
+The gate printed this line on every platform:
+
+```
+104 files, 467 pages: 118 annotation, 155720 word, 32099 line, 0 pages unknown; the session as decrypt() in 14 files, as recover() in 90
+```
+
+No file failed, no page's facts were unknown as a whole. On each platform
+the 14 encrypted files were decrypted by the session to the bytes
+`decrypt()` writes, with the same page count, and the other 90 rewritten by
+the session to the bytes `recover()` writes; an encrypted write is never the
+same twice, so the rewrite is not compared where the file is encrypted.
+Seconds are the time the gate script took over the corpus.
 
 ## What the engines provide
 

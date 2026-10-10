@@ -52,7 +52,7 @@ def gate(monkeypatch, tmp_path):
     return recorded
 
 
-@pytest.mark.parametrize("name", ["m1", "m4a", "m4b", "m5a"])
+@pytest.mark.parametrize("name", ["m1", "m4a", "m4b", "m5a", "m5b"])
 @pytest.mark.parametrize("architecture", ["arm64", "amd64"])
 def test_the_container_reads_the_corpus_read_only(architecture, name):
     command = run.container_command(
@@ -105,7 +105,7 @@ def test_every_platform_runs_the_same_snapshot(gate, monkeypatch):
     ]
 
 
-@pytest.mark.parametrize("name", ["m1", "m4a", "m4b", "m5a"])
+@pytest.mark.parametrize("name", ["m1", "m4a", "m4b", "m5a", "m5b"])
 def test_each_gate_compare_knows_is_run_on_the_three_platforms(gate, name):
     assert run.main([name]) == 0
     assert [(where, named) for where, named, _ in gate["runs"]] == [
@@ -149,7 +149,7 @@ def test_one_gate_compare_knows_is_named(gate, arguments):
     assert gate["runs"] == []
 
 
-@pytest.mark.parametrize("name", ["m1", "m4a", "m4b", "m5a"])
+@pytest.mark.parametrize("name", ["m1", "m4a", "m4b", "m5a", "m5b"])
 def test_the_host_runs_the_gate_named(monkeypatch, tmp_path, name):
     """The host's steps, run in a copy of an empty snapshot: the last one runs
     the gate's script and writes the receipt of its name."""
