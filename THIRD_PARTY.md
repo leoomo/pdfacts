@@ -65,7 +65,10 @@ Linux wheels also carry a software bill of materials at
 ## Development tools
 
 pytest and ruff are used for development only and are not part of any
-distributed package.
+distributed package. numpy 2.5.3 and scipy 1.18.1, in the dependency
+group `dev`, serve the M4b gate's rendering measurement
+(`bench/gates/m4b.py`) only; they are not part of any distributed
+package.
 
 ## Libraries the gates compare with
 
