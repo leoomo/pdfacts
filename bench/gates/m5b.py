@@ -68,7 +68,7 @@ def _put(digest, value) -> None:
             _put(digest, item)
     else:
         # Point, Rect, DeviceColour, AnnotationAppearance, AnnotationRef: a
-        # dataclass or named tuple of plain values.
+        # dataclass of plain values.
         digest.update(type(value).__name__)
         for field in dataclasses.fields(value):
             _put(digest, getattr(value, field.name))
@@ -158,7 +158,9 @@ def exit_status(receipt: dict) -> int:
     if receipt["errors"]:
         return 1
     for entry in receipt["files"].values():
-        if entry["pages_unknown"] or not all(entry["session"].values()):
+        # An empty session — neither function could be compared with — is a
+        # failure, not a vacuous pass.
+        if entry["pages_unknown"] or not entry["session"] or not all(entry["session"].values()):
             return 1
     return 0
 
