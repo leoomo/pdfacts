@@ -191,6 +191,7 @@ that wrote `uv.lock`; when uv is upgraded, the script is changed with it.
 - [Provenance](docs/provenance.md): where knowledge came from and what may not be copied
 - [Third-party components](THIRD_PARTY.md)
 - [Changelog](CHANGELOG.md): every change to the interface or to a convention
+- [Security policy](SECURITY.md): reporting a security problem
 - [Rules for coding agents](AGENTS.md)
 
 ## License
