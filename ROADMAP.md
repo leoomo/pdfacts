@@ -316,7 +316,7 @@ forms wait for M7 itself; the switch and version 1.0 still come first.
 - provenance review against [docs/provenance.md](docs/provenance.md) (done 2026-10-10, #152)
 - the history contains no secrets, private samples or user data (audited
   2026-10-10, #150)
-- documentation, examples, versioning and deprecation policy, security contact
+- documentation, examples, versioning and deprecation policy, security contact (2026-10-11, #158: the policy and examples of the README, the contact GitHub's private vulnerability reporting in SECURITY.md)
 - contribution policy (written 2026-10-11, #154)
 - a comparison with other libraries on the same files
 - a corpus that goes beyond official German forms

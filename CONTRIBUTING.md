@@ -81,6 +81,11 @@ The eight rules of [AGENTS.md](AGENTS.md), in short:
   pdfacts, in code, documents, commit messages, issues or pull requests.
 - Report what happened.
 
+## Reporting a security problem
+
+Use [SECURITY.md](SECURITY.md): GitHub's private vulnerability reporting,
+not a public issue.
+
 ## Writing
 
 Documents, comments, commit messages, issues and pull requests are written
