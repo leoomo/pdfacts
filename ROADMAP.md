@@ -317,7 +317,7 @@ forms wait for M7 itself; the switch and version 1.0 still come first.
 - the history contains no secrets, private samples or user data (audited
   2026-10-10, #150)
 - documentation, examples, versioning and deprecation policy, security contact
-- contribution policy
+- contribution policy (written 2026-10-11, #154)
 - a comparison with other libraries on the same files
 - a corpus that goes beyond official German forms
 - Windows and musl are either verified or stated as unsupported
