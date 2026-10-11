@@ -42,9 +42,14 @@ by `pickle`, from and to the same version of pdfacts; `dataclasses.asdict()`
 and JSON are no transport for them: JSON refuses the bytes a name holds, and
 `asdict()` turns an `Unknown` into a plain mapping of its reason and detail.
 The text of an `Unknown`'s detail, of a warning and of an error's message is
-written for people, not to be parsed. Before version 1.0 the interface may
-change in ways that break callers; each such change is in
-[CHANGELOG.md](CHANGELOG.md).
+written for people, not to be parsed.
+
+## Versioning
+
+Before version 1.0 the interface may change in ways that break callers;
+every such change is recorded in [CHANGELOG.md](CHANGELOG.md). From 1.0
+on, fact structures only grow, and a change that breaks callers needs a
+new major version.
 
 ## Engines
 
@@ -86,6 +91,24 @@ except pdfacts.DamagedFileError:
     print(recovery.page_count, recovery.warnings)  # pages may have been lost
     data = recovery.data  # new bytes, new object numbers: keep these
     document = pdfacts.open(data)
+```
+
+The facts of a page, each family one call; the text with the third rule
+set, which holds the rotated glyphs in lines:
+
+```python
+with pdfacts.open(data) as document:
+    for word in pdfacts.words(document, 0, rules=pdfacts.TextRules.V3):
+        print(word.text, word.box)  # user space
+
+    for annotation in pdfacts.annotations(document, 0):  # other than widgets
+        print(annotation.ref.kind, annotation.rect, annotation.contents)
+
+    report = pdfacts.inspect(document)  # objects, encryption, active content
+    print(report.objects.total, report.warnings)
+
+session = pdfacts.EditSession(data).add(pdfacts.Rewrite()).apply()
+print(session.page_count, len(session.data))  # written anew, then checked
 ```
 
 ## Supported platforms
