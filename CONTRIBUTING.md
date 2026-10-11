@@ -61,6 +61,8 @@ The eight rules of [AGENTS.md](AGENTS.md), in short:
 - No AGPL code is copied or translated in. Reading MuPDF's and PyMuPDF's
   source to learn from it is allowed; a module written after reading
   third-party source is logged in [docs/provenance.md](docs/provenance.md).
+  MuPDF's bindings are imported under `bench/` only, never in `src/`,
+  `tests/` or `tools/`.
 - Expected values in tests come from construction: a test builds its PDF
   with the byte-level builder of the test tree and takes its numbers from
   what it wrote. The output of one library is never the expected value of
