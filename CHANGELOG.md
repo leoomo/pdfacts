@@ -6,12 +6,6 @@ may break callers.
 
 ## Unreleased
 
-### Changed
-
-- The package is licensed under MIT, and the repository is public; the
-  `Private :: Do Not Upload` classifier is gone (decision of the maintainer,
-  2026-10-11, #162).
-
 ### Added
 
 - `TextRules`, with `V1` (M4a's rules) and `V2`, and `rules` of `glyphs()`:
@@ -42,6 +36,9 @@ may break callers.
 
 ### Changed
 
+- The package is licensed under MIT, and the repository is public; the
+  `Private :: Do Not Upload` classifier is gone (decision of the maintainer,
+  2026-10-11, #162).
 - The order of milestones: M4b, the text probe and text in full, comes
   before the switch in M6 and before version 1.0, no longer after them. The
   switch waits in the first consumer's project, and what the probe decides
