@@ -32,7 +32,7 @@ The checks of every change run on all three with `tools/checks.py`.
 | --- | --- |
 | Linux x86_64 and arm64, glibc | in containers on the development machine; x86_64 is emulated, nothing runs on real x86_64 hardware |
 | macOS arm64 | natively on the development machine |
-| Linux with musl, Windows | not verified; wheels of both engines exist, nothing was run |
+| Linux with musl, Windows | not supported (stated 2026-10-11, #156): wheels of both engines exist, nothing was run |
 
 Python 3.13 or newer.
 
@@ -320,7 +320,7 @@ forms wait for M7 itself; the switch and version 1.0 still come first.
 - contribution policy (written 2026-10-11, #154)
 - a comparison with other libraries on the same files
 - a corpus that goes beyond official German forms
-- Windows and musl are either verified or stated as unsupported
+- Windows and musl are either verified or stated as unsupported (stated unsupported 2026-10-11, #156)
 
 ## After 1.0
 

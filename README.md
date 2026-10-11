@@ -88,6 +88,17 @@ except pdfacts.DamagedFileError:
     document = pdfacts.open(data)
 ```
 
+## Supported platforms
+
+Python 3.13 or newer. pdfacts supports the platforms the checks of every
+change cover:
+
+| Platform | Support |
+| --- | --- |
+| macOS arm64 | supported; checked natively on the development machine |
+| Linux x86_64 and arm64, glibc | supported; checked in containers, x86_64 emulated on an arm64 machine, on no real x86_64 hardware |
+| Windows; Linux with musl | not supported: wheels of both engines exist, but nothing has been run on them |
+
 ## Development
 
 Python 3.13 or newer. Dependencies are managed with
