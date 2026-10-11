@@ -6,6 +6,12 @@ may break callers.
 
 ## Unreleased
 
+### Changed
+
+- The package is licensed under MIT, and the repository is public; the
+  `Private :: Do Not Upload` classifier is gone (decision of the maintainer,
+  2026-10-11, #162).
+
 ### Added
 
 - `TextRules`, with `V1` (M4a's rules) and `V2`, and `rules` of `glyphs()`:

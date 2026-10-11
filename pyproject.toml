@@ -4,6 +4,7 @@ version = "0.2.0"
 description = "Structured, verifiable facts from PDF files: text, paths, images, annotations and forms with explicit geometry."
 readme = "README.md"
 requires-python = ">=3.13"
+license = "MIT"
 # Engine versions are pinned exactly: extracted facts depend on the engine
 # build, so an engine upgrade is a reviewed change, never a side effect.
 dependencies = [
@@ -11,8 +12,6 @@ dependencies = [
     "pikepdf==10.14.0",
 ]
 classifiers = [
-    # Blocks accidental uploads to a public index while the project is private.
-    "Private :: Do Not Upload",
     "Development Status :: 1 - Planning",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.13",

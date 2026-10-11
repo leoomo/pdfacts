@@ -309,10 +309,13 @@ provenance, the contribution policy, the documents of versioning and
 contact, the platforms statement, and the license once the maintainer
 confirms the choice — are prepared in the sub-issues of #148. The
 comparison with other libraries and the corpus beyond official German
-forms wait for M7 itself; the switch and version 1.0 still come first.
+forms wait for M7 itself; the switch and version 1.0 still come first. The
+repository became public on 2026-10-11, under MIT (#162), with those two
+items still open.
 
-- a license has been chosen and its text is in the repository; the intended
-  license is Apache-2.0
+- a license has been chosen and its text is in the repository (MIT, chosen
+  2026-10-11, #162 — the maintainer's decision, superseding the earlier
+  Apache-2.0 intent)
 - provenance review against [docs/provenance.md](docs/provenance.md) (done 2026-10-10, #152)
 - the history contains no secrets, private samples or user data (audited
   2026-10-10, #150)
