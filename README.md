@@ -1,65 +1,98 @@
 # pdfacts
 
-Structured, verifiable facts from PDF files: text, paths, images, annotations
-and forms, each with explicit geometry.
+[![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-3776AB.svg)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-informational.svg)](LICENSE)
+[![Code style: ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
-> **Status: private, pre-alpha (milestone M5b done).** `pdfacts.open()` reads
-> a document and the geometry and object numbers of its pages, renders a page
-> or a region of it to raw bytes, `pdfacts.widgets()` and `pdfacts.fields()`
-> read its form fields and widgets, `pdfacts.paths()` and `pdfacts.images()`
-> what a page draws, `pdfacts.glyphs()`, `pdfacts.words()` and
-> `pdfacts.lines()` the text of its content, `TextRules.V2` and `V3` among
-> its rule sets through `rules`, and `pdfacts.inspect()` its
-> structure, encryption and active content; `pdfacts.recover()` rebuilds a
-> damaged file, and `pdfacts.decrypt()` writes an encrypted one anew without
-> its encryption; `pdfacts.annotations()` reads the annotations other than
-> widgets, and `pdfacts.EditSession` applies the operations `Rewrite` and
-> `Decrypt` in one verified write. Nothing else described below exists yet. See
-> [ROADMAP.md](ROADMAP.md) for what is planned and how each step is accepted.
+Structured, verifiable facts from PDF files: text, paths, images,
+annotations and forms — each with explicit geometry, each identical on
+every platform, on two engines.
 
-## What it is for
-
-pdfacts sits on top of two mature engines and adds what they leave to the
-caller:
-
-- **Facts with explicit geometry.** Glyphs, words, lines, paths, images,
-  annotations and form widgets, in a stated coordinate space, with the
-  transform to the displayed page.
-- **Form data you can trust.** Fields, widgets, values, options and states
-  taken from the file itself.
-- **Inspection and repair.** Encryption, active content and object counts as a
-  report; rewrite and decryption as explicit operations.
+pdfacts reads what a PDF *is*, not what one renderer makes of it. The facts
+it returns — glyphs and their boxes in user space, words and lines under
+three rule sets, paths with the colours the file sets, form fields with
+their values as written, annotations with the appearance their `/AP`
+selects, encryption and active content as a report — are either read from
+the file or refused with a reason. What cannot be determined is `Unknown`
+with a reason, never a default that looks like a real value.
 
 It does not parse PDF syntax, render pages or rasterize fonts itself. Those
-jobs belong to the engines.
+jobs belong to the engines it stands on.
 
-## Interface
+> **Status: public, pre-1.0.** The reading side is complete through
+> milestone M5b and proven on a corpus of 104 real documents on three
+> platforms; the writing side holds the edit session. Before 1.0 the
+> interface may change in ways that break callers — see
+> [Versioning](#versioning) and [ROADMAP.md](ROADMAP.md) for what is
+> planned and how each step is accepted.
 
-The interface is what the package `pdfacts` exports, the names in
-`pdfacts.__all__`; the modules beneath it are not. Facts are frozen
-dataclasses whose collections are tuples. They are carried between processes
-by `pickle`, from and to the same version of pdfacts; `dataclasses.asdict()`
-and JSON are no transport for them: JSON refuses the bytes a name holds, and
-`asdict()` turns an `Unknown` into a plain mapping of its reason and detail.
-The text of an `Unknown`'s detail, of a warning and of an error's message is
-written for people, not to be parsed.
+## Contents
 
-## Versioning
+- [Why pdfacts](#why-pdfacts)
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [The facts of a page](#the-facts-of-a-page) — [text](#text), [forms](#forms),
+  [paths and images](#paths-and-images), [annotations](#annotations),
+  [inspection](#inspection), [recovery](#recovery), [decryption](#decryption),
+  [the edit session](#the-edit-session)
+- [Two engines, one answer](#two-engines-one-answer)
+- [Nothing is made up](#nothing-is-made-up)
+- [Every value identical on every platform](#every-value-identical-on-every-platform)
+- [Supported platforms](#supported-platforms)
+- [Interface](#interface)
+- [Versioning](#versioning)
+- [Documentation](#documentation)
+- [Development and checks](#development-and-checks)
+- [Contributing](#contributing)
+- [Security](#security)
+- [License](#license)
 
-Before version 1.0 the interface may change in ways that break callers;
-every such change is recorded in [CHANGELOG.md](CHANGELOG.md). From 1.0
-on, fact structures only grow, and a change that breaks callers needs a
-new major version.
+## Why pdfacts
 
-## Engines
+The mature PDF engines — PDFium, QPDF — leave the interpretation to the
+caller. pdfacts adds what they leave out:
 
-| Engine | Binding | Used for |
-| --- | --- | --- |
-| PDFium | pypdfium2 | what needs interpretation: text positions of `TextRules.V1` (M4b), paths, rendering |
-| QPDF | pikepdf | file structure: objects, dictionaries, streams, rewrite, decryption; the tokens of content streams, which pdfacts interprets for the colour state that confirms a pattern colour and for the text of `TextRules.V2` (M4b) |
+- **Facts with explicit geometry.** Glyphs, words, lines, paths, images,
+  annotations and form widgets in a stated coordinate space, with the
+  transform to the displayed page. A box is never "roughly right"; it is
+  in user space, and you are told which space it is in.
+- **Form data you can trust.** Fields, widgets, values, options and states
+  taken from the file itself, not normalised into a generic model that
+  quietly loses what the file wrote.
+- **Three rule sets for text.** `TextRules.V1` reads PDFium's characters,
+  `V2` the codes the content stream itself shows, white space included,
+  `V3` holds the rotated glyphs in lines too. Same call, stated rules,
+  comparable results.
+- **Inspection and repair.** Encryption, active content and object counts
+  as a report; rewriting and decryption as explicit, verified operations —
+  and an edit session that applies several in one checked write.
+- **The three answers.** Every value is either read from the file,
+  `Unknown` with a reason, or an error. Nothing is guessed, defaulted or
+  silently dropped.
 
-Engine versions are pinned exactly in `pyproject.toml`. Extracted facts depend
-on the engine build, so an upgrade is a reviewed change.
+## Installation
+
+Python 3.13 or newer. The engines are dependencies and their versions are
+pinned exactly — extracted facts depend on the engine build, so an upgrade
+is a reviewed change, never a side effect.
+
+The package is not on a public index yet; install it from a checkout:
+
+```bash
+git clone https://github.com/leoomo/pdfacts.git
+cd pdfacts
+uv sync        # or: pip install .
+```
+
+```python
+import pdfacts
+
+print(pdfacts.engine_info())  # the versions your facts depend on
+```
+
+## Quick start
+
+Keep the bytes: every fact describes them.
 
 ```python
 from pathlib import Path
@@ -93,23 +126,156 @@ except pdfacts.DamagedFileError:
     document = pdfacts.open(data)
 ```
 
-The facts of a page, each family one call; the text with the third rule
-set, which holds the rotated glyphs in lines:
+## The facts of a page
+
+Each family is one call. The examples below run exactly as written.
+
+### Text
+
+The text of a page, third rule set — the rotated glyphs take part, each
+line holding one direction:
 
 ```python
 with pdfacts.open(data) as document:
     for word in pdfacts.words(document, 0, rules=pdfacts.TextRules.V3):
         print(word.text, word.box)  # user space
 
+    for line in pdfacts.lines(document, 0, rules=pdfacts.TextRules.V3):
+        print(line.text, line.box)  # the box holds the line's white space
+
+    for glyph in pdfacts.glyphs(document, 0, rules=pdfacts.TextRules.V2):
+        print(glyph.text, glyph.origin, glyph.direction, glyph.size)
+```
+
+`V1` (the default) reads PDFium's characters, which leave out about 12% of
+the space glyphs; `V2` reads the codes the content itself shows, white
+space included; `V3` is `V2` with the rotated glyphs held in lines. The
+rule set is a stated choice, and the three are comparable glyph by glyph.
+
+### Forms
+
+Fields and widgets as the file writes them:
+
+```python
+with pdfacts.open(data) as document:
+    for widget in pdfacts.widgets(document, 0):
+        print(widget.field.name, widget.field.value, widget.rect)
+        print(widget.field.type, widget.state, widget.states)
+```
+
+A field's value is what the file holds, an `Unknown` with a reason where
+it cannot be read — never an invented default.
+
+### Paths and images
+
+What a page draws, with the colours the content sets:
+
+```python
+with pdfacts.open(data) as document:
+    for path in pdfacts.paths(document, 0):
+        print(path.stroke, path.line_width, len(path.subpaths))
+
+    for image in pdfacts.images(document, 0):
+        print(image.pixel_width, image.pixel_height, image.corners)
+```
+
+Where a pattern colour is set, a path's colour is unknown unless QPDF
+confirms what PDFium reports — the two engines must agree, or the value
+says why it does not.
+
+### Annotations
+
+The annotations other than widgets, with what the file writes:
+
+```python
+with pdfacts.open(data) as document:
     for annotation in pdfacts.annotations(document, 0):  # other than widgets
         print(annotation.ref.kind, annotation.rect, annotation.contents)
+```
 
+### Inspection
+
+A file's structure, encryption and active content as one report:
+
+```python
+with pdfacts.open(data) as document:
     report = pdfacts.inspect(document)  # objects, encryption, active content
-    print(report.objects.total, report.warnings)
+    print(report.objects.total, report.encryption, report.warnings)
+```
 
+Actions are listed with the entries that name them to run, XFA streams and
+embedded files included — read as a report, so a caller can decide what to
+do with what a file carries.
+
+### Recovery
+
+See the quick start: `pdfacts.recover(data)` rebuilds a damaged file,
+writes it anew and checks the result; `recovery.data` are the bytes to
+keep.
+
+### Decryption
+
+An encrypted file, written anew without its encryption:
+
+```python
+plain = pdfacts.decrypt(data)  # verified before it is returned
+print(plain.page_count)
+data = plain.data  # new bytes, no encryption: keep these
+```
+
+### The edit session
+
+Several operations, one verified write:
+
+```python
 session = pdfacts.EditSession(data).add(pdfacts.Rewrite()).apply()
 print(session.page_count, len(session.data))  # written anew, then checked
 ```
+
+`Decrypt()` beside `Rewrite()` rebuilds *and* decrypts a damaged encrypted
+file in one write — which neither `recover()` nor `decrypt()` can do alone.
+
+## Two engines, one answer
+
+| Engine | Binding | Used for |
+| --- | --- | --- |
+| PDFium | pypdfium2 | what needs interpretation: text positions of `TextRules.V1` (M4b), paths, rendering |
+| QPDF | pikepdf | file structure: objects, dictionaries, streams, rewrite, decryption; the tokens of content streams, which pdfacts interprets for the colour state that confirms a pattern colour and for the text of `TextRules.V2` (M4b) |
+
+Where both engines can answer, they are compared: the number of
+annotations on a page, the widgets, the geometry. Where they disagree, the
+fact is `Unknown` with the reason `engines-disagree` — the disagreement
+itself is information, and it is never resolved by trusting one side
+quietly.
+
+## Nothing is made up
+
+Every value pdfacts returns is one of three answers:
+
+1. **A value, read from the file.** With its geometry, in a stated space.
+2. **`Unknown`, with a reason.** `invalid-in-file` where the file holds
+   what the PDF specification does not allow; `unreadable` where the
+   engines cannot read it; `engines-disagree` where they differ;
+   `not-read` where pdfacts does not read that kind of value yet.
+3. **An error.** For a file that cannot be opened, a value that cannot be
+   used, a limit that was set and reached.
+
+Never a default that looks like a real value, never an empty result in
+place of a failure, never mock or placeholder data. The text of an
+`Unknown`'s reason is written for people, not to be parsed; the reason
+itself is a stable enum value.
+
+## Every value identical on every platform
+
+Every change is checked on macOS arm64, Linux arm64 and Linux x86_64
+(`tools/checks.py --all`; there is no hosted continuous integration — the
+checks run on every change, and a pull request quotes its run). Beyond the
+suite, the repository keeps *gates*: corpus runs over 104 real documents
+whose every fact is digested and compared across the three platforms —
+geometry, glyphs, words, lines, paths, images, annotations, inspection,
+decryption, recovery — with per-file receipts recorded in
+[docs/capabilities.md](docs/capabilities.md). Identical means identical:
+same counts, same digests, file by file.
 
 ## Supported platforms
 
@@ -122,10 +288,38 @@ change cover:
 | Linux x86_64 and arm64, glibc | supported; checked in containers, x86_64 emulated on an arm64 machine, on no real x86_64 hardware |
 | Windows; Linux with musl | not supported: wheels of both engines exist, but nothing has been run on them |
 
-## Development
+## Interface
 
-Python 3.13 or newer. Dependencies are managed with
-[uv](https://docs.astral.sh/uv/).
+The interface is what the package `pdfacts` exports, the names in
+`pdfacts.__all__`; the modules beneath it are not. Facts are frozen
+dataclasses whose collections are tuples. They are carried between processes
+by `pickle`, from and to the same version of pdfacts; `dataclasses.asdict()`
+and JSON are no transport for them: JSON refuses the bytes a name holds, and
+`asdict()` turns an `Unknown` into a plain mapping of its reason and detail.
+The text of an `Unknown`'s detail, of a warning and of an error's message is
+written for people, not to be parsed.
+
+## Versioning
+
+Before version 1.0 the interface may change in ways that break callers;
+every such change is recorded in [CHANGELOG.md](CHANGELOG.md). From 1.0
+on, fact structures only grow, and a change that breaks callers needs a
+new major version.
+
+## Documentation
+
+- [Architecture](docs/architecture.md): layers and the rules that keep new features additive
+- [Conventions](docs/conventions.md): coordinate spaces, boxes, identity, digests
+- [Capabilities](docs/capabilities.md): what works, what does not, what is unknown — with the numbers
+- [Provenance](docs/provenance.md): where knowledge came from and what may not be copied
+- [Third-party components](THIRD_PARTY.md)
+- [Changelog](CHANGELOG.md): every change to the interface or to a convention
+- [Roadmap](ROADMAP.md): what is planned and how each step is accepted
+- [Rules for coding agents](AGENTS.md)
+
+## Development and checks
+
+Dependencies are managed with [uv](https://docs.astral.sh/uv/) only:
 
 ```bash
 uv sync
@@ -136,65 +330,30 @@ uv run python tools/check_architecture.py
 uv build
 ```
 
-## Checks
-
-`tools/checks.py` defines the checks that decide whether a change may be
-merged. It installs the locked dependencies, runs the commands above, builds
-the wheel, installs it into a fresh environment outside the checkout and calls
-`pdfacts.engine_info()` from there. A check that fails does not stop the
-checks after it, so one run shows every problem.
+All of these, plus a test of the built wheel, on the three platforms, in
+one run:
 
 ```bash
-python3 tools/checks.py                # this machine, in a fresh copy of the working tree
-python3 tools/checks.py --linux arm64  # the same inside a Linux container (needs Docker)
-python3 tools/checks.py --all          # this machine, Linux arm64 and Linux amd64
+python3 tools/checks.py --all
 ```
 
-The copy contains what git would commit. Files that git ignores, such as a
-local virtual environment or the corpus files, never reach a check. The copy
-is taken once, at the start, and every platform of the run checks the same
-copy. Every run states the commit it checked, whether the working tree had
-uncommitted changes, and whether the commit contains `origin/main` as last
-fetched; `--all` refuses to run while there are uncommitted changes, so that
-its result describes exactly what will be merged.
+A fresh clone passes the tests: the test suite builds its own PDFs and its
+own corpora and needs nothing outside the repository. The corpus the gates
+read (`bench/corpus/`) is not part of the repository; its files are never
+committed, only listed in `bench/corpus/manifest.csv`, and the gates place
+them from a read-only source of the project.
 
-The repository uses no hosted continuous integration. Before a merge,
-`python3 tools/checks.py --all` is run on the final commit of the branch, and
-its output is put into the pull request.
+## Contributing
 
-| Platform | Where it runs |
-| --- | --- |
-| macOS arm64 | on the development machine |
-| Linux arm64 | in a container on the development machine |
-| Linux x86_64 | in a container, emulated on the arm64 development machine; nothing runs on real x86_64 hardware |
+One issue, one branch, one pull request; the checks of every change; the
+rules of [AGENTS.md](AGENTS.md). See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the short path.
 
-The containers use the image `python:3.13.5-slim`, pinned by digest, which has
-the Python version of `.python-version`. The script names the version of uv
-that wrote `uv.lock`; when uv is upgraded, the script is changed with it.
+## Security
 
-## Layout
-
-| Path | Content |
-| --- | --- |
-| `src/pdfacts/core/` | engine-neutral building blocks |
-| `src/pdfacts/backends/` | the only code that talks to the engines |
-| `tests/` | tests whose expected values come from construction, not from an engine |
-| `tools/` | repository checks |
-| `bench/` | corpus manifest and fetch script; not part of the wheel |
-| `docs/` | architecture, conventions, capabilities, provenance |
-
-## Documents
-
-- [Architecture](docs/architecture.md): layers and the rules that keep new features additive
-- [Conventions](docs/conventions.md): coordinate spaces, boxes, identity, digests
-- [Capabilities](docs/capabilities.md): what works, what does not, what is unknown
-- [Provenance](docs/provenance.md): where knowledge came from and what may not be copied
-- [Third-party components](THIRD_PARTY.md)
-- [Changelog](CHANGELOG.md): every change to the interface or to a convention
-- [Security policy](SECURITY.md): reporting a security problem
-- [Rules for coding agents](AGENTS.md)
+Report security problems through GitHub's private vulnerability reporting,
+not a public issue: [SECURITY.md](SECURITY.md).
 
 ## License
 
-No license has been chosen yet. Until a license file is added to this
-repository, all rights are reserved.
+[MIT](LICENSE).
