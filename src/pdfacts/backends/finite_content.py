@@ -13,6 +13,10 @@ TERMINATORS = WHITESPACE + DELIMITERS
 HEX = b"0123456789abcdefABCDEF"
 ESCAPES = {ord("n"): 10, ord("r"): 13, ord("t"): 9, ord("b"): 8, ord("f"): 12}
 
+# Fixed lexical values only; no source-dependent data enters these tables.
+_SINGLE_DIGIT_WORDS = (b"0", b"1", b"2", b"3", b"4", b"5", b"6", b"7", b"8", b"9")
+_SINGLE_BYTE_OPERATORS = tuple(chr(value) for value in range(33, 127))
+
 # Static lexical constants. The source-state parser still decides admissibility.
 _COMMON_OPERATORS = {
     2: {
@@ -109,6 +113,27 @@ class ContentParser:
         self.window = b""
         self.window_start = 0
         self.window_end = 0
+        bank.reserve(768)
+        bank.charge(64)
+        self._scalar_cache = [None] * 64
+
+    def _cached_scalar(self, start, end, length, first_byte):
+        self.bank.charge(8)
+        slot = (first_byte + 13 * length) & 63
+        entry = self._scalar_cache[slot]
+        if entry is None or len(entry[0]) != length or entry[0][0] != first_byte:
+            return None
+        self.bank.charge(length)
+        if self.raw.startswith(entry[0], start, end):
+            return entry
+        return None
+
+    def _remember_scalar(self, word, kind, value, length):
+        if 2 <= length <= 8:
+            self.bank.reserve(128)
+            self.bank.charge(4)
+            slot = (word[0] + 13 * length) & 63
+            self._scalar_cache[slot] = (word, kind, value)
 
     def load_window(self, position):
         if self.window_start <= position < self.window_end:
@@ -248,6 +273,14 @@ class ContentParser:
                 for encoded, value in candidates:
                     if raw.startswith(encoded, start, self.index):
                         return self.token("operator", value, start, consumer)
+        if not is_name and length == 1:
+            if 48 <= byte <= 57:
+                return self.token("number", _SINGLE_DIGIT_WORDS[byte - 48], start, consumer)
+            return self.token("operator", _SINGLE_BYTE_OPERATORS[byte - 33], start, consumer)
+        if not is_name and 2 <= length <= 8:
+            cached = self._cached_scalar(start, self.index, length, byte)
+            if cached is not None:
+                return self.token(cached[1], cached[2], start, consumer)
         self.bank.reserve(256)  # Prepay the scalar-copy fee arithmetic.
         self.bank.reserve(192 + 4 * length)
         word = raw[start : self.index]
@@ -275,8 +308,11 @@ class ContentParser:
                 limit = b"9223372036854775808" if word[0] == 45 else b"9223372036854775807"
                 if len(magnitude) > 19 or len(magnitude) == 19 and magnitude > limit:
                     raise UnsupportedExactSource("non_numeric_operand")
+            self._remember_scalar(word, "number", word, length)
             return self.token("number", word, start, consumer)
-        return self.token("operator", word.decode("ascii"), start, consumer)
+        value = word.decode("ascii")
+        self._remember_scalar(word, "operator", value, length)
+        return self.token("operator", value, start, consumer)
 
     def read_array(self, depth, consumer):
         """Parse nested arrays with a prepaid explicit stack, not Python recursion."""

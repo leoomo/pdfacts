@@ -50,6 +50,7 @@ This document is an engineering rule, not legal advice.
 | 2026-11-03 | `backends/qpdf.py` (bounded source resources) | pikepdf 10.14.0 `_explicit_conv.py` and `objects.py` (MPL-2.0), read from the installed pinned package | thread-local explicit conversion and native object variants; no code copied |
 | 2026-11-03 | `backends/pdfium.py` (root capture) | pypdfium2 5.13.0 generated raw API bindings (Apache-2.0 or BSD-3-Clause), entries `FPDFPath_CountSegments` and `FPDFImageObj_GetImageMetadata` | native argument/result signatures for the existing single metadata capture; no code copied |
 | 2026-11-03 | `backends/exact_decimal.py` and `backends/finite_content.py` | official CPython 3.13.5 `Objects/longobject.c`, `Objects/bytesobject.c`, `Objects/bytearrayobject.c` and `Lib/fractions.py` (PSF license), read for primitive allocation behaviour | single-limb integer arithmetic, cached small integers, byte-buffer construction, join workspace and coprime fraction construction; no code copied |
+| 2026-11-03 | `backends/finite_content.py` (short scalar reuse) | official CPython 3.13.5 `Objects/bytes_methods.c`, `Objects/clinic/bytesobject.c.h` and `Objects/longobject.c` (PSF license), read for primitive allocation behaviour | exact-byte prefix comparison and cached small-integer lookup behaviour; no code copied |
 
 ## Knowledge gathered before the first implementation
 
