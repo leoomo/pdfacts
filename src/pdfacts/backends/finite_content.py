@@ -1,6 +1,7 @@
 """Isolated finite parser prototype. No application certificate by itself."""
 
 from dataclasses import dataclass
+from reprlib import recursive_repr
 
 from pdfacts.backends.exact_stream import UnsupportedExactSource, check_source_limit
 from pdfacts.backends.qpdf import decode_exact_name
@@ -29,12 +30,46 @@ _COMMON_OPERATORS = {
 }
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, init=False)
 class SourceToken:
-    kind: str
-    value: object
-    offset: int
-    length: int
+    __slots__ = ("_payload",)
+    _payload: tuple
+    __match_args__ = ("kind", "value", "offset", "length")
+
+    def __init__(self, kind, value, offset, length):
+        object.__setattr__(self, "_payload", (kind, value, offset, length))
+
+    @property
+    def kind(self):
+        return self._payload[0]
+
+    @property
+    def value(self):
+        return self._payload[1]
+
+    @property
+    def offset(self):
+        return self._payload[2]
+
+    @property
+    def length(self):
+        return self._payload[3]
+
+    def __getstate__(self):
+        return list(self._payload)
+
+    def __setstate__(self, state):
+        object.__setattr__(self, "_payload", tuple(state))
+
+    def __hash__(self):
+        return hash(self._payload)
+
+    @recursive_repr()
+    def __repr__(self):
+        return (
+            f"{self.__class__.__qualname__}(kind={self.kind!r}, "
+            f"value={self.value!r}, offset={self.offset!r}, length={self.length!r})"
+        )
 
 
 def numeric_word(raw):
@@ -165,7 +200,7 @@ class ContentParser:
             self.bank.reserve(256)
             consumer(kind, value, start, self.index - start)
             return None
-        self.bank.reserve(768)
+        self.bank.reserve(512)
         return SourceToken(kind, value, start, self.index - start)
 
     def consume(self, consumer):

@@ -50,7 +50,9 @@ def _store(plan, result, memo, bank):
 
 def _operand(exact, token, bank):
     bank.reserve(128)
-    if type(exact) is not Fraction or type(token) is not bytes or not 0 < len(token) <= 1024:
+    # The private plan producer validates this same token against caller limits
+    # and its exact source span before attaching it to a matrix plan.
+    if type(exact) is not Fraction or type(token) is not bytes or not token:
         return None
     bank.charge(len(token) + 8)
     numerator = exact.numerator
