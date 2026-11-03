@@ -30,8 +30,16 @@ from pdfacts.backends.protocols import (
     TextCharacter,
     Transform,
 )
+from pdfacts.backends.source_runtime import require_source_runtime
 
 T = TypeVar("T")
+
+# Fixed capture-domain membership; no per-object tuple allocation.
+_CAPTURE_ROOT_KINDS = (
+    pdfium_c.FPDF_PAGEOBJ_TEXT,
+    pdfium_c.FPDF_PAGEOBJ_PATH,
+    pdfium_c.FPDF_PAGEOBJ_IMAGE,
+)
 
 # Every font info handed to PDFium by install_font_policy(). None may ever be
 # freed, so the list is never cleared: PDFium keeps a pointer to the last one,
@@ -167,6 +175,41 @@ class PdfiumDocument:
         self._drawing: pypdfium2.PdfDocument | None = None
         self._closed = False
 
+    def exact_root_inventory(self, index: int, bank, limits):
+        """One complete bounded root enumeration, private exact-number adapter."""
+        require_source_runtime()
+        from pdfacts.backends.exact_stream import UnsupportedExactSource, check_source_limit
+
+        self._check_open()
+        page = self._document[index]
+        try:
+            count = _count(pdfium_c.FPDFPage_CountObjects(page.raw), "root objects")
+            if count > limits.max_root_objects:
+                check_source_limit("native_root_objects", count, limits.max_root_objects)
+            bank.reserve(128 + count * 16)
+            kinds = []
+            objects = []
+            for i in range(count):
+                bank.charge()
+                obj = pdfium_c.FPDFPage_GetObject(page.raw, i)
+                if not obj:
+                    raise UnsupportedExactSource("native_inventory_missing")
+                kind = pdfium_c.FPDFPageObj_GetType(obj)
+                kinds.append(kind)
+                if kind == pdfium_c.FPDF_PAGEOBJ_TEXT:
+                    continue
+                if kind != pdfium_c.FPDF_PAGEOBJ_PATH:
+                    raise UnsupportedExactSource("native_inventory_kind")
+                segments = _count(pdfium_c.FPDFPath_CountSegments(obj), "path segments")
+                if segments > limits.max_path_segments:
+                    check_source_limit("native_path_segments", segments, limits.max_path_segments)
+                bank.reserve(512 + segments * 128)
+                objects.append(_path(obj, _matrix(obj), 0))
+            bank.reserve(128 + count * 16)
+            return Drawing(tuple(objects), False, False, tuple(kinds))
+        finally:
+            page.close()
+
     @classmethod
     def open(cls, data: bytes, password: str | None) -> PdfiumDocument:
         """Open `data` as the file writes it.
@@ -281,6 +324,73 @@ class PdfiumDocument:
         _check_cap(cap)
         return self._read_page(index, lambda page: _page_drawing(page, cap))
 
+    def capture_page_drawing(self, index: int, cap: int | None, bank, limits):
+        """One ordinary metadata read plus a private single-use root capture."""
+        require_source_runtime()
+        from pdfacts.backends.exact_stream import UnsupportedExactSource
+
+        self._check_open()
+        _check_cap(cap)
+        if type(index) is not int or bank is None:
+            raise UnsupportedExactSource("native_capture_domain")
+        # Token, result tuple, retained capture tuple and first attribute growth.
+        previous_capture = getattr(self, "_exact_capture", None)
+        bank.reserve(1024)
+        bank.charge(8)
+        self._check_open()
+        if getattr(self, "_exact_capture", None) is not previous_capture:
+            raise UnsupportedExactSource("native_capture_changed")
+        pending = object()
+        self._exact_capture = pending
+
+        def require_current():
+            self._check_open()
+            if getattr(self, "_exact_capture", None) is not pending:
+                raise UnsupportedExactSource("native_capture_changed")
+
+        # Match exact_root_inventory: preserve private source/budget failures.
+        try:
+            require_current()
+            page = self._document[index]
+            try:
+                drawing = _page_drawing(page, cap, bank, require_current, limits)
+            finally:
+                page.close()
+            token = object()
+            capture = (token, index, bank, drawing, limits)
+            self._check_open()
+            if getattr(self, "_exact_capture", None) is not pending:
+                raise UnsupportedExactSource("native_capture_changed")
+            self._exact_capture = capture
+        except BaseException as failure:
+            if getattr(self, "_exact_capture", None) is pending:
+                self._exact_capture = None
+            if isinstance(failure, pypdfium2.PdfiumError):
+                raise EngineFailure(FailureKind.OTHER, str(failure)) from failure
+            raise
+        return drawing, token
+
+    def consume_root_capture(self, index: int, bank, token, limits):
+        """Resolve only this provider's original capture, never an input Drawing."""
+        require_source_runtime()
+        from pdfacts.backends.exact_stream import UnsupportedExactSource
+
+        self._check_open()
+        bank.reserve(256)
+        bank.charge(8)
+        capture = getattr(self, "_exact_capture", None)
+        if (
+            type(capture) is not tuple
+            or type(index) is not int
+            or token is not capture[0]
+            or index != capture[1]
+            or bank is not capture[2]
+            or limits is not capture[4]
+        ):
+            raise UnsupportedExactSource("native_capture_binding")
+        self._exact_capture = None
+        return capture[3]
+
     def appearance_drawings(
         self, index: int, cap: int | None
     ) -> tuple[AppearanceDrawing | None, ...]:
@@ -328,6 +438,8 @@ class PdfiumDocument:
         twice.
         """
         self._closed = True
+        if getattr(self, "_exact_capture", None) is not None:
+            self._exact_capture = None
         with _translated():
             if self._drawing is not None:
                 self._drawing.close()
@@ -419,13 +531,66 @@ class _Found:
         return Drawing(objects=tuple(self.objects), stopped=budget.stopped, too_deep=self.too_deep)
 
 
-def _page_drawing(page: pypdfium2.PdfPage, cap: int | None) -> Drawing:
+def _page_drawing(
+    page: pypdfium2.PdfPage, cap: int | None, capture_bank=None, capture_guard=None, limits=None
+) -> Drawing:
     budget = _Budget(cap)
     found = _Found()
     raw = page.raw
-    for i in range(_count(pdfium_c.FPDFPage_CountObjects(raw), "the page's objects")):
-        if not _walk(pdfium_c.FPDFPage_GetObject(raw, i), _IDENTITY, 0, raw, found, budget):
+    if capture_guard is not None:
+        capture_guard()
+    count = _count(pdfium_c.FPDFPage_CountObjects(raw), "the page's objects")
+    kinds = None
+    if capture_bank is not None:
+        from pdfacts.backends.exact_stream import UnsupportedExactSource, check_source_limit
+
+        if count > limits.max_root_objects:
+            check_source_limit("native_root_objects", count, limits.max_root_objects)
+        # Complete kind list and its tuple, with bounded per-item integers.
+        capture_bank.reserve(512 + 64 * count)
+        capture_bank.charge(count + 1)
+        if capture_guard is not None:
+            capture_guard()
+        kinds = [None] * count
+    for i in range(count):
+        if kinds is not None:
+            capture_bank.charge(6)
+            if capture_guard is not None:
+                capture_guard()
+        obj = pdfium_c.FPDFPage_GetObject(raw, i)
+        if kinds is not None:
+            if not obj:
+                raise UnsupportedExactSource("native_inventory_missing")
+            kind = pdfium_c.FPDFPageObj_GetType(obj)
+            if kind not in _CAPTURE_ROOT_KINDS:
+                raise UnsupportedExactSource("native_inventory_kind")
+            if kind == pdfium_c.FPDF_PAGEOBJ_PATH:
+                # ctypes argument tuple/CArg wrapper plus the native count integer.
+                capture_bank.reserve(192)
+                capture_bank.charge(4)
+                if capture_guard is not None:
+                    capture_guard()
+                segments = _count(pdfium_c.FPDFPath_CountSegments(obj), "path segments")
+                if capture_guard is not None:
+                    capture_guard()
+                if segments > limits.max_path_segments:
+                    check_source_limit("native_path_segments", segments, limits.max_path_segments)
+            kinds[i] = kind
+        keep_reading = _walk(
+            obj,
+            _IDENTITY,
+            0,
+            raw,
+            found,
+            budget,
+            kind if kinds is not None else None,
+        )
+        if capture_guard is not None:
+            capture_guard()
+        if not keep_reading:
             break
+    if kinds is not None:
+        return Drawing(tuple(found.objects), budget.stopped, found.too_deep, tuple(kinds))
     return found.drawing(budget)
 
 
@@ -599,14 +764,16 @@ def _walk(
     page: pdfium_c.FPDF_PAGE,
     found: _Found,
     budget: _Budget,
+    _known_kind: int | None = None,
 ) -> bool:
     """Add the paths and images of `obj`, a form's in order; False once the cap is used up.
 
-    `level` counts the forms that hold `obj`.
+    `level` counts the forms that hold `obj`. A private root capture may reuse
+    the type it just read; ordinary and recursive calls read their own type.
     """
     if not obj:
         raise EngineFailure(FailureKind.OTHER, "PDFium gives no object at an index it counts")
-    kind = pdfium_c.FPDFPageObj_GetType(obj)
+    kind = pdfium_c.FPDFPageObj_GetType(obj) if _known_kind is None else _known_kind
     if kind not in (
         pdfium_c.FPDF_PAGEOBJ_FORM,
         pdfium_c.FPDF_PAGEOBJ_PATH,
@@ -627,7 +794,9 @@ def _walk(
     if not budget.take():
         return False
     found.objects.append(
-        _path(obj, matrix) if kind == pdfium_c.FPDF_PAGEOBJ_PATH else _image(obj, matrix, page)
+        _path(obj, matrix, level)
+        if kind == pdfium_c.FPDF_PAGEOBJ_PATH
+        else _image(obj, matrix, page)
     )
     return True
 
@@ -653,7 +822,7 @@ def _then(first: Transform, second: Transform) -> Transform:
     )
 
 
-def _path(obj: pdfium_c.FPDF_PAGEOBJECT, matrix: Transform | None) -> DrawnPath:
+def _path(obj: pdfium_c.FPDF_PAGEOBJECT, matrix: Transform | None, level: int = -1) -> DrawnPath:
     fill_mode, stroke = ctypes.c_int(), ctypes.c_int()
     drawn = pdfium_c.FPDFPath_GetDrawMode(obj, ctypes.byref(fill_mode), ctypes.byref(stroke))
     width, phase = ctypes.c_float(), ctypes.c_float()
@@ -671,6 +840,8 @@ def _path(obj: pdfium_c.FPDF_PAGEOBJECT, matrix: Transform | None) -> DrawnPath:
         dash_phase=phase.value if has_phase else None,
         cap=_style(pdfium_c.FPDFPageObj_GetLineCap(obj)),
         join=_style(pdfium_c.FPDFPageObj_GetLineJoin(obj)),
+        source_level=level,
+        source_clip_count=pdfium_c.FPDFClipPath_CountPaths(pdfium_c.FPDFPageObj_GetClipPath(obj)),
     )
 
 

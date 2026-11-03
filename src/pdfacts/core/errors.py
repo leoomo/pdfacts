@@ -49,6 +49,13 @@ class PdfactsError(Exception):
         return (_rebuild, (type(self), self.args), dict(vars(self)))
 
 
+class SourceEvidenceError(PdfactsError):
+    """A private source association could not be established for this input."""
+
+    def __init__(self, *, reason: str) -> None:
+        super().__init__(f"Source evidence unavailable: {reason}", reason=reason)
+
+
 class InputError(PdfactsError):
     """The bytes are not a PDF file that can be read as it is."""
 

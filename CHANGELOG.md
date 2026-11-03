@@ -8,6 +8,16 @@ may break callers.
 
 ### Added
 
+- Private source certification is restricted to its proved CPython3.13.5
+  allocation layout. Other runtimes receive a typed source failure while
+  ordinary library features retain their existing runtime support.
+
+- Private source-association evidence for supported root graphics, with caller-owned
+  cumulative budgets and explicit limits. Source errors cross the feature boundary
+  as `SourceEvidenceError` or the existing limit errors.
+- Optional raw stroke/transform provenance on `Path`, and root capture metadata
+  on backend drawing records. Existing shape and drawing-order rules remain intact.
+
 - `TextRules`, with `V1` (M4a's rules) and `V2`, and `rules` of `glyphs()`:
   `glyphs(document, page_index, rules=TextRules.V2)` gives the codes the
   content shows, read on QPDF's tokens, white space included. `V1` stays the
