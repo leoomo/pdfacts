@@ -139,6 +139,8 @@ def source_ledger(
 
     class Parser:
         def __init__(self):
+            # Invocation-local operand list; consumers retain immutable tuples,
+            # never this mutable workspace. Each append keeps its existing fee.
             self.args = []
             self.text_operand = None
             self.saved = []
@@ -309,8 +311,7 @@ def source_ledger(
                 if emitted is not None:
                     bank.reserve(128)
                     emissions.append((self.index, emitted, None))
-                bank.reserve(64)
-                self.args = []
+                self.args.clear()
                 self.text_operand = None
                 return
             if self.text.active:
@@ -339,8 +340,7 @@ def source_ledger(
                 )
                 bank.reserve(128)
                 emissions.append((self.index, 3, record))
-                bank.reserve(64)
-                self.args = []
+                self.args.clear()
                 self.text_operand = None
                 return
             if operator in ("BDC", "EMC", "gs"):
@@ -367,8 +367,7 @@ def source_ledger(
                     if len(self.args) != 1:
                         raise UnsupportedExactSource("graphics_state_shape")
                     resources.graphics_state(self.args[0], bank)
-                bank.reserve(64)
-                self.args = []
+                self.args.clear()
                 self.text_operand = None
                 return
             if operator not in BARE and operator not in COUNTS:
@@ -506,8 +505,7 @@ def source_ledger(
                     self.commit_clip()
                 self.path = []
                 self.path_plan = None
-            bank.reserve(64)
-            self.args = []
+            self.args.clear()
             self.text_operand = None
 
         def handle_eof(self):
