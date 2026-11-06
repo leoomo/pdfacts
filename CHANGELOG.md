@@ -63,6 +63,10 @@ may break callers.
 
 ### Changed
 
+- Private whitespace/comment scanning uses a proved 64-byte reservation for
+  compact source indices; larger inputs retain the original 256-byte fee.
+  Caller capacities, work charges and lexical validation are unchanged.
+
 - Bounded source analysis reuses lexer end offsets and a cached content length
   instead of rebuilding absolute span endpoints in its consumer. Default token
   callbacks retain length-based spans; source validation and budget fees are

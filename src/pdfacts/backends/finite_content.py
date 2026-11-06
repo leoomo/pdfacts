@@ -156,7 +156,10 @@ class ContentParser:
         byte = self.raw[self.index]
         if byte not in WHITESPACE and byte != 37:
             return
-        self.bank.reserve(256)
+        # Compact absolute indices make window-offset arithmetic use cached
+        # integers. Only the final absolute index allocates (at most 32 bytes).
+        # Window loading retains its separate fee; larger inputs retain 256.
+        self.bank.reserve(64 if self.raw_length < 1073741824 else 256)
         position = self.index
         comment = False
         while position < self.raw_length:

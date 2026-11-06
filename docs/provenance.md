@@ -56,6 +56,12 @@ This document is an engineering rule, not legal advice.
 
 ## Knowledge gathered before the first implementation
 
+The 2026-11-06 compact scanner accounting review additionally read official
+CPython 3.13.5 `Objects/longobject.c` (PSF license): compact add/subtract return
+cached small results directly, while noncompact subtraction may allocate before
+normalization. No code was copied. The resulting restricted allocation bound is
+documented in `docs/design/source-scanner-accounting.md`.
+
 Recorded so that later modules can cite it.
 
 | Topic | How it was obtained |
