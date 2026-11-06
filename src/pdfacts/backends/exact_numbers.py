@@ -232,16 +232,17 @@ def source_ledger(
             self.clip = (left, bottom, right, top)
             self.pending_clip = None
 
-        def handle_token(self, kind, value, offset, length):
+        def handle_token(self, kind, value, offset, end):
             bank.charge()
             if (
                 type(offset) is not int
-                or type(length) is not int
+                or type(end) is not int
                 or offset < 0
-                or length <= 0
-                or offset + length > len(raw)
+                or end <= offset
+                or end > raw_length
             ):
                 raise UnsupportedExactSource("source_token_span")
+            length = end - offset
             if kind == "number":
                 if len(self.args) >= 6 or length > limits.max_token_bytes:
                     raise UnsupportedExactSource("numeric_operand_domain")
@@ -249,7 +250,7 @@ def source_ledger(
                 if (
                     type(value) is not bytes
                     or len(value) != length
-                    or not raw.startswith(value, offset, offset + length)
+                    or not raw.startswith(value, offset, end)
                 ):
                     raise UnsupportedExactSource("source_token_disagreement")
                 token = value
@@ -486,8 +487,9 @@ def source_ledger(
             ):
                 raise UnsupportedExactSource("incomplete_state")
 
+    raw_length = len(raw)
     parser = Parser()
-    ContentParser(raw, bank, limits).consume(parser.handle_token)
+    ContentParser(raw, bank, limits, consumer_end_offsets=True).consume(parser.handle_token)
     parser.handle_eof()
     bank.reserve(64 + len(records) * 8)
     if with_emissions:

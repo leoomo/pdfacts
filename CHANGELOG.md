@@ -63,6 +63,11 @@ may break callers.
 
 ### Changed
 
+- Bounded source analysis reuses lexer end offsets and a cached content length
+  instead of rebuilding absolute span endpoints in its consumer. Default token
+  callbacks retain length-based spans; source validation and budget fees are
+  unchanged. This does not expand supported source geometry.
+
 - The package is licensed under MIT, and the repository is public; the
   `Private :: Do Not Upload` classifier is gone (decision of the maintainer,
   2026-10-11, #162).

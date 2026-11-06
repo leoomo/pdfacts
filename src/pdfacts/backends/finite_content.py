@@ -95,10 +95,12 @@ def numeric_word(raw):
 
 
 class ContentParser:
-    def __init__(self, raw, bank, limits):
+    def __init__(self, raw, bank, limits, *, consumer_end_offsets=False):
         require_source_runtime()
         if type(raw) is not bytes:
             raise UnsupportedExactSource("content_size")
+        if type(consumer_end_offsets) is not bool:
+            raise UnsupportedExactSource("content_consumer_mode")
         bank.reserve(128)
         raw_length = len(raw)
         check_source_limit("content_bytes", raw_length, limits.max_content_bytes)
@@ -109,6 +111,7 @@ class ContentParser:
         self.raw_length = raw_length
         self.bank = bank
         self.index = 0
+        self.consumer_end_offsets = consumer_end_offsets
         self.names = {}
         self.window = b""
         self.window_start = 0
@@ -223,7 +226,10 @@ class ContentParser:
     def token(self, kind, value, start, consumer):
         if consumer is not None:
             self.bank.reserve(256)
-            consumer(kind, value, start, self.index - start)
+            if self.consumer_end_offsets:
+                consumer(kind, value, start, self.index)
+            else:
+                consumer(kind, value, start, self.index - start)
             return None
         self.bank.reserve(512)
         return SourceToken(kind, value, start, self.index - start)
