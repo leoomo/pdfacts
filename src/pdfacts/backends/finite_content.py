@@ -96,7 +96,14 @@ def numeric_word(raw):
 
 class ContentParser:
     def __init__(
-        self, raw, bank, limits, *, consumer_end_offsets=False, consumer_short_numbers=False
+        self,
+        raw,
+        bank,
+        limits,
+        *,
+        consumer_end_offsets=False,
+        consumer_short_numbers=False,
+        consumer_short_names=False,
     ):
         require_source_runtime()
         if type(raw) is not bytes:
@@ -105,6 +112,10 @@ class ContentParser:
             raise UnsupportedExactSource("content_consumer_mode")
         if type(consumer_short_numbers) is not bool or (
             consumer_short_numbers and not consumer_end_offsets
+        ):
+            raise UnsupportedExactSource("content_consumer_mode")
+        if type(consumer_short_names) is not bool or (
+            consumer_short_names and not consumer_short_numbers
         ):
             raise UnsupportedExactSource("content_consumer_mode")
         bank.reserve(128)
@@ -119,6 +130,7 @@ class ContentParser:
         self.index = 0
         self.consumer_end_offsets = consumer_end_offsets
         self.consumer_short_numbers = consumer_short_numbers
+        self.consumer_short_names = consumer_short_names
         self.names = {}
         self.window = b""
         self.window_start = 0
@@ -249,12 +261,19 @@ class ContentParser:
                 # Freeze the selected channel and span before budget callbacks.
                 end = self.index
                 raw_length = self.raw_length
+                short_names = self.consumer_short_names
                 self.bank.reserve(64)
                 discounted = (
                     raw_length < 1073741824
-                    and kind == "number"
-                    and type(value) is bytes
-                    and 1 <= len(value) <= 8
+                    and (
+                        kind == "number"
+                        and type(value) is bytes
+                        and 1 <= len(value) <= 8
+                        or short_names
+                        and kind == "name"
+                        and type(value) is str
+                        and 1 <= len(value) <= 8
+                    )
                     and type(start) is int
                     and type(end) is int
                     and 0 <= start < end <= raw_length

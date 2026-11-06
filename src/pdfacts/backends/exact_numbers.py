@@ -246,10 +246,15 @@ def source_ledger(
                 raise UnsupportedExactSource("source_token_span")
             length = end - offset
             if discounted and (
-                kind != "number"
-                or not 1 <= length <= 8
-                or type(value) is not bytes
-                or not 1 <= len(value) <= 8
+                not 1 <= length <= 8
+                or not (
+                    kind == "number"
+                    and type(value) is bytes
+                    and 1 <= len(value) <= 8
+                    or kind == "name"
+                    and type(value) is str
+                    and 1 <= len(value) <= 8
+                )
             ):
                 bank.reserve(192)
                 discounted = False
@@ -275,6 +280,8 @@ def source_ledger(
                 return
             if kind != "operator":
                 if len(self.args) >= 6 or kind not in ("name", "string", "array"):
+                    if discounted:
+                        bank.reserve(192)
                     raise UnsupportedExactSource("non_numeric_operand")
                 if kind in ("string", "array"):
                     bank.reserve(128)
@@ -504,7 +511,12 @@ def source_ledger(
     raw_length = len(raw)
     parser = Parser()
     ContentParser(
-        raw, bank, limits, consumer_end_offsets=True, consumer_short_numbers=True
+        raw,
+        bank,
+        limits,
+        consumer_end_offsets=True,
+        consumer_short_numbers=True,
+        consumer_short_names=True,
     ).consume(parser.handle_token)
     parser.handle_eof()
     bank.reserve(64 + len(records) * 8)

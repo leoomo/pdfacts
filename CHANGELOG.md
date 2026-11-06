@@ -63,6 +63,10 @@ may break callers.
 
 ### Changed
 
+- Private source callbacks can explicitly select bounded ordinary-name control
+  fees; existing modes and non-name categories retain their prior contracts.
+  Refusals restore the original allowance before raising.
+
 - Short exact decimal conversion reuses existing powers of ten and a bounded
   allocation inventory; malformed values restore their original refusal fee.
   Exact normalization, long-number behavior and resource capacities are unchanged.
