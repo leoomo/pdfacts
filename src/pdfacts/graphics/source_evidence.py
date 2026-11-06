@@ -558,7 +558,7 @@ def _publish_root_path_evidence(
     bank.charge(8)
     if source_hash != digest or page_ref != (page.object_number, page.generation):
         raise UnsupportedExactSource("path_evidence_page_binding")
-    if not 0 < len(roots) == len(joined):
+    if len(roots) != len(joined) or (not support and not roots):
         raise UnsupportedExactSource("path_evidence_inventory_count")
     check_source_limit("native_root_objects", len(roots), limits.max_root_objects)
     bank.reserve(1024 + 128 * len(roots))

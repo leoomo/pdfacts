@@ -172,3 +172,12 @@ writable-row proofs. Annotation appearances are not root-image/path certificates
 Consumers must not infer absence of unrelated paint from a filtered root subset,
 an image-only completion result, or a native bounding box. Positive path operation
 allowlists remain independent of negative-support association.
+
+### Empty mixed-root completion
+
+A mixed-root completion may return `None` for a source-validated page with no
+root paths or images. It still parses the complete supported source, reconciles
+the empty native inventory, validates the live owner and consumes the pending
+claim once. This proves no graphical association was issued; it does not prove
+the page is blank or writable, since text may remain. Unsupported content still
+refuses. The legacy path-only nonempty-inventory contract is unchanged.

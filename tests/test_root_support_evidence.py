@@ -433,3 +433,83 @@ def test_private_record_callback_domains_refuse_before_getters(target):
         finally:
             for record, original_type in changed:
                 object.__setattr__(record, "__class__", original_type)
+
+
+@pytest.mark.parametrize("content", [b"q Q", b"BT /F1 10 Tf 10 20 Td (Caption) Tj ET"])
+def test_empty_mixed_root_completion_validates_source_and_consumes_claim(content):
+    # Synthetic text/state-only pages have zero graphical roots by construction.
+    data = resource_file(
+        content,
+        b"<< /Font << /F1 5 0 R >> >>",
+        {5: b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>"},
+    )
+    bank = ObservedBudget()
+    limits = source_limits()
+    with (
+        feature.classification_identity(data, bank) as (owner, handle, _),
+        pdfacts.open(data) as doc,
+    ):
+        bind(doc, owner, handle, bank)
+        paths, images, pending = feature.capture_root_path_evidence(doc, 0, bank, limits=limits)
+        assert paths == () and images == ()
+        assert feature.complete_root_support_evidence(doc, bank, pending, limits=limits) is None
+        with pytest.raises(SourceEvidenceError):
+            feature.complete_root_support_evidence(doc, bank, pending, limits=limits)
+
+
+def test_empty_mixed_root_inventory_does_not_bypass_unsupported_source():
+    data = resource_file(b"unsupported_operator", b"<< >>", {})
+    bank = ObservedBudget()
+    limits = source_limits()
+    with (
+        feature.classification_identity(data, bank) as (owner, handle, _),
+        pdfacts.open(data) as doc,
+    ):
+        bind(doc, owner, handle, bank)
+        paths, images, pending = feature.capture_root_path_evidence(doc, 0, bank, limits=limits)
+        assert paths == () and images == ()
+        with pytest.raises(SourceEvidenceError):
+            feature.complete_root_support_evidence(doc, bank, pending, limits=limits)
+
+
+def test_empty_inventory_preserves_legacy_path_only_refusal():
+    from test_source_evidence import source_file
+
+    data = source_file(b"q Q")
+    bank = ObservedBudget()
+    limits = source_limits()
+    with (
+        feature.classification_identity(data, bank) as (owner, handle, _),
+        pdfacts.open(data) as doc,
+    ):
+        bind(doc, owner, handle, bank)
+        _, _, pending = feature.capture_root_path_evidence(doc, 0, bank, limits=limits)
+        with pytest.raises(SourceEvidenceError, match="path_evidence_inventory_count"):
+            feature.complete_root_path_evidence(doc, bank, pending, limits=limits)
+
+
+def test_empty_mixed_root_completion_still_checks_owner_at_publication():
+    from test_source_evidence import source_file
+    from test_staged_source_evidence import caller_frame
+
+    data = source_file(b"q Q")
+    bank = ObservedBudget()
+    limits = source_limits()
+    with (
+        feature.classification_identity(data, bank) as (owner, handle, _),
+        pdfacts.open(data) as doc,
+    ):
+        bind(doc, owner, handle, bank)
+        _, _, pending = feature.capture_root_path_evidence(doc, 0, bank, limits=limits)
+
+        def close_before_publication(operation, cost):
+            frame = caller_frame("_store_staged_path_evidence")
+            if frame is not None and "root_count" in frame.f_locals:
+                bank.observer = None
+                bank.hits += 1
+                doc.close()
+
+        bank.observer = close_before_publication
+        with pytest.raises(pdfacts.PdfactsError):
+            feature.complete_root_support_evidence(doc, bank, pending, limits=limits)
+        assert bank.hits == 1

@@ -8,6 +8,10 @@ may break callers.
 
 ### Added
 
+- Private mixed-root completion accepts source-validated empty graphical
+  inventories, returning `None` after consuming the pending claim; text-only
+  pages do not acquire blankness or writing authority.
+
 - Private mixed-root support completion retains exact image matrix/clip source
   association alongside paths, using the original single-use capture and budget.
   Mixed support batches and path-only batches reject cross-use; existing eager
