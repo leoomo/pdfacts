@@ -318,11 +318,12 @@ class ContentParser:
             by_initial = _COMMON_OPERATORS.get(length)
             candidates = by_initial.get(raw[start], ()) if by_initial is not None else ()
             if candidates:
-                self.bank.reserve(256)
+                self.bank.reserve(64)  # One outer tuple iterator, including cold execution.
                 self.bank.charge(len(candidates) * length)
-                for encoded, value in candidates:
-                    if raw.startswith(encoded, start, self.index):
-                        return self.token("operator", value, start, consumer)
+                for candidate in candidates:
+                    # Pair unpacking can allocate another iterator before specialization.
+                    if raw.startswith(candidate[0], start, self.index):
+                        return self.token("operator", candidate[1], start, consumer)
         if not is_name and length == 1:
             if 48 <= byte <= 57:
                 return self.token("number", _SINGLE_DIGIT_WORDS[byte - 48], start, consumer)
