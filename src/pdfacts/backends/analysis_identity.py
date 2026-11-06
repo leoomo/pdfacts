@@ -114,50 +114,69 @@ def recovered_identity(owner, handle, original, recovered, bank):
         return replacement
 
 
-def _validate_evidence_payload(value, bank, limits, depth=0):
-    # Fixed-depth DFS avoids allocating a tuple iterator at every tree node.
+def _make_payload_validator(bank):
+    # This outer function has no cells: pay before entering the closure factory.
     bank.reserve(2048)
+    return _new_payload_validator(bank)
+
+
+def _new_payload_validator(bank):
+    # Caller prepaid the cells, lists and function before this frame was entered.
     parents = [None] * 33
     offsets = [0] * 33
     lengths = [0] * 33
-    initial_depth = depth
-    while True:
-        bank.charge()
-        if depth > limits.max_payload_depth:
-            check_source_limit("evidence_payload_depth", depth, limits.max_payload_depth)
-        if type(value) in _IMMUTABLE_SCALAR_TYPES:
-            pass
-        elif type(value) is float:
-            if not isfinite(value):
-                raise UnsupportedExactSource("path_evidence_nonfinite")
-        elif type(value) is tuple:
-            # len() may allocate an integer. Large tuple indices also allocate.
-            bank.reserve(64)
-            count = len(value)
-            if count > 256:
-                bank.reserve(32 * count)
-            if count:
-                parents[depth] = value
-                offsets[depth] = 1
-                lengths[depth] = count
-                value = value[0]
-                depth += 1
-                continue
-        else:
-            raise UnsupportedExactSource("path_evidence_payload_domain")
-        while depth > initial_depth:
-            bank.charge(2)
-            depth -= 1
-            parent = parents[depth]
-            offset = offsets[depth]
-            if offset < lengths[depth]:
-                value = parent[offset]
-                offsets[depth] = offset + 1
-                depth += 1
-                break
-            parents[depth] = None
-        else:
-            return
+
+    def validate(value, limits, depth=0):
+        # One unspent allowance covers a possible noncached len() result.
+        bank.reserve(64)
+        initial_depth = depth
+        while True:
+            bank.charge()
+            allowed = limits.max_payload_depth
+            if depth > allowed:
+                bank.reserve(4096)
+                check_source_limit("evidence_payload_depth", depth, allowed)
+            if type(value) in _IMMUTABLE_SCALAR_TYPES:
+                pass
+            elif type(value) is float:
+                if not isfinite(value):
+                    bank.reserve(4096)
+                    raise UnsupportedExactSource("path_evidence_nonfinite")
+            elif type(value) is tuple:
+                count = len(value)
+                if count > 256:
+                    # Formula arithmetic plus the next node's length allowance.
+                    bank.reserve(128)
+                    bank.reserve(32 * count)
+                if count:
+                    parents[depth] = value
+                    offsets[depth] = 1
+                    lengths[depth] = count
+                    value = value[0]
+                    depth += 1
+                    continue
+            else:
+                bank.reserve(4096)
+                raise UnsupportedExactSource("path_evidence_payload_domain")
+            while depth > initial_depth:
+                bank.charge(2)
+                depth -= 1
+                parent = parents[depth]
+                offset = offsets[depth]
+                if offset < lengths[depth]:
+                    value = parent[offset]
+                    offsets[depth] = offset + 1
+                    depth += 1
+                    break
+                parents[depth] = None
+            else:
+                return
+
+    return validate
+
+
+def _validate_evidence_payload(value, bank, limits, depth=0):
+    return _make_payload_validator(bank)(value, limits, depth)
 
 
 def _store_path_evidence(owner, handle, data, bank, entries, limits):
@@ -174,6 +193,7 @@ def _store_path_evidence(owner, handle, data, bank, entries, limits):
     bank.charge(len(entries))
     with _lock:
         generation = _record(owner, handle, data, bank)
+    validate_payload = _make_payload_validator(bank)
     for entry in entries:
         if (
             type(entry) is not tuple
@@ -182,7 +202,7 @@ def _store_path_evidence(owner, handle, data, bank, entries, limits):
             or len(entry[0]) != 2
         ):
             raise UnsupportedExactSource("path_evidence_entry_domain")
-        _validate_evidence_payload(entry[1], bank, limits)
+        validate_payload(entry[1], limits)
     token = object()
     with _lock:
         if _record(owner, handle, data, bank) is not generation:
@@ -509,6 +529,7 @@ def _store_staged_path_evidence(
         _staged_binding(document, generation, node[1], bank, limits, document_types, provider_types)
         ready = node[4]
         previous_batches = _path_batches.get(owner)
+    validate_payload = _make_payload_validator(bank) if entries else None
     for entry in entries:
         if (
             type(entry) is not tuple
@@ -517,7 +538,7 @@ def _store_staged_path_evidence(
             or len(entry[0]) != 2
         ):
             raise UnsupportedExactSource("path_evidence_entry_domain")
-        _validate_evidence_payload(entry[1], bank, limits)
+        validate_payload(entry[1], limits)
     count = 0 if previous_batches is None else len(previous_batches)
     bank.reserve(512 + 128 * count)
     bank.charge(count + 1)

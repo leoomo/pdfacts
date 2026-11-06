@@ -63,6 +63,10 @@ may break callers.
 
 ### Changed
 
+- Source payload storage reuses a batch-local DFS workspace while validating
+  every entry before atomic publication. Cached tuple traversal retains a
+  prepaid length allowance, with independent large-counter and refusal costs.
+
 - Plain literal source strings reuse their validated body bytes instead of
   building decoding chunks. Escape/CR handling remains unchanged, and the
   additional selection scans receive independent work prepayment.
