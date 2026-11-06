@@ -63,6 +63,10 @@ may break callers.
 
 ### Changed
 
+- Short source-scalar copies avoid a redundant fee-formula reservation while
+  retaining copy/decoder costs and restoring the original reserved-literal
+  refusal allowance. Longer scalars and caller capacities are unchanged.
+
 - Common source-operator scanning avoids pair-unpack iterators during cold
   execution. Its reservation covers one outer iterator; source grammar, caller
   capacities and downstream reservations are unchanged.

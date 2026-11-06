@@ -166,3 +166,32 @@ candidate match and all-candidates miss. The bytecode must contain no
 `UNPACK_SEQUENCE`; relying only on a warmed successful loop would miss the
 allocation defect. Pin exact/one-below loop budgets, original value/spans, cache
 reuse after a miss and source-language rejection of unrecognized operators.
+
+## Short scalar-copy formula
+
+For scalar lengths 1..16, both `4*length` and `192 + 4*length` are cached integers
+in the pinned runtime. The preliminary 256-byte reservation for that formula is
+therefore unnecessary in this domain. Longer scalars keep it. The actual
+`192 + 4*length` copy reservation remains unchanged and precedes the raw slice.
+
+Its remaining objects are still covered: a cold slice object (56 bytes), bytes
+copy (33+length), and ordinary ASCII-name decoding (49+length) total at most
+138+2*length. Escaped names require special care: evaluating the *next* fee
+`1024 + 128*length` can create two compact integer temporaries before that
+reservation is called. Slice, bytes and these temporaries total at most
+153+length, within the preserved copy reservation. Escaped-name parsing itself
+then has its existing independent fee. Name insertion and numeric scanning
+likewise retain their independent prepayments.
+
+The reserved literals `true`, `false` and `null` refuse before the next ordinary
+prepayment. Restore the omitted 256 before constructing that error, preserving
+their original total allowance. This is not a catch-and-pay-later path. A caller
+exception while paying restoration propagates unchanged and no token publishes.
+Byte length and the omitted-fee decision are local values unaffected by a budget
+callback. Existing cached-scalar hits bypass this copy path as before; repeated
+names still copy the current spelling before their name-cache lookup.
+
+Tests pin lengths 16/17, numeric and operator scalars, plain/repeated/escaped
+names, all three reserved-literal refusals and restoration failures. They must
+distinguish cached values from fresh source spans and retain lexical/source
+validation; the copy amount, caller capacity and work fees are unchanged.
