@@ -41,3 +41,51 @@ whitespace bytes, window crossings, comment endings, EOF and caller-exception
 identity. A stopped metadata probe checks both sides of the threshold without
 claiming to parse a gigabyte input. This bound does not itself establish that a
 complete real document fits the cumulative bank or has writable geometry.
+
+## Word scanning and its immediate consumer
+
+The word-scanning refinement uses the same strict compact-length domain. Its
+64-byte normal reservation covers two possible 32-byte integers: the terminal
+absolute index, and `read`'s subsequent `index - start` token length. All relative
+offsets and escape counters remain cached; window construction keeps its own
+768-byte reservation. Larger inputs keep 256. The selected domain is captured
+before the reservation callback and returned as an existing boolean to `read`,
+so the caller's exception accounting uses the fee actually selected.
+
+Five refusal paths restore the original 256-byte reservation **before** locally
+constructing an exception, by reserving an additional 192 in the compact domain:
+
+| Refusal | Placement of the additional reservation |
+| --- | --- |
+| Invalid hex byte in a name escape | Before error-index arithmetic and raising |
+| Nonprintable byte encountered inside a word | Freeze the window-base reference, then reserve before error-index arithmetic and raising |
+| Incomplete name escape at EOF | Before error-index arithmetic and raising |
+| Completed token exceeds `max_token_bytes` | Before calling the unchanged limit-check helper |
+| Invalid first byte of a non-name word | Before raising in `read` |
+
+Error offsets retain their original meaning. No exception is constructed and
+caught merely to pay afterward. A caller's budget exception propagates unchanged;
+it does not construct a library error or publish a token. The two scanner escape
+paths already keep their error bases in local references. No new tuple, closure,
+container or diagnostic object is created by the fee selection or restoration.
+The token-limit allowance is captured before restoration and the same reference
+is passed to the limit-check helper, even if the callback replaces the parser's
+limits object.
+
+After these checks, every `read` branch reaches an existing independent
+reservation before further allocating work: common operators reserve 256,
+single-byte values proceed to `token`'s unchanged reservation, and general
+scalars reserve 256 before their copy-fee arithmetic. Short scalar-cache lookup
+has no intervening allocating arithmetic: length is 2..8, the printable first
+byte is at most 126, and `first_byte + 13 * length` is at most 230; its mask and
+entry-length results are also cached. A hit proceeds directly to `token`; a miss
+proceeds to the scalar-copy reservation. Cache lookup's byte comparison creates
+no slice. Boolean/null rejection, numeric validation and name decoding follow
+their existing independent scalar-copy/iterator/decoder reservations. Those
+fees, work charges, capacity checks and error conditions remain unchanged.
+
+The restored error allowance retains the existing 256-byte accounting envelope;
+this change does not introduce a new claim about interpreter exception-frame
+allocation or take unassigned credit from parser startup. Negative tests must
+observe restoration before the relevant raise, preserve error reason/index,
+and refuse with the original caller exception when restoration cannot be paid.

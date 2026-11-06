@@ -51,14 +51,14 @@ def test_repeated_scalar_reuses_value_with_fresh_token_and_span(monkeypatch):
     reader = parser(b"12 12", bank)
     first = reader.read()
     before = bank.bytes
-    # Compact whitespace scan 64 + word scan 256 + fresh SourceToken 512.
-    bank.byte_limit = before + 832
+    # Compact whitespace scan 64 + word scan 64 + fresh SourceToken 512.
+    bank.byte_limit = before + 640
     second = reader.read()
     assert calls == [b"12"]
     assert first is not second and first.value is second.value
     assert (first.kind, first.offset, first.length) == ("number", 0, 2)
     assert (second.kind, second.offset, second.length) == ("number", 3, 2)
-    assert bank.bytes - before == 832
+    assert bank.bytes - before == 640
     with pytest.raises(FrozenInstanceError):
         first.offset = 3
 

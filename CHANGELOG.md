@@ -63,6 +63,10 @@ may break callers.
 
 ### Changed
 
+- Private word scanning refines compact-index reservations while restoring
+  the original allowance before lexical and token-length refusals. Original
+  error positions and caller-budget exceptions remain intact.
+
 - Private whitespace/comment scanning uses a proved 64-byte reservation for
   compact source indices; larger inputs retain the original 256-byte fee.
   Caller capacities, work charges and lexical validation are unchanged.
