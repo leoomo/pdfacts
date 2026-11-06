@@ -63,6 +63,10 @@ may break callers.
 
 ### Changed
 
+- Common source-operator scanning avoids pair-unpack iterators during cold
+  execution. Its reservation covers one outer iterator; source grammar, caller
+  capacities and downstream reservations are unchanged.
+
 - Private source-number callbacks carry their actual compact-number reservation
   through an explicit internal protocol. Ordinary callbacks keep their contract;
   changed spans and numeric refusals restore the full allowance before errors.

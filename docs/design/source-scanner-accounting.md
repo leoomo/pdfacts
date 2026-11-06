@@ -136,3 +136,33 @@ numbers and fallback types/spans, byte-disagreement and forged-span adapters,
 six-operand refusal, and caller exceptions when restoration is denied. Tests
 must preserve the fifth flag while corrupting source spans; recomputing it from
 the corrupted input would hide precisely the accounting mismatch being guarded.
+
+## Common-operator candidate scan
+
+The common-operator lookup must not unpack a candidate pair in its loop header.
+On the pinned interpreter, cold `UNPACK_SEQUENCE` can create an iterator for the
+pair in addition to the outer candidates iterator; a hot specialized instruction
+does not prove the cold allocation bound. In particular, the `T` group contains
+five pairs. Merely lowering the original 256-byte reservation is insufficient.
+
+Iterate each existing `candidate` reference and use constant tuple indices 0 and
+1 instead. This leaves one outer tuple iterator (48 bytes including its GC
+header), covered by a 64-byte reservation before the loop. Constant indexing
+returns existing bytes/string references and creates no new tuple or iterator.
+The scan creates no slice, closure or per-candidate container. Candidate count
+is at most five and token length two or three, so the existing work-charge
+arithmetic uses cached integers. Exact-byte prefix checks compare the original
+source span without copying it. Method calls retain the pinned interpreter's
+existing method-call accounting convention.
+
+Every match immediately reaches `token`'s independent prepayment. Every miss
+continues to the existing scalar-cache path (cached arithmetic) and then either
+`token` or the scalar-copy prepayment. Lexical and token-limit refusals have
+already been checked before entering this loop. No additional local exception
+is constructed inside it; budget exceptions propagate unchanged.
+
+Tests must exercise a fresh unspecialized `read` code object, including the fifth
+candidate match and all-candidates miss. The bytecode must contain no
+`UNPACK_SEQUENCE`; relying only on a warmed successful loop would miss the
+allocation defect. Pin exact/one-below loop budgets, original value/spans, cache
+reuse after a miss and source-language rejection of unrecognized operators.
