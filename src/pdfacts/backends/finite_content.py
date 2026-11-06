@@ -515,6 +515,14 @@ class ContentParser:
         body_length = end - start - 2
         self.bank.reserve(256 + body_length)
         body = self.raw[start + 1 : end - 1]
+        # Pay for both membership scans, including when decoding still follows.
+        self.bank.reserve(256)
+        self.bank.charge(2 * body_length)
+        if b"\\" not in body and b"\r" not in body:
+            block_size = 256 if body_length >= 254 else body_length + 2
+            # Retain the original full-block and finalization work allowance.
+            self.bank.charge(9 * (body_length // block_size) + 2)
+            return body
         iterator = iter(body)
         block_size = 256 if body_length >= 254 else body_length + 2
         self.bank.reserve(192 + block_size)
