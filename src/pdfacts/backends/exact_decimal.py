@@ -84,7 +84,7 @@ def parse_pdf_number(token, bank, *, limits):
     length = len(token)
     check_source_limit("token_bytes", length, limits.max_token_bytes)
     short_token = length <= 8
-    allocation = 1536 if short_token else 4096
+    allocation = 1280 if short_token else 4096
     bank.reserve(allocation + length * 8)
     bank.charge((4 if short_token else 16) * length + 8)
     negative = token.startswith(b"-")
@@ -92,10 +92,12 @@ def parse_pdf_number(token, bank, *, limits):
     whole, _, fractional = unsigned.partition(b".")
     digits = whole + fractional
     if not digits or not digits.isdigit():
+        if short_token:
+            bank.reserve(256)
         raise UnsupportedExactSource("numeric_token_domain")
     if short_token:
         numerator = int(digits)
         if negative:
             numerator = -numerator
-        return Fraction(numerator, 10 ** len(fractional))
+        return Fraction(numerator, _POWERS_OF_TEN[len(fractional)])
     return _long_fraction(digits, len(fractional), negative, bank)

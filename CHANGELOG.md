@@ -63,6 +63,10 @@ may break callers.
 
 ### Changed
 
+- Short exact decimal conversion reuses existing powers of ten and a bounded
+  allocation inventory; malformed values restore their original refusal fee.
+  Exact normalization, long-number behavior and resource capacities are unchanged.
+
 - Private evidence tuple traversal uses smaller control prepayments for cached
   lengths, retains large-tuple costs and prepays bounded local refusal frames
   independently. Payload validation and native comparisons remain mandatory.

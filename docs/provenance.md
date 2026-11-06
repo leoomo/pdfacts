@@ -57,6 +57,8 @@ This document is an engineering rule, not legal advice.
 
 | 2026-11-06 | `graphics/source_evidence.py` (tuple and refusal accounting) | official CPython 3.13.5 `Objects/frameobject.c`, `Include/internal/pycore_frame.h`, `Python/traceback.c`, `Objects/exceptions.c` and `Include/cpython/pyerrors.h` (PSF license), read in independent review | materialized frame slots include locals, cells, free variables and stack; traceback and exception structures bound the local refusal inventory; no code copied |
 
+| 2026-11-06 | `backends/exact_decimal.py` (short decimal accounting) | official CPython 3.13.5 `Lib/fractions.py`, `Objects/longobject.c` and `Objects/typeobject.c` (PSF license), read in independent review | bounded short integer normalization and cold constructor dispatch; existing powers table avoids runtime exponentiation; no code copied |
+
 ## Knowledge gathered before the first implementation
 
 Recorded so that later modules can cite it.
