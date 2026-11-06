@@ -232,7 +232,7 @@ def source_ledger(
             self.clip = (left, bottom, right, top)
             self.pending_clip = None
 
-        def handle_token(self, kind, value, offset, end):
+        def handle_token(self, kind, value, offset, end, discounted=False):
             bank.charge()
             if (
                 type(offset) is not int
@@ -241,10 +241,22 @@ def source_ledger(
                 or end <= offset
                 or end > raw_length
             ):
+                if discounted:
+                    bank.reserve(192)
                 raise UnsupportedExactSource("source_token_span")
             length = end - offset
+            if discounted and (
+                kind != "number"
+                or not 1 <= length <= 8
+                or type(value) is not bytes
+                or not 1 <= len(value) <= 8
+            ):
+                bank.reserve(192)
+                discounted = False
             if kind == "number":
                 if len(self.args) >= 6 or length > limits.max_token_bytes:
+                    if discounted:
+                        bank.reserve(192)
                     raise UnsupportedExactSource("numeric_operand_domain")
                 bank.charge(3 * length + 4)
                 if (
@@ -252,6 +264,8 @@ def source_ledger(
                     or len(value) != length
                     or not raw.startswith(value, offset, end)
                 ):
+                    if discounted:
+                        bank.reserve(192)
                     raise UnsupportedExactSource("source_token_disagreement")
                 token = value
                 exact = numeric_cache.number(token, limits)
@@ -489,7 +503,9 @@ def source_ledger(
 
     raw_length = len(raw)
     parser = Parser()
-    ContentParser(raw, bank, limits, consumer_end_offsets=True).consume(parser.handle_token)
+    ContentParser(
+        raw, bank, limits, consumer_end_offsets=True, consumer_short_numbers=True
+    ).consume(parser.handle_token)
     parser.handle_eof()
     bank.reserve(64 + len(records) * 8)
     if with_emissions:

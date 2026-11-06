@@ -95,11 +95,17 @@ def numeric_word(raw):
 
 
 class ContentParser:
-    def __init__(self, raw, bank, limits, *, consumer_end_offsets=False):
+    def __init__(
+        self, raw, bank, limits, *, consumer_end_offsets=False, consumer_short_numbers=False
+    ):
         require_source_runtime()
         if type(raw) is not bytes:
             raise UnsupportedExactSource("content_size")
         if type(consumer_end_offsets) is not bool:
+            raise UnsupportedExactSource("content_consumer_mode")
+        if type(consumer_short_numbers) is not bool or (
+            consumer_short_numbers and not consumer_end_offsets
+        ):
             raise UnsupportedExactSource("content_consumer_mode")
         bank.reserve(128)
         raw_length = len(raw)
@@ -112,6 +118,7 @@ class ContentParser:
         self.bank = bank
         self.index = 0
         self.consumer_end_offsets = consumer_end_offsets
+        self.consumer_short_numbers = consumer_short_numbers
         self.names = {}
         self.window = b""
         self.window_start = 0
@@ -238,6 +245,25 @@ class ContentParser:
 
     def token(self, kind, value, start, consumer):
         if consumer is not None:
+            if self.consumer_short_numbers:
+                # Freeze the selected channel and span before budget callbacks.
+                end = self.index
+                raw_length = self.raw_length
+                self.bank.reserve(64)
+                discounted = (
+                    raw_length < 1073741824
+                    and kind == "number"
+                    and type(value) is bytes
+                    and 1 <= len(value) <= 8
+                    and type(start) is int
+                    and type(end) is int
+                    and 0 <= start < end <= raw_length
+                    and 1 <= end - start <= 8
+                )
+                if not discounted:
+                    self.bank.reserve(192)
+                consumer(kind, value, start, end, discounted)
+                return None
             self.bank.reserve(256)
             if self.consumer_end_offsets:
                 consumer(kind, value, start, self.index)

@@ -63,6 +63,10 @@ may break callers.
 
 ### Changed
 
+- Private source-number callbacks carry their actual compact-number reservation
+  through an explicit internal protocol. Ordinary callbacks keep their contract;
+  changed spans and numeric refusals restore the full allowance before errors.
+
 - Private word scanning refines compact-index reservations while restoring
   the original allowance before lexical and token-length refusals. Original
   error positions and caller-budget exceptions remain intact.

@@ -89,3 +89,50 @@ this change does not introduce a new claim about interpreter exception-frame
 allocation or take unassigned credit from parser startup. Negative tests must
 observe restoration before the relevant raise, preserve error reason/index,
 and refuse with the original caller exception when restoration cannot be paid.
+
+## Short-number consumer protocol
+
+An explicit private `consumer_short_numbers` option requires the existing
+endpoint channel. Ordinary default and endpoint consumers keep their four
+arguments and 256-byte reservation. The new source-interpreter caller accepts a
+fifth boolean describing the reservation actually selected. This boolean is
+accounting metadata, not authority to accept a token or trust its contents.
+
+Before the first budget callback, capture the endpoint, original raw length and
+channel choice; the consumer, kind, value and start are already local argument
+references. Prepay 64 before evaluating the selector. A discounted token must be
+a number with exact bytes of length 1..8, exact integer start/end in the original
+raw span, raw length below 2**30, and span length 1..8. The selector creates at
+most one temporary integer: either the length of long bytes before rejection,
+or a compact span difference before rejection. Eligible short values use cached
+integers throughout. Any other token immediately reserves the remaining 192.
+The fifth argument records that actual decision; the consumer must not infer
+it again from a span that an intervening adapter might have changed.
+
+The source interpreter restores 192 before any span refusal for a discounted
+call. After validating the span, it restores the allowance before continuing if
+the kind/value/length no longer belongs to the short-number domain. This permits
+the ordinary full-fee path to apply its unchanged grammar and error rules.
+The span-length test precedes the bytes-length test: a non-short span restores
+immediately, while a short span uses a cached integer before checking even a
+substituted very large bytes value. Thus only one potentially uncached length
+exists before restoration, including values larger than the original content.
+Remaining discounted numeric refusals restore the allowance before errors for
+operand-count/token-length limits or source-byte disagreement. Each path pays
+at most one restoration, and none constructs and catches an error to pay later.
+
+In the still-discounted successful path, numeric length, `3*length+4`, the
+operand index and value length are cached integers. At most six arguments are
+retained, so list growth has at most an eight-pointer (64-byte) backing array.
+The argument list object already exists. Numeric-cache hits reuse their existing
+entries and OrderedDict nodes; misses reserve independently before decimal and
+Fraction construction, insertion and eviction. No numeric result allocation is
+charged to the consumer's 64-byte allowance. Non-numeric, long-number, default
+and ordinary endpoint callbacks retain the full reservation.
+
+Validation must observe both sides of the actual fee protocol: default callback
+arity/cost, opt-in arity/flags, frozen endpoint/channel inputs, successful short
+numbers and fallback types/spans, byte-disagreement and forged-span adapters,
+six-operand refusal, and caller exceptions when restoration is denied. Tests
+must preserve the fifth flag while corrupting source spans; recomputing it from
+the corrupted input would hide precisely the accounting mismatch being guarded.
