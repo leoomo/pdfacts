@@ -8,6 +8,11 @@ may break callers.
 
 ### Added
 
+- Private mixed-root support completion retains exact image matrix/clip source
+  association alongside paths, using the original single-use capture and budget.
+  Mixed support batches and path-only batches reject cross-use; existing eager
+  and path-only completion contracts are unchanged.
+
 - Private staged root-source capture and completion preserve original graphics
   objects across page reads under one analysis budget. Pending tokens are
   single-use, and final publication rejects closed or revoked analyses.

@@ -412,7 +412,7 @@ def test_resolver_rejects_reference_replaced_by_budget_callback(callback):
             target = (
                 analysis_identity._resolve_path_evidence.__code__
                 if callback == "lower_charge"
-                else feature.resolve_path_evidence.__code__
+                else feature._resolve_graphic_evidence.__code__
             )
             expected = "reserve" if callback == "outer_reserve" else "charge"
             if self.armed and operation == expected and caller is target:

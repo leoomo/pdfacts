@@ -60,6 +60,16 @@ _NATIVE_FIELDS = (
     "source_level",
     "source_clip_count",
 )
+_IMAGE_SOURCE_FIELDS = (
+    "instruction",
+    "resource_identity",
+    "matrix",
+    "clip",
+    "pixel_width",
+    "pixel_height",
+    "colour_space",
+    "bits_per_pixel",
+)
 _SCALAR_TYPES = (type(None), bool, int, str, bytes)
 _REQUIRED_PATH_FIELDS = (
     "subpaths",
@@ -76,7 +86,7 @@ _REQUIRED_PATH_FIELDS = (
 
 def _freeze(value, bank, limits, depth=0, matrix_hint=None):
     """Prepay additional representation allocations before constructing them."""
-    bank.charge()
+    bank.charge(2)
     if depth > limits.max_payload_depth:
         check_source_limit("evidence_payload_depth", depth, limits.max_payload_depth)
     if matrix_hint is not None:
@@ -91,6 +101,8 @@ def _freeze(value, bank, limits, depth=0, matrix_hint=None):
         return value
     if type(value) is Fraction:
         bank.reserve(128)
+        if type(value) is not Fraction:
+            raise UnsupportedExactSource("path_evidence_payload_domain")
         return ("fraction", value.numerator, value.denominator)
     if type(value) is float:
         if not isfinite(value):
@@ -145,17 +157,30 @@ def _same_native(left, right, bank):
 
 
 def _record_payload(record, names, bank, limits, source_cache=None):
+    # Closed module-owned type/field pairs; no witness supplied by the record.
+    if names is _SOURCE_FIELDS:
+        expected_type = SourcePathNumbers
+    elif names is _NATIVE_FIELDS:
+        expected_type = DrawnPath
+    elif names is _IMAGE_SOURCE_FIELDS:
+        expected_type = SourceImageNumbers
+    elif names is _IMAGE_NATIVE_FIELDS:
+        expected_type = DrawnImage
+    else:
+        raise UnsupportedExactSource("path_evidence_record_domain")
     bank.reserve(192)
     count = len(names)
     bank.reserve(192 + 16 * count)
     if count > 256:
         bank.reserve(36 * (count - 256))
-    bank.charge(count)
+    bank.charge(16 + 5 * count)
     values = [None] * count
     matrix_hint = None
     index = 0
     while index < count:
         name = names[index]
+        if type(record) is not expected_type:
+            raise UnsupportedExactSource("path_evidence_record_domain")
         value = getattr(record, name)
         entry = None if source_cache is None else source_cache.get(name)
         bank.charge()
@@ -187,6 +212,8 @@ def _record_payload(record, names, bank, limits, source_cache=None):
             ):
                 matrix_hint = source_cache.get("matrix")
         index += 1
+    if type(record) is not expected_type:
+        raise UnsupportedExactSource("path_evidence_record_domain")
     return tuple(values)
 
 
@@ -203,11 +230,20 @@ def _verify_public_image(native, reconciled, image, bank):
         or type(image) is not Image
     ):
         raise UnsupportedExactSource("path_evidence_record_domain")
+    bank.charge(64)
     bank.charge(32)
     for name in _IMAGE_NATIVE_FIELDS:
+        if type(native) is not DrawnImage or type(reconciled) is not DrawnImage:
+            raise UnsupportedExactSource("path_evidence_record_domain")
         if not _same_native(getattr(native, name), getattr(reconciled, name), bank):
             raise UnsupportedExactSource("path_evidence_inventory_binding")
-    if type(image.corners) is not Quad:
+    if (
+        type(native) is not DrawnImage
+        or type(reconciled) is not DrawnImage
+        or type(image) is not Image
+        or type(image.ref) is not GraphicRef
+        or type(image.corners) is not Quad
+    ):
         raise UnsupportedExactSource("path_evidence_image_unknown")
     # The existing conversion computes the full, unclipped unit-square corners.
     # It does not read or decode image data.
@@ -217,23 +253,36 @@ def _verify_public_image(native, reconciled, image, bank):
     if image.colour_space is not expected.colour_space:
         raise UnsupportedExactSource("path_evidence_image_disagreement")
     for name in _IMAGE_PIXEL_FIELDS:
+        if type(image) is not Image:
+            raise UnsupportedExactSource("path_evidence_record_domain")
         actual_value = getattr(image, name)
         expected_value = getattr(expected, name)
         if type(actual_value) is not int or not _same_native(actual_value, expected_value, bank):
             raise UnsupportedExactSource("path_evidence_image_disagreement")
     for name in _IMAGE_CORNER_FIELDS:
+        if type(image) is not Image or type(image.corners) is not Quad:
+            raise UnsupportedExactSource("path_evidence_record_domain")
         actual_point = getattr(image.corners, name)
         expected_point = getattr(expected.corners, name)
         if (
             type(actual_point) is not Point
             or not _same_native(actual_point.x, expected_point.x, bank)
+            or type(actual_point) is not Point
             or not _same_native(actual_point.y, expected_point.y, bank)
         ):
             raise UnsupportedExactSource("path_evidence_image_disagreement")
 
+    if (
+        type(image) is not Image
+        or type(image.ref) is not GraphicRef
+        or type(image.ref.page_index) is not int
+        or type(image.ref.drawing_index) is not int
+    ):
+        raise UnsupportedExactSource("path_evidence_record_domain")
+
 
 def _register_path_evidence(
-    owner, handle, data, bank, entries, limits, *, document=None, pending=None
+    owner, handle, data, bank, entries, limits, *, document=None, pending=None, support=False
 ):
     """Validate feature types and freeze references before atomic opaque storage."""
     require_source_runtime()
@@ -242,11 +291,15 @@ def _register_path_evidence(
     bank.reserve(128)
     bank.charge(2)
     bank.reserve(512 + 288 * len(entries))
-    bank.charge(16 * len(entries))
+    bank.charge((20 if support else 16) * len(entries))
     checked = [None] * len(entries)
     index = 0
     for entry in entries:
-        if type(entry) is not tuple or len(entry) != 2 or type(entry[0]) is not Path:
+        if (
+            type(entry) is not tuple
+            or len(entry) != 2
+            or (type(entry[0]) is not Path and not (support and type(entry[0]) is Image))
+        ):
             raise UnsupportedExactSource("path_evidence_entry_domain")
         path, payload = entry
         ref = path.ref
@@ -272,17 +325,27 @@ def _register_path_evidence(
             _STAGED_DOCUMENT_TYPES,
             _STAGED_PROVIDER_TYPES,
             _STAGED_GRAPHIC_TYPES,
+            support=support,
         )
     return _store_path_evidence(owner, handle, data, bank, tuple(checked), limits)
 
 
 def resolve_path_evidence(owner, handle, data, bank, token, ordinal, path):
     """Resolve the original Path object and reject changed reference identity."""
+    return _resolve_graphic_evidence(owner, handle, data, bank, token, ordinal, path, False)
+
+
+def resolve_root_support_evidence(owner, handle, data, bank, token, root_ordinal, graphic):
+    """Resolve original mixed-root support association; no positive write authority."""
+    return _resolve_graphic_evidence(owner, handle, data, bank, token, root_ordinal, graphic, True)
+
+
+def _resolve_graphic_evidence(owner, handle, data, bank, token, ordinal, path, support):
     require_source_runtime()
     bank.reserve(256)
-    bank.charge(8)
+    bank.charge(24)
     try:
-        if type(path) is not Path:
+        if type(path) is not Path and not (support and type(path) is Image):
             raise UnsupportedExactSource("path_evidence_entry_domain")
         captured_ref = path.ref
         if type(captured_ref) is not GraphicRef:
@@ -296,9 +359,12 @@ def resolve_path_evidence(owner, handle, data, bank, token, ordinal, path):
             ordinal,
             path,
             captured_ref,
+            support=support,
         )
         if (
-            captured_ref.annotation is not None
+            (type(path) is not Path and not (support and type(path) is Image))
+            or type(captured_ref) is not GraphicRef
+            or captured_ref.annotation is not None
             or type(captured_ref.page_index) is not int
             or type(captured_ref.drawing_index) is not int
             or captured_ref.page_index != reference[0]
@@ -307,7 +373,11 @@ def resolve_path_evidence(owner, handle, data, bank, token, ordinal, path):
             raise UnsupportedExactSource("path_evidence_ref_changed")
         # Lower storage can invoke the caller's budget. Check identity after
         # its final callback, with no subsequent callback before publication.
-        if path.ref is not captured_ref:
+        if (
+            (type(path) is not Path and not (support and type(path) is Image))
+            or type(captured_ref) is not GraphicRef
+            or path.ref is not captured_ref
+        ):
             raise UnsupportedExactSource("path_evidence_ref_changed")
         return payload
     except UnsupportedExactSource as failure:
@@ -361,6 +431,15 @@ def capture_root_path_evidence(document, page_index, bank: OperationBudget, *, l
 
 def complete_root_path_evidence(document, bank: OperationBudget, pending_token, *, limits):
     """Complete the entire original page and consume its pending token once."""
+    return _complete_root_evidence(document, bank, pending_token, limits, False)
+
+
+def complete_root_support_evidence(document, bank: OperationBudget, pending_token, *, limits):
+    """Complete one mixed-root support batch using the original single pending claim."""
+    return _complete_root_evidence(document, bank, pending_token, limits, True)
+
+
+def _complete_root_evidence(document, bank, pending_token, limits, support):
     require_source_runtime()
     if type(limits) is not SourceEvidenceLimits:
         raise TypeError("limits must be SourceEvidenceLimits")
@@ -369,7 +448,9 @@ def complete_root_path_evidence(document, bank: OperationBudget, pending_token, 
     bank.charge(32)
     try:
         with document._access() as access:
-            return _complete_root_path_evidence(document, bank, pending_token, access, limits)
+            return _complete_root_path_evidence(
+                document, bank, pending_token, access, limits, support
+            )
     except ExactSourceLimit as failure:
         raise LimitExceededError(
             limit=failure.limit, allowed=failure.allowed, found=failure.found
@@ -450,7 +531,7 @@ def _issue_root_path_evidence(document, page_index, bank: OperationBudget, *, li
         return paths, images, token
 
 
-def _complete_root_path_evidence(document, bank, pending, access, limits):
+def _complete_root_path_evidence(document, bank, pending, access, limits, support=False):
     binding = getattr(access._qpdf_ready(), "_analysis_identity", None)
     owner = None if binding is None else binding[0]
     completed = access.complete_staged_root_numbers(document, pending, bank, limits=limits)
@@ -459,14 +540,14 @@ def _complete_root_path_evidence(document, bank, pending, access, limits):
     paths, images, roots, result, page_index = completed
     try:
         return _publish_root_path_evidence(
-            document, bank, pending, limits, paths, images, roots, result, page_index
+            document, bank, pending, limits, paths, images, roots, result, page_index, support
         )
     finally:
         _abort_staged_owner(owner, pending)
 
 
 def _publish_root_path_evidence(
-    document, bank, pending, limits, paths, images, roots, result, page_index
+    document, bank, pending, limits, paths, images, roots, result, page_index, support=False
 ):
     source_hash, page_ref, streams, joined = result
     provider = document._qpdf
@@ -487,7 +568,8 @@ def _publish_root_path_evidence(
         bank.charge()
         if type(native) is DrawnPath:
             path_count += 1
-    entries = [None] * path_count
+    check_source_limit("evidence_paths", path_count, limits.max_paths)
+    entries = [None] * (len(roots) if support else path_count)
     path_ordinal = 0
     image_ordinal = 0
     # Fixed four-entry identity cache, owned only by this issuance.
@@ -510,6 +592,18 @@ def _publish_root_path_evidence(
                 or images[image_ordinal] is not path
             ):
                 raise UnsupportedExactSource("path_evidence_image_binding")
+            if support:
+                bank.reserve(512)
+                payload = (
+                    "root-image-association-v1",
+                    digest,
+                    page_index,
+                    page_ref,
+                    streams,
+                    _record_payload(source, _IMAGE_SOURCE_FIELDS, bank, limits),
+                    _record_payload(native, _IMAGE_NATIVE_FIELDS, bank, limits),
+                )
+                entries[ordinal] = (path, payload)
             image_ordinal += 1
             continue
         if (
@@ -555,11 +649,19 @@ def _publish_root_path_evidence(
             _record_payload(source, _SOURCE_FIELDS, bank, limits, source_cache),
             _record_payload(native, _NATIVE_FIELDS, bank, limits),
         )
-        entries[path_ordinal] = (path, payload)
+        entries[ordinal if support else path_ordinal] = (path, payload)
         path_ordinal += 1
     if path_ordinal != path_count:
         raise UnsupportedExactSource("path_evidence_inventory_count")
     # Image-only completion still performs the same atomic lifecycle/ref guard.
     return _register_path_evidence(
-        None, None, None, bank, tuple(entries), limits, document=document, pending=pending
+        None,
+        None,
+        None,
+        bank,
+        tuple(entries),
+        limits,
+        document=document,
+        pending=pending,
+        support=support,
     )

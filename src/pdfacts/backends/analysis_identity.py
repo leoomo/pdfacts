@@ -203,7 +203,9 @@ def _store_path_evidence(owner, handle, data, bank, entries, limits):
     return token
 
 
-def _resolve_path_evidence(owner, handle, data, bank, token, ordinal, path, reference):
+def _resolve_path_evidence(
+    owner, handle, data, bank, token, ordinal, path, reference, *, support=False
+):
     require_source_runtime()
     bank.charge(8)
     if type(token) is not object or type(ordinal) is not int:
@@ -212,7 +214,13 @@ def _resolve_path_evidence(owner, handle, data, bank, token, ordinal, path, refe
         _record(owner, handle, data, bank)
         batches = _path_batches.get(owner)
         batch = None if batches is None else batches.get(token)
-        if batch is None or batch[0] is not handle or not 0 <= ordinal < len(batch[1]):
+        if (
+            type(batch) is not tuple
+            or len(batch) != (3 if support else 2)
+            or (support and (type(batch[2]) is not str or batch[2] != "root-support-v1"))
+            or batch[0] is not handle
+            or not 0 <= ordinal < len(batch[1])
+        ):
             raise UnsupportedExactSource("path_evidence_binding")
         entry = batch[1][ordinal]
         if entry[0][0] is not path or entry[0][1] is not reference:
@@ -393,7 +401,7 @@ def _ready_staged(
         node[4] = result
 
 
-def _check_staged_refs(node, entries, graphic_types):
+def _check_staged_refs(node, entries, graphic_types, support=False):
     """Final whole-root guard; work/counters prepaid outside the identity lock."""
     roots = node[2][2]
     references = node[1][8]
@@ -423,7 +431,7 @@ def _check_staged_refs(node, entries, graphic_types):
             or ref.annotation is not None
         ):
             raise UnsupportedExactSource("path_evidence_ref_changed")
-        if type(root[0]) is DrawnPath:
+        if support or type(root[0]) is DrawnPath:
             if (
                 path_index >= entry_count
                 or entries[path_index][0][0] is not root[1]
@@ -437,13 +445,27 @@ def _check_staged_refs(node, entries, graphic_types):
 
 
 def _store_staged_path_evidence(
-    document, pending, bank, entries, limits, document_types, provider_types, graphic_types
+    document,
+    pending,
+    bank,
+    entries,
+    limits,
+    document_types,
+    provider_types,
+    graphic_types,
+    *,
+    support=False,
 ):
     """Prepare outside the identity lock; publish only the internally ready token."""
     require_source_runtime()
     if type(entries) is not tuple:
         raise UnsupportedExactSource("path_evidence_batch_domain")
-    check_source_limit("evidence_paths", len(entries), limits.max_paths)
+    if support:
+        check_source_limit("evidence_roots", len(entries), limits.max_root_objects)
+        bank.reserve(64)
+        bank.charge(64)
+    else:
+        check_source_limit("evidence_paths", len(entries), limits.max_paths)
     bank.reserve(1024 + 128 * len(entries))
     bank.charge(len(entries))
     bank.reserve(64)
@@ -477,11 +499,11 @@ def _store_staged_path_evidence(
     batches = None
     if entries:
         batches = {} if previous_batches is None else previous_batches.copy()
-        batches[token] = (handle, entries)
+        batches[token] = (handle, entries, "root-support-v1") if support else (handle, entries)
     bank.reserve(512)
     root_count = len(node[2][2])
     bank.reserve(192 + (72 * (root_count - 256) if root_count > 256 else 0))
-    bank.charge(24 * root_count + 96)
+    bank.charge((28 if support else 24) * root_count + 96)
     bank.reserve(64)
     with _identity_read_scope:
         if (
@@ -492,7 +514,7 @@ def _store_staged_path_evidence(
         ):
             raise UnsupportedExactSource("staged_source_changed")
         _staged_binding(document, generation, node[1], bank, limits, document_types, provider_types)
-        _check_staged_refs(node, entries, graphic_types)
+        _check_staged_refs(node, entries, graphic_types, support)
         if batches is not None:
             _path_batches[owner] = batches
         generation[5][1] = None

@@ -2,12 +2,12 @@
 
 from dataclasses import replace
 from fractions import Fraction
-from types import SimpleNamespace
 
 import pytest
 
+from pdfacts.backends.exact_numbers import SourcePathNumbers
 from pdfacts.backends.exact_stream import ExactSourceLimit, UnsupportedExactSource
-from pdfacts.graphics.source_evidence import _freeze, _record_payload, _same_native
+from pdfacts.graphics.source_evidence import _SOURCE_FIELDS, _freeze, _record_payload, _same_native
 from test_source_evidence import Budget, source_limits
 
 
@@ -22,16 +22,29 @@ def matrix():
 def test_processed_matrix_is_reused_only_for_same_object():
     value = matrix()
     clone = tuple(list(value))
-    source = SimpleNamespace(matrix=value, operations=((value, clone),))
+    source = SourcePathNumbers((), 0, 0, value, Fraction(1), ((value, clone),), "S")
     cache = {"matrix": None}
-    frozen = _record_payload(source, ("matrix", "operations"), budget(), source_limits(), cache)
+    frozen = _record_payload(source, _SOURCE_FIELDS, budget(), source_limits(), cache)
     expected = tuple(("fraction", number, 1) for number in (1, 0, 0, 1, 0, 0))
-    assert frozen == (expected, ((expected, expected),))
-    assert frozen[1][0][0] is frozen[0]
-    assert frozen[1][0][1] is not frozen[0]
-    uncached = _record_payload(source, ("matrix", "operations"), budget(), source_limits())
+    assert frozen == (
+        (),
+        0,
+        0,
+        expected,
+        ("fraction", 1, 1),
+        ((expected, expected),),
+        "S",
+        0,
+        0,
+        ("fraction", 10, 1),
+    )
+    assert frozen[5][0][0] is frozen[3]
+    assert frozen[5][0][1] is not frozen[3]
+    uncached = _record_payload(source, _SOURCE_FIELDS, budget(), source_limits())
     assert uncached == frozen
-    assert uncached[1][0][0] is not uncached[0]
+    assert uncached[5][0][0] is not uncached[3]
+    with pytest.raises(UnsupportedExactSource, match="path_evidence_record_domain"):
+        _record_payload(source, ("matrix", "operations"), budget(), source_limits())
 
 
 @pytest.mark.parametrize("maximum", [1, 2, 16, 32])

@@ -114,3 +114,74 @@ page witness adds the 16 bytes listed above. Their work is charged explicitly
 in the revised fixed and per-root fees. Same-layout class substitution, custom
 page values/cache/flags, and equal-but-distinct PageRef replacement all refuse
 without invoking user getters, publishing a batch, or retaining active work.
+
+## Mixed-root support batches
+
+The optional internal support mode uses the same access context, pending claim,
+source parser, native reconciliation, registry and final publication scopes.
+There are no new locks, context managers, callbacks or source reads. The path-only
+mode keeps its original batch shape and image-only None return. Mixed mode adds
+a fixed `root-support-v1` discriminator to its existing owner-scoped batch tuple;
+actual tuple size is64bytes instead of56. A64-byte and64-work prepayment covers
+this addition and fixed mode/schema checks.
+
+The original image/source pair is already present during publication. Mixed mode
+serializes its eight source fields and five native witness fields using the
+existing `_record_payload` and `_freeze` contracts. The eight-field source tuple
+is104bytes and temporary list120; the six-entry frozen matrix tuple is88 and its
+six fraction wrappers64 each. The five-field native tuple is80 and list96.
+Matrix/clip list and tuple copies, fraction wrappers and noncached counters keep
+the existing recursive prepayments; source numbers are not converted to floats.
+An optional four-coordinate exact clip uses the same independent freeze fees.
+
+Before the image payload header and input pair, reserve512bytes: measured96 for
+the seven-reference payload and56 for its pair. The original image/ref checked
+entry has four56-byte pairs,224total; registration retains the existing
+512+288*N reservation applied to every mixed root, and charges20*N work instead
+of16*N for the image-domain branch. Preallocated input and checked lists grew
+64→72bytes and registered tuple48→56 in a constructed one-image/one-path page;
+existing count-sized fees cover these increments. No duplicate image dataclass,
+resource object, matrix plan or decoded pixel buffer is created.
+
+The final scan charges28*N+96work in mixed mode, keeping the existing arithmetic
+and two-counter byte fees. It checks every root against the entry at its mixed
+ordinal. Both modes still enforce max_paths on the counted paths; mixed mode
+also enforces max_root_objects on its entries. Resolver feature work increases
+from8 to24 for explicit format/domain branches and exact-class rechecks before
+postcallback attributes. Its256-byte prepayment is unchanged; it constructs no
+new normal-path container. Backend resolver format checks reject cross-use.
+
+Measured on a constructed mixed page under CPython3.13.5, path-only completion
+reserved213724bytes and2867work; mixed completion reserved220396bytes and3326work.
+The increment is6672bytes/459work including existing recursive validation fees.
+Image verification charges96work (64+32) instead of the original32 for repeated
+exact domains of both private native records and public image/corner reads after
+comparison callbacks. This
+constructs no new normal-path object and protects both completion modes.
+These measurements exclude instrumentation allocations. Neither cap nor engine
+pin changed. Tests cover actual source payloads, exact/one-below cumulative
+limits, original identity, no second native read, late subtype mutations with
+zero getters, callback-close/revocation and atomic cleanup. A late resolver-ref
+mutation failed the same test before the postcallback type guard was moved ahead
+of every attribute read. Association alone does not compute paint envelopes or
+grant writable geometry authority.
+
+The serializer now accepts only the four module-owned record/field-list pairs:
+SourcePathNumbers, DrawnPath, SourceImageNumbers and DrawnImage. It checks the
+expected exact type immediately before each record attribute read and before
+returning, after the final callback. Selection constructs no tuple/dictionary or
+new witness object; the expected type is a reference to a module-owned class.
+Its work is16+5*F instead of F for field count F. Recursive freeze charges2work
+instead of1 per visited value and rechecks exact Fraction after the128-byte
+wrapper reservation before reading numerator/denominator. Byte constructors and
+reservations are unchanged, confirmed by repeated actual-size measurement.
+
+The independent review found source/native record subclasses could execute
+getters during serialization; the mutated source image record could publish.
+Five same-test cases (native, reconciled native, source record, native record and
+Fraction) fail before these guards and pass afterward with zero getter calls and
+no publication/active residue. Additional last-field callback cases ensure the
+final record check is exercised. The cache-reuse unit test now constructs an
+actual SourcePathNumbers and uses the owned full field list, preserving its
+original equal-value and matrix-identity assertions. Arbitrary custom field lists
+are explicitly rejected instead of expanding the closed serializer domain.

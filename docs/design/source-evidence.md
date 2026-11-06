@@ -143,3 +143,32 @@ boundaries. This also covers a document closed by a reconciliation budget
 callback. Caller budget exceptions propagate by identity; no broad catch or
 new normal-path constructor was added. The same close-callback regression is
 exercised with old independent subpaths and new joined subpaths.
+
+## Mixed-root support completion
+
+`capture_root_path_evidence` can feed either existing path-only completion or
+`complete_root_support_evidence(document, bank, pending_token, *, limits)`.
+Both consume the same pending claim once; neither may follow the other.
+The support operation returns one opaque mixed-root batch, including an image-only
+page. Existing eager/path-only APIs retain their return contracts and path ordinals.
+
+`resolve_root_support_evidence(owner, handle, data, bank, token, root_ordinal,
+graphic)` resolves the exact original Path or Image and GraphicRef. Ordinals are
+original mixed nontext root drawing positions. Its batches and path-only batches
+reject cross-use. All owner/bank/generation, complete-source validation, original
+page/provider lifetime and callback-safe final publication requirements remain.
+
+Path payloads retain `root-association-v2`; image payloads use
+`root-image-association-v1` with source digest, page index, page reference,
+content identities, source tuple and native witness tuple. Source image fields
+are instruction, resource identity, exact matrix, optional exact rectangular clip,
+pixel width/height, colour-space identifier and bits per pixel. Native fields are
+matrix, width, height, colour-space identifier and bits per pixel. Exact rationals
+use the existing immutable fraction representation. The record is the already
+reconciled source image emission; no pixels are decoded or graphics reread.
+
+These are source associations, not raster/vector support envelopes or positive
+writable-row proofs. Annotation appearances are not root-image/path certificates.
+Consumers must not infer absence of unrelated paint from a filtered root subset,
+an image-only completion result, or a native bounding box. Positive path operation
+allowlists remain independent of negative-support association.
