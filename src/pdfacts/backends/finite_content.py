@@ -12,6 +12,7 @@ DELIMITERS = b"()<>[]{}/%"
 TERMINATORS = WHITESPACE + DELIMITERS
 HEX = b"0123456789abcdefABCDEF"
 ESCAPES = {ord("n"): 10, ord("r"): 13, ord("t"): 9, ord("b"): 8, ord("f"): 12}
+SHORT_STATE_OPERATORS = frozenset(("BT", "ET", "EMC"))
 
 # Fixed lexical values only; no source-dependent data enters these tables.
 _SINGLE_DIGIT_WORDS = (b"0", b"1", b"2", b"3", b"4", b"5", b"6", b"7", b"8", b"9")
@@ -104,6 +105,7 @@ class ContentParser:
         consumer_end_offsets=False,
         consumer_short_numbers=False,
         consumer_short_names=False,
+        consumer_short_states=False,
     ):
         require_source_runtime()
         if type(raw) is not bytes:
@@ -116,6 +118,10 @@ class ContentParser:
             raise UnsupportedExactSource("content_consumer_mode")
         if type(consumer_short_names) is not bool or (
             consumer_short_names and not consumer_short_numbers
+        ):
+            raise UnsupportedExactSource("content_consumer_mode")
+        if type(consumer_short_states) is not bool or (
+            consumer_short_states and not consumer_short_numbers
         ):
             raise UnsupportedExactSource("content_consumer_mode")
         bank.reserve(128)
@@ -131,6 +137,7 @@ class ContentParser:
         self.consumer_end_offsets = consumer_end_offsets
         self.consumer_short_numbers = consumer_short_numbers
         self.consumer_short_names = consumer_short_names
+        self.consumer_short_states = consumer_short_states
         self.names = {}
         self.window = b""
         self.window_start = 0
@@ -262,6 +269,7 @@ class ContentParser:
                 end = self.index
                 raw_length = self.raw_length
                 short_names = self.consumer_short_names
+                short_states = self.consumer_short_states
                 self.bank.reserve(64)
                 discounted = (
                     raw_length < 1073741824
@@ -273,6 +281,10 @@ class ContentParser:
                         and kind == "name"
                         and type(value) is str
                         and 1 <= len(value) <= 8
+                        or short_states
+                        and kind == "operator"
+                        and type(value) is str
+                        and value in SHORT_STATE_OPERATORS
                     )
                     and type(start) is int
                     and type(end) is int

@@ -7,8 +7,10 @@ from pdfacts.backends.exact_stream import UnsupportedExactSource, check_source_l
 TEXT_COUNTS = {"BT": 0, "ET": 0, "Tf": 2, "Tm": 6, "Td": 2, "Tw": 1, "Tj": 1, "TJ": 1}
 
 
-def require(condition, reason):
+def require(condition, reason, bank=None, discounted=False):
     if not condition:
+        if discounted:
+            bank.reserve(192)
         raise UnsupportedExactSource(reason)
 
 
@@ -28,13 +30,16 @@ class ExactTextState:
     def restore(self, state):
         self.font, self.size, self.spacing = state
 
-    def apply(self, operator, args, source_operand=None):
-        require(len(args) == TEXT_COUNTS[operator], "text_operator_shape")
+    def apply(self, operator, args, source_operand=None, discounted=False):
+        if discounted and operator not in ("BT", "ET"):
+            self.bank.reserve(192)
+            discounted = False
+        require(len(args) == TEXT_COUNTS[operator], "text_operator_shape", self.bank, discounted)
         if operator == "BT":
-            require(not self.active, "text_nested")
+            require(not self.active, "text_nested", self.bank, discounted)
             self.active = True
             return None
-        require(self.active, "text_outside_object")
+        require(self.active, "text_outside_object", self.bank, discounted)
         if operator == "ET":
             self.active = False
         elif operator == "Tf":

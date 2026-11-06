@@ -11,7 +11,7 @@ from pdfacts.backends import exact_matrix_witness as matrix_witness
 from pdfacts.backends.exact_decimal import parse_pdf_number
 from pdfacts.backends.exact_stream import UnsupportedExactSource, check_source_limit
 from pdfacts.backends.exact_text import TEXT_COUNTS, ExactTextState
-from pdfacts.backends.finite_content import ContentParser
+from pdfacts.backends.finite_content import SHORT_STATE_OPERATORS, ContentParser
 from pdfacts.backends.protocols import DrawnImage, DrawnPath
 from pdfacts.backends.source_runtime import require_source_runtime
 
@@ -254,6 +254,9 @@ def source_ledger(
                     or kind == "name"
                     and type(value) is str
                     and 1 <= len(value) <= 8
+                    or kind == "operator"
+                    and type(value) is str
+                    and value in SHORT_STATE_OPERATORS
                 )
             ):
                 bank.reserve(192)
@@ -291,13 +294,18 @@ def source_ledger(
                 return
             operator = value
             self.index += 1
-            check_source_limit("source_instructions", self.index, limits.max_instructions)
+            found, allowed = self.index, limits.max_instructions
+            if discounted and found > allowed:
+                bank.reserve(192)
+            check_source_limit("source_instructions", found, allowed)
             if self.pending_clip is not None and operator != "n":
+                if discounted:
+                    bank.reserve(192)
                 raise UnsupportedExactSource("clip_pending")
             if operator in TEXT_COUNTS:
                 if self.clip is not None and operator in ("Tj", "TJ"):
                     raise UnsupportedExactSource("clipped_text")
-                emitted = self.text.apply(operator, self.args, self.text_operand)
+                emitted = self.text.apply(operator, self.args, self.text_operand, discounted)
                 if emitted is not None:
                     bank.reserve(128)
                     emissions.append((self.index, emitted, None))
@@ -306,6 +314,8 @@ def source_ledger(
                 self.text_operand = None
                 return
             if self.text.active:
+                if discounted:
+                    bank.reserve(192)
                 raise UnsupportedExactSource("graphics_inside_text")
             if operator == "Do":
                 bank.charge(16)
@@ -345,8 +355,12 @@ def source_ledger(
                     self.marked_depth += 1
                 elif operator == "EMC":
                     if self.args:
+                        if discounted:
+                            bank.reserve(192)
                         raise UnsupportedExactSource("marked_operator_shape")
                     if not self.marked_depth:
+                        if discounted:
+                            bank.reserve(192)
                         raise UnsupportedExactSource("marked_underflow")
                     self.marked_depth -= 1
                 else:
@@ -517,6 +531,7 @@ def source_ledger(
         consumer_end_offsets=True,
         consumer_short_numbers=True,
         consumer_short_names=True,
+        consumer_short_states=True,
     ).consume(parser.handle_token)
     parser.handle_eof()
     bank.reserve(64 + len(records) * 8)

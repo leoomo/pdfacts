@@ -63,6 +63,10 @@ may break callers.
 
 ### Changed
 
+- Private source callbacks can explicitly select bounded BT/ET/EMC state
+  transitions; all other operator fees remain unchanged. Limit and state
+  refusals restore their original allowance at the actual refusal point.
+
 - Private source callbacks can explicitly select bounded ordinary-name control
   fees; existing modes and non-name categories retain their prior contracts.
   Refusals restore the original allowance before raising.
