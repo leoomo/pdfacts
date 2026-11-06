@@ -63,6 +63,10 @@ may break callers.
 
 ### Changed
 
+- Plain literal source strings reuse their validated body bytes instead of
+  building decoding chunks. Escape/CR handling remains unchanged, and the
+  additional selection scans receive independent work prepayment.
+
 - Private source callbacks can explicitly select bounded BT/ET/EMC state
   transitions; all other operator fees remain unchanged. Limit and state
   refusals restore their original allowance at the actual refusal point.
