@@ -52,6 +52,8 @@ This document is an engineering rule, not legal advice.
 | 2026-11-03 | `backends/exact_decimal.py` and `backends/finite_content.py` | official CPython 3.13.5 `Objects/longobject.c`, `Objects/bytesobject.c`, `Objects/bytearrayobject.c` and `Lib/fractions.py` (PSF license), read for primitive allocation behaviour | single-limb integer arithmetic, cached small integers, byte-buffer construction, join workspace and coprime fraction construction; no code copied |
 | 2026-11-03 | `backends/finite_content.py` (short scalar reuse) | official CPython 3.13.5 `Objects/bytes_methods.c`, `Objects/clinic/bytesobject.c.h` and `Objects/longobject.c` (PSF license), read for primitive allocation behaviour | exact-byte prefix comparison and cached small-integer lookup behaviour; no code copied |
 
+| 2026-11-06 | `backends/exact_numbers.py` (open joined association) | official PDFium chromium/7999 revision `e9fc01804a0c5224ea780ad782abb8cfede628ef`, `core/fpdfapi/page/cpdf_streamcontentparser.cpp` (BSD-3-Clause) | ordered move/line segment and close-flag behavior; construction expectations independently tested; no code copied |
+
 ## Knowledge gathered before the first implementation
 
 Recorded so that later modules can cite it.

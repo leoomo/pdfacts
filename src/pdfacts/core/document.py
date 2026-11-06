@@ -370,7 +370,10 @@ class FeatureAccess:
             joined = reconcile_root_paths(ledger, native, bank, emissions, limits=limits)
             bank.reserve(256)
             result = (source_hash, page_ref, member_refs, joined)
-            provider.validate_analysis_issuance(analysis_identity, bank)
+            try:
+                provider.validate_analysis_issuance(analysis_identity, bank)
+            except EngineFailure as failure:
+                raise EngineError(engine="qpdf", detail=failure.detail) from failure
             return result
         except ExactSourceLimit as failure:
             raise LimitExceededError(
@@ -425,7 +428,10 @@ class FeatureAccess:
                 # Existing exact-result envelope covers result72 plus return-bundle80.
                 bank.reserve(256)
                 result = (source_hash, page_ref, member_refs, joined)
-                provider.validate_analysis_issuance(node[1][3], bank)
+                try:
+                    provider.validate_analysis_issuance(node[1][3], bank)
+                except EngineFailure as failure:
+                    raise EngineError(engine="qpdf", detail=failure.detail) from failure
                 _ready_staged(
                     document,
                     pending_token,

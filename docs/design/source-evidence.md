@@ -92,3 +92,54 @@ Existing completed tokens remain resolvable after document close while the
 original analysis owner remains alive. Staging does not change source-language
 support, allow partial-page validation, or introduce another allocation bank.
 See [the cumulative allocation inventory](staged-source-accounting.md).
+
+## Open joined-line association
+
+Private source association also accepts open, stroke-only sequences of one or
+more `m l+` subpaths, including consecutive line segments. The original ordered
+operations remain in `root-association-v2`; there is no new support or write
+permission. A caller needing positive rectangle or independent-line authority
+must classify those original operations, not infer their syntax from the
+public shape. An open sequence returning to its start can have rectangle shape.
+
+A separate helper preserves the prior independent-line/closed-retrace branch.
+Arbitrary joined closed paths, mixed transforms, adjacent exact or native
+collapsed vertices, and unsupported unrelated source activity remain refused.
+Every native segment, close flag, paint state and complete matrix witness still
+passes the existing common reconciliation checks. All original page activity
+remains in the ledger, with one caller bank and unchanged limits.
+
+The new dispatch scan prepays512bytes and32+16*N work. It iterates the existing
+operation-name tuple without per-iteration counters or projected tuples. The
+open helper prepays1024bytes/64work for fixed controls, then256bytes/32work for
+its six exact matrix-component type checks. Known-count output construction
+prepays192+16*N bytes: a temporary one-item list64, output list56+8*N and final
+tuple40+8*N total160+16*N. Each vertex prepays512bytes/64work for its72-byte
+four-tuple,36-byte noncached index increment and bounded validation/control
+intermediates. Existing `held` conversions remain independently charged.
+
+An exact-Fraction comparison prepays512bytes/32work before reading types and
+bit lengths, then16+4*ceil(B/30) work before integer numerator/denominator
+comparisons, where B is the maximum bit length of their four integers. It
+refuses values beyond the existing4096-bit domain, creates no Fraction or
+cross-product, and invokes no polymorphic equality. The512-byte prephase covers
+at most twelve36-byte scalar intermediates plus64bytes of call slack. Matrix
+identity is a fast path; a distinct matrix tuple prepays256bytes/32work for a
+six-entry loop and independently charges each scalar comparison. Function frame
+accounting follows the existing source-runtime convention.
+
+No old fee is reduced. Old nonrectangle `S` paths pay the additive selection
+scan; old `s` and rectangle branches do not. Bytecode tests check that the new
+helpers build only the one-item output-list seed and one four-tuple per vertex,
+with no generator or hidden per-vertex collection. Exact/one-below tests cover
+every helper reservation and comparison charge, wide integer comparison, and
+complete issuance. These inventories do not claim any caller's complete
+operation fits its cumulative bank. No stroke support or rendered blankness is
+computed by association.
+
+Post-reconciliation provider validation translates only backend EngineFailure
+into EngineError with engine `qpdf`, at both the eager-core and staged-core
+boundaries. This also covers a document closed by a reconciliation budget
+callback. Caller budget exceptions propagate by identity; no broad catch or
+new normal-path constructor was added. The same close-callback regression is
+exercised with old independent subpaths and new joined subpaths.

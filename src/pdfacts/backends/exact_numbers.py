@@ -496,6 +496,122 @@ def source_ledger(
     return tuple(records)
 
 
+def _has_open_joined_subpath(operations, bank):
+    # Selection only; no positive support follows from this grammar.
+    bank.reserve(512)
+    bank.charge(32 + 16 * len(operations))
+    previous = None
+    joined = False
+    for kind in operations:
+        if type(kind) is not str or kind not in ("m", "l"):
+            return False
+        if kind == "l" and previous == "l":
+            joined = True
+        previous = kind
+    return joined
+
+
+def _same_source_fraction(left, right, bank):
+    # Compare stored coprime integers, never Fraction's polymorphic equality.
+    bank.reserve(512)
+    bank.charge(32)
+    if type(left) is not Fraction or type(right) is not Fraction:
+        raise UnsupportedExactSource("native_path_domain")
+    bits = max(
+        left.numerator.bit_length(),
+        left.denominator.bit_length(),
+        right.numerator.bit_length(),
+        right.denominator.bit_length(),
+    )
+    if bits > 4096:
+        raise UnsupportedExactSource("native_path_domain")
+    bank.charge(16 + 4 * ((bits + 29) // 30))
+    return left.numerator == right.numerator and left.denominator == right.denominator
+
+
+def _open_joined_subpath_segments(source, bank, held, limits):
+    """Associate open m/l sequences, retaining their original joined syntax."""
+    bank.reserve(1024)
+    bank.charge(64)
+    if type(source) is not SourcePathNumbers:
+        raise UnsupportedExactSource("native_path_domain")
+    operations = source.operations
+    matrix = source.matrix
+    if (
+        type(operations) is not tuple
+        or not operations
+        or type(matrix) is not tuple
+        or len(matrix) != 6
+        or type(source.paint) is not str
+        or source.paint != "S"
+    ):
+        raise UnsupportedExactSource("native_path_domain")
+    count = len(operations)
+    check_source_limit("native_path_segments", count, limits.max_path_segments)
+    bank.reserve(256)
+    bank.charge(32)
+    component = 0
+    while component < 6:
+        if type(matrix[component]) is not Fraction:
+            raise UnsupportedExactSource("native_path_domain")
+        component += 1
+    bank.reserve(192 + 16 * count)
+    expected = [None] * count
+    index = 0
+    previous = None
+    previous_x = previous_y = None
+    needs_line = False
+    while index < count:
+        bank.reserve(512)
+        bank.charge(64)
+        operation = operations[index]
+        if type(operation) is not tuple or len(operation) != 3:
+            raise UnsupportedExactSource("native_path_domain")
+        kind, coordinates, current_matrix = operation
+        if (
+            type(kind) is not str
+            or kind not in ("m", "l")
+            or type(coordinates) is not tuple
+            or len(coordinates) != 2
+            or type(coordinates[0]) is not Fraction
+            or type(coordinates[1]) is not Fraction
+            or type(current_matrix) is not tuple
+            or len(current_matrix) != 6
+        ):
+            raise UnsupportedExactSource("native_path_domain")
+        if current_matrix is not matrix:
+            bank.reserve(256)
+            bank.charge(32)
+            component = 0
+            while component < 6:
+                if not _same_source_fraction(current_matrix[component], matrix[component], bank):
+                    raise UnsupportedExactSource("native_path_domain")
+                component += 1
+        x, y = held(coordinates[0]), held(coordinates[1])
+        if kind == "m":
+            if needs_line:
+                raise UnsupportedExactSource("native_path_domain")
+            needs_line = True
+            segment_type = 2
+        else:
+            if previous is None:
+                raise UnsupportedExactSource("native_path_domain")
+            if (
+                _same_source_fraction(coordinates[0], previous[0], bank)
+                and _same_source_fraction(coordinates[1], previous[1], bank)
+            ) or (x == previous_x and y == previous_y):
+                raise UnsupportedExactSource("native_path_domain")
+            needs_line = False
+            segment_type = 0
+        expected[index] = (segment_type, x, y, False)
+        previous = coordinates
+        previous_x, previous_y = x, y
+        index += 1
+    if needs_line:
+        raise UnsupportedExactSource("native_path_domain")
+    return tuple(expected)
+
+
 def _straight_subpath_segments(source, bank, held):
     # Association only. Closed retraces do not establish an ink-support bound.
     operations = source.operations
@@ -831,7 +947,10 @@ def reconcile_root_paths(ledger, drawing, bank, emissions=None, *, limits):
         elif not rectangle and (operations != ("m", "l") or source.paint == "s"):
             if source.paint not in ("S", "s"):
                 raise UnsupportedExactSource("native_path_domain")
-            explicit_segments = _straight_subpath_segments(source, bank, held)
+            if source.paint == "S" and _has_open_joined_subpath(operations, bank):
+                explicit_segments = _open_joined_subpath_segments(source, bank, held, limits)
+            else:
+                explicit_segments = _straight_subpath_segments(source, bank, held)
             mode = (0, True)
         else:
             mode = RECTANGLE_PAINT_MODES.get(source.paint)
