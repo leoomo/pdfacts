@@ -184,6 +184,8 @@ def test_private_entry_points_reject_unproved_runtime_before_meter_access(monkey
     monkeypatch.setattr(source_runtime, "_SUPPORTED_RUNTIME", False)
     package_entries = [
         lambda: feature.issue_root_path_evidence(None, 0, bank, limits=limits),
+        lambda: feature.capture_root_path_evidence(None, 0, bank, limits=limits),
+        lambda: feature.complete_root_path_evidence(None, bank, None, limits=limits),
         lambda: feature._issue_root_path_evidence(None, 0, bank, limits=limits),
         lambda: feature.resolve_path_evidence(None, None, b"", bank, None, 0, None),
         lambda: feature.classification_identity(b"", bank),
@@ -225,6 +227,10 @@ def test_private_entry_points_reject_unproved_runtime_before_meter_access(monkey
             access.capture_page_drawing(0, None, bank, limits)
         with pytest.raises(SourceEvidenceError, match="source_runtime_unsupported"):
             access.exact_root_numbers(0, bank, limits=limits)
+        with pytest.raises(SourceEvidenceError, match="source_runtime_unsupported"):
+            access.consume_staged_root_capture(0, bank, None, limits)
+        with pytest.raises(SourceEvidenceError, match="source_runtime_unsupported"):
+            access.complete_staged_root_numbers(opened, None, bank, limits=limits)
 
 
 def test_iterative_arrays_preserve_structure_and_exact_depth_boundary():

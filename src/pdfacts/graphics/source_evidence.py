@@ -4,8 +4,12 @@ from fractions import Fraction
 from math import copysign, isfinite
 
 from pdfacts.backends.analysis_identity import (
+    _abort_staged_owner,
+    _publish_staged_capture,
     _resolve_path_evidence,
+    _stage_generation,
     _store_path_evidence,
+    _store_staged_path_evidence,
     resolve_identity,
 )
 from pdfacts.backends.exact_numbers import SourceImageNumbers, SourcePathNumbers
@@ -15,6 +19,7 @@ from pdfacts.backends.exact_stream import (
     check_source_limit,
 )
 from pdfacts.backends.protocols import DrawnImage, DrawnPath, OperationBudget, SourceEvidenceLimits
+from pdfacts.core.document import _STAGED_DOCUMENT_TYPES, _STAGED_PROVIDER_TYPES
 from pdfacts.core.errors import LimitExceededError, SourceEvidenceError
 from pdfacts.core.geometry import Point, Quad
 from pdfacts.core.refs import GraphicRef
@@ -24,6 +29,9 @@ from pdfacts.graphics.images import Image
 from pdfacts.graphics.paths import Path
 from pdfacts.graphics.reader import _image as _public_image
 from pdfacts.graphics.reader import paths_with_root_inventory
+
+_STAGED_GRAPHIC_TYPES = (Path, Image, GraphicRef)
+
 
 _SOURCE_FIELDS = (
     "stream_identity",
@@ -224,7 +232,9 @@ def _verify_public_image(native, reconciled, image, bank):
             raise UnsupportedExactSource("path_evidence_image_disagreement")
 
 
-def _register_path_evidence(owner, handle, data, bank, entries, limits):
+def _register_path_evidence(
+    owner, handle, data, bank, entries, limits, *, document=None, pending=None
+):
     """Validate feature types and freeze references before atomic opaque storage."""
     require_source_runtime()
     if type(entries) is not tuple:
@@ -252,6 +262,17 @@ def _register_path_evidence(owner, handle, data, bank, entries, limits):
         reference = (ref.page_index, ref.drawing_index)
         checked[index] = ((path, ref), (reference, payload))
         index += 1
+    if pending is not None:
+        return _store_staged_path_evidence(
+            document,
+            pending,
+            bank,
+            tuple(checked),
+            limits,
+            _STAGED_DOCUMENT_TYPES,
+            _STAGED_PROVIDER_TYPES,
+            _STAGED_GRAPHIC_TYPES,
+        )
     return _store_path_evidence(owner, handle, data, bank, tuple(checked), limits)
 
 
@@ -320,131 +341,225 @@ def issue_root_path_evidence(document, page_index, bank: OperationBudget, *, lim
         raise SourceEvidenceError(reason=str(failure)) from failure
 
 
-def _issue_root_path_evidence(document, page_index, bank: OperationBudget, *, limits):
-    """Capture, reconcile and atomically register a complete page's root paths.
+def capture_root_path_evidence(document, page_index, bank: OperationBudget, *, limits):
+    """Retain original ordinary facts; pending tokens carry no source certificate."""
+    require_source_runtime()
+    if type(limits) is not SourceEvidenceLimits:
+        raise TypeError("limits must be SourceEvidenceLimits")
+    bank.reserve(256)
+    bank.charge(2)
+    try:
+        with document._access() as access:
+            return _capture_root_path_evidence(document, page_index, bank, access, limits)
+    except ExactSourceLimit as failure:
+        raise LimitExceededError(
+            limit=failure.limit, allowed=failure.allowed, found=failure.found
+        ) from failure
+    except UnsupportedExactSource as failure:
+        raise SourceEvidenceError(reason=str(failure)) from failure
 
-    Returns ordinary paths/images plus an opaque analysis-scoped batch token.
-    Annotation facts remain in the ordinary output and never enter the batch.
-    Unsupported pages refuse without registering partial root evidence.
-    """
+
+def complete_root_path_evidence(document, bank: OperationBudget, pending_token, *, limits):
+    """Complete the entire original page and consume its pending token once."""
+    require_source_runtime()
+    if type(limits) is not SourceEvidenceLimits:
+        raise TypeError("limits must be SourceEvidenceLimits")
+    # Explicit staging adds an access context; eager issuance shares its outer one.
+    bank.reserve(4096)
+    bank.charge(32)
+    try:
+        with document._access() as access:
+            return _complete_root_path_evidence(document, bank, pending_token, access, limits)
+    except ExactSourceLimit as failure:
+        raise LimitExceededError(
+            limit=failure.limit, allowed=failure.allowed, found=failure.found
+        ) from failure
+    except UnsupportedExactSource as failure:
+        raise SourceEvidenceError(reason=str(failure)) from failure
+
+
+def _capture_root_path_evidence(document, page_index, bank, access, limits):
+    if bank is None or type(page_index) is not int:
+        raise UnsupportedExactSource("path_evidence_issuer_domain")
+    bank.reserve(1280)
+    bank.charge(192)
+    provider = access._qpdf_ready()
+    binding = getattr(provider, "_analysis_identity", None)
+    if binding is None:
+        raise UnsupportedExactSource("analysis_identity_binding")
+    generation = _stage_generation(document, bank, _STAGED_DOCUMENT_TYPES, _STAGED_PROVIDER_TYPES)
+    bank.reserve(32)
+    bank.charge()
+    check_source_limit("source_bytes", len(generation[2]), limits.max_source_bytes)
+    captured = paths_with_root_inventory(
+        document, page_index, bank, limits=limits, _with_native_capture=True
+    )
+    if isinstance(captured, Unknown):
+        raise UnsupportedExactSource("path_evidence_capture_unknown")
+    paths, images, roots, capture_token = captured
+    native = access.consume_staged_root_capture(page_index, bank, capture_token, limits)
+    page = document.pages[page_index]
+    page_ref = page.ref
+    bank.reserve(512)
+    count = len(roots)
+    bank.reserve(192 + 16 * count)
+    if count > 256:
+        bank.reserve(36 * (count - 256))
+    bank.charge(8 * count)
+    refs = [None] * count
+    index = 0
+    while index < count:
+        refs[index] = roots[index][1].ref
+        index += 1
+    refs = tuple(refs)
+    bound = (
+        document,
+        access._pdfium_ready(),
+        provider,
+        binding,
+        generation,
+        page_index,
+        (page, page_ref, page_ref.object_number, page_ref.generation),
+        limits,
+        refs,
+    )
+    retained = (paths, images, roots, native)
+    token = _publish_staged_capture(
+        document,
+        generation,
+        bound,
+        retained,
+        bank,
+        limits,
+        _STAGED_DOCUMENT_TYPES,
+        _STAGED_PROVIDER_TYPES,
+    )
+    return paths, images, token
+
+
+def _issue_root_path_evidence(document, page_index, bank: OperationBudget, *, limits):
+    """Preserve eager issuance with a shared access scope and new ordinary objects."""
     require_source_runtime()
     if bank is None or type(page_index) is not int:
         raise UnsupportedExactSource("path_evidence_issuer_domain")
     with document._access() as access:
-        provider = access._qpdf_ready()
-        binding = getattr(provider, "_analysis_identity", None)
-        if binding is None:
-            raise UnsupportedExactSource("analysis_identity_binding")
-        owner, handle = binding
-        data = provider._data
-        bank.reserve(32)
+        paths, images, pending = _capture_root_path_evidence(
+            document, page_index, bank, access, limits
+        )
+        token = _complete_root_path_evidence(document, bank, pending, access, limits)
+        return paths, images, token
+
+
+def _complete_root_path_evidence(document, bank, pending, access, limits):
+    binding = getattr(access._qpdf_ready(), "_analysis_identity", None)
+    owner = None if binding is None else binding[0]
+    completed = access.complete_staged_root_numbers(document, pending, bank, limits=limits)
+    # Core cleans up its own failures. No callback lies between its successful
+    # return and arming graphics cleanup; it prepaid the matching abort exit.
+    paths, images, roots, result, page_index = completed
+    try:
+        return _publish_root_path_evidence(
+            document, bank, pending, limits, paths, images, roots, result, page_index
+        )
+    finally:
+        _abort_staged_owner(owner, pending)
+
+
+def _publish_root_path_evidence(
+    document, bank, pending, limits, paths, images, roots, result, page_index
+):
+    source_hash, page_ref, streams, joined = result
+    provider = document._qpdf
+    owner, handle = provider._analysis_identity
+    digest = resolve_identity(owner, handle, provider._data, bank)
+    page = document.pages[page_index].ref
+    bank.reserve(512)
+    bank.charge(8)
+    if source_hash != digest or page_ref != (page.object_number, page.generation):
+        raise UnsupportedExactSource("path_evidence_page_binding")
+    if not 0 < len(roots) == len(joined):
+        raise UnsupportedExactSource("path_evidence_inventory_count")
+    check_source_limit("native_root_objects", len(roots), limits.max_root_objects)
+    bank.reserve(1024 + 128 * len(roots))
+    bank.charge(len(roots))
+    path_count = 0
+    for native, _graphic in roots:
         bank.charge()
-        check_source_limit("source_bytes", len(data), limits.max_source_bytes)
-        digest = resolve_identity(owner, handle, data, bank)
-        captured = paths_with_root_inventory(
-            document, page_index, bank, limits=limits, _with_native_capture=True
-        )
-        if isinstance(captured, Unknown):
-            raise UnsupportedExactSource("path_evidence_capture_unknown")
-        paths, images, roots, capture_token = captured
-        source_hash, page_ref, streams, joined = access.exact_root_numbers(
-            page_index,
-            bank,
-            _capture_token=capture_token,
-            limits=limits,
-        )
-        page = document.pages[page_index].ref
-        bank.reserve(512)
-        bank.charge(8)
-        if source_hash != digest or page_ref != (page.object_number, page.generation):
-            raise UnsupportedExactSource("path_evidence_page_binding")
-        if not 0 < len(roots) == len(joined):
-            raise UnsupportedExactSource("path_evidence_inventory_count")
-        check_source_limit("native_root_objects", len(roots), limits.max_root_objects)
-        bank.reserve(1024 + 128 * len(roots))
-        bank.charge(len(roots))
-        path_count = 0
-        for native, _graphic in roots:
-            bank.charge()
-            if type(native) is DrawnPath:
-                path_count += 1
-        entries = [None] * path_count
-        path_ordinal = 0
-        image_ordinal = 0
-        # Fixed four-entry identity cache, owned only by this issuance.
-        bank.reserve(1024)
-        source_cache = dict(matrix=None, width=None, miter_limit=None, stream_identity=None)
-        for ordinal, (root, exact) in enumerate(zip(roots, joined, strict=True)):
-            native, path = root
-            exact_ordinal, source, reconciled_native = exact
-            if type(native) is DrawnImage:
-                bank.reserve(8192)
-                _verify_public_image(native, reconciled_native, path, bank)
-                if (
-                    type(source) is not SourceImageNumbers
-                    or exact_ordinal != ordinal
-                    or path.ref.page_index != page_index
-                    or path.ref.drawing_index != ordinal
-                    or path.ref.annotation is not None
-                    or path.annotation_flags is not None
-                    or image_ordinal >= len(images)
-                    or images[image_ordinal] is not path
-                ):
-                    raise UnsupportedExactSource("path_evidence_image_binding")
-                image_ordinal += 1
-                continue
+        if type(native) is DrawnPath:
+            path_count += 1
+    entries = [None] * path_count
+    path_ordinal = 0
+    image_ordinal = 0
+    # Fixed four-entry identity cache, owned only by this issuance.
+    bank.reserve(1024)
+    source_cache = dict(matrix=None, width=None, miter_limit=None, stream_identity=None)
+    for ordinal, (root, exact) in enumerate(zip(roots, joined, strict=True)):
+        native, path = root
+        exact_ordinal, source, reconciled_native = exact
+        if type(native) is DrawnImage:
+            bank.reserve(8192)
+            _verify_public_image(native, reconciled_native, path, bank)
             if (
-                type(native) is not DrawnPath
-                or type(reconciled_native) is not DrawnPath
-                or type(path) is not Path
-                or type(source) is not SourcePathNumbers
-            ):
-                raise UnsupportedExactSource("path_evidence_record_domain")
-            if type(native.segments) is not tuple:
-                raise UnsupportedExactSource("path_evidence_native_unknown")
-            bank.charge(64 + 8 * len(native.segments))
-            if (
-                exact_ordinal != ordinal
-                or source.ordinal != path_ordinal
+                type(source) is not SourceImageNumbers
+                or exact_ordinal != ordinal
                 or path.ref.page_index != page_index
                 or path.ref.drawing_index != ordinal
                 or path.ref.annotation is not None
                 or path.annotation_flags is not None
-                or native.source_level != 0
-                or path.source_level != 0
+                or image_ordinal >= len(images)
+                or images[image_ordinal] is not path
             ):
+                raise UnsupportedExactSource("path_evidence_image_binding")
+            image_ordinal += 1
+            continue
+        if (
+            type(native) is not DrawnPath
+            or type(reconciled_native) is not DrawnPath
+            or type(path) is not Path
+            or type(source) is not SourcePathNumbers
+        ):
+            raise UnsupportedExactSource("path_evidence_record_domain")
+        if type(native.segments) is not tuple:
+            raise UnsupportedExactSource("path_evidence_native_unknown")
+        bank.charge(64 + 8 * len(native.segments))
+        if (
+            exact_ordinal != ordinal
+            or source.ordinal != path_ordinal
+            or path.ref.page_index != page_index
+            or path.ref.drawing_index != ordinal
+            or path.ref.annotation is not None
+            or path.annotation_flags is not None
+            or native.source_level != 0
+            or path.source_level != 0
+        ):
+            raise UnsupportedExactSource("path_evidence_inventory_binding")
+        bank.reserve(256)
+        for name in _NATIVE_FIELDS:
+            bank.charge()
+            if not _same_native(getattr(native, name), getattr(reconciled_native, name), bank):
                 raise UnsupportedExactSource("path_evidence_inventory_binding")
-            bank.reserve(256)
-            for name in _NATIVE_FIELDS:
-                bank.charge()
-                if not _same_native(getattr(native, name), getattr(reconciled_native, name), bank):
-                    raise UnsupportedExactSource("path_evidence_inventory_binding")
-            for name in _REQUIRED_PATH_FIELDS:
-                bank.charge()
-                if isinstance(getattr(path, name), Unknown):
-                    raise UnsupportedExactSource("path_evidence_path_unknown")
-            # The public Path must be one of this read's exact returned objects.
-            if path_ordinal >= len(paths) or paths[path_ordinal] is not path:
-                raise UnsupportedExactSource("path_evidence_path_binding")
-            bank.reserve(512)
-            payload = (
-                "root-association-v2",
-                digest,
-                page_index,
-                page_ref,
-                streams,
-                _record_payload(source, _SOURCE_FIELDS, bank, limits, source_cache),
-                _record_payload(native, _NATIVE_FIELDS, bank, limits),
-            )
-            entries[path_ordinal] = (path, payload)
-            path_ordinal += 1
-        if path_ordinal != path_count:
-            raise UnsupportedExactSource("path_evidence_inventory_count")
-        provider.validate_analysis_issuance(binding, bank)
-        # Image-only pages carry no path authority; the registry stays nonempty-only.
-        token = (
-            _register_path_evidence(owner, handle, data, bank, tuple(entries), limits)
-            if path_count
-            else None
+        for name in _REQUIRED_PATH_FIELDS:
+            bank.charge()
+            if isinstance(getattr(path, name), Unknown):
+                raise UnsupportedExactSource("path_evidence_path_unknown")
+        # The public Path must be one of this read's exact returned objects.
+        if path_ordinal >= len(paths) or paths[path_ordinal] is not path:
+            raise UnsupportedExactSource("path_evidence_path_binding")
+        bank.reserve(512)
+        payload = (
+            "root-association-v2",
+            digest,
+            page_index,
+            page_ref,
+            streams,
+            _record_payload(source, _SOURCE_FIELDS, bank, limits, source_cache),
+            _record_payload(native, _NATIVE_FIELDS, bank, limits),
         )
-        return paths, images, token
+        entries[path_ordinal] = (path, payload)
+        path_ordinal += 1
+    if path_ordinal != path_count:
+        raise UnsupportedExactSource("path_evidence_inventory_count")
+    # Image-only completion still performs the same atomic lifecycle/ref guard.
+    return _register_path_evidence(
+        None, None, None, bank, tuple(entries), limits, document=document, pending=pending
+    )

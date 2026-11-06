@@ -8,6 +8,10 @@ may break callers.
 
 ### Added
 
+- Private staged root-source capture and completion preserve original graphics
+  objects across page reads under one analysis budget. Pending tokens are
+  single-use, and final publication rejects closed or revoked analyses.
+
 - Private source certification is restricted to its proved CPython3.13.5
   allocation layout. Other runtimes receive a typed source failure while
   ordinary library features retain their existing runtime support.

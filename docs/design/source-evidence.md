@@ -66,3 +66,29 @@ backend signals.
 The repository's pinned3.13.5 platform images exercise positive source cases.
 Supporting another runtime requires a new allocation review and positive tests.
 This private restriction changes neither engine versions nor existing limits.
+
+## Private staged completion
+
+`capture_root_path_evidence(document, page_index, bank, limits=...)` returns
+ordinary paths/images plus an opaque pending token. This is not a source
+certificate. Keep the original document open and the analysis owner alive.
+`complete_root_path_evidence(document, bank, pending_token, limits=...)`
+reconciles the entire original page and returns the ordinary batch token, or
+None after full image-only completion. The same bank and exact limits object
+are required throughout. A claimed token is spent even when completion fails.
+Invalid foreign-token, bank or limits attempts do not consume another pending
+operation. Pages can be completed in any sequential order.
+
+Only one completion is active per analysis generation. Recursive capture or
+completion during its budget callbacks refuses. Close, recovery and owner exit
+invalidate pending or active work; publication rechecks original providers,
+generation, references and registry state after all callbacks. Pure Python
+source parsing can finish after revocation, but cannot publish a certificate.
+The existing before-native-read close guards remain in force.
+
+The eager issuer shares the same private legs within one outer access region;
+it still returns fresh ordinary objects and a completed batch in one call.
+Existing completed tokens remain resolvable after document close while the
+original analysis owner remains alive. Staging does not change source-language
+support, allow partial-page validation, or introduce another allocation bank.
+See [the cumulative allocation inventory](staged-source-accounting.md).
