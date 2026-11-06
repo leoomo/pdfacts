@@ -188,7 +188,10 @@ class ContentParser:
         self.index = self.raw_length
 
     def scan_word(self, start, is_name):
-        self.bank.reserve(256)
+        compact = self.raw_length < 1073741824
+        # Terminal index and read()'s length each need at most 32 bytes.
+        # Refusals restore the original allowance before constructing errors.
+        self.bank.reserve(64 if compact else 256)
         self.load_window(start)
         offset = start - self.window_start
         offset += 1
@@ -202,15 +205,20 @@ class ContentParser:
                 byte = window[offset]
                 if escape_remaining:
                     if byte not in HEX:
+                        if compact:
+                            self.bank.reserve(192)
                         self.index = escape_start + escape_offset
                         raise UnsupportedExactSource("name_escape")
                     escape_remaining -= 1
                 else:
                     if byte in TERMINATORS:
                         self.index = self.window_start + offset
-                        return
+                        return compact
                     if not 33 <= byte <= 126:
-                        self.index = self.window_start + offset
+                        error_base = self.window_start
+                        if compact:
+                            self.bank.reserve(192)
+                        self.index = error_base + offset
                         raise UnsupportedExactSource("bare_token_byte")
                     if is_name and byte == 35:
                         escape_start = self.window_start
@@ -219,10 +227,12 @@ class ContentParser:
                 offset += 1
             if self.window_end == self.raw_length:
                 if escape_remaining:
+                    if compact:
+                        self.bank.reserve(192)
                     self.index = escape_start + escape_offset
                     raise UnsupportedExactSource("name_escape")
                 self.index = self.raw_length
-                return
+                return compact
             self.load_window(self.window_end)
             offset = 0
 
@@ -267,10 +277,15 @@ class ContentParser:
             self.index = end
             return self.token("string", value, start, consumer)
         is_name = byte == 47
-        self.scan_word(start, is_name)
+        compact_word = self.scan_word(start, is_name)
         length = self.index - start
-        check_source_limit("token_bytes", length, self.limits.max_token_bytes)
+        allowed = self.limits.max_token_bytes
+        if compact_word and length > allowed:
+            self.bank.reserve(192)
+        check_source_limit("token_bytes", length, allowed)
         if not is_name and not 33 <= raw[start] <= 126:
+            if compact_word:
+                self.bank.reserve(192)
             raise UnsupportedExactSource("bare_token_byte")
         if not is_name:
             self.bank.charge(2)
