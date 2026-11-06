@@ -196,8 +196,9 @@ def test_large_marked_depth_and_instruction_counter(monkeypatch):
         )
         == ()
     )
-    assert transitions[0] == (258, 257, 258, 259, 64)
-    assert transitions[1] == (257, 256, 259, 260, 64)
+    # Operand list identity is retained; no replacement list is allocated here.
+    assert transitions[0] == (258, 257, 258, 259, 0)
+    assert transitions[1] == (257, 256, 259, 260, 0)
     assert len(transitions) == 258
 
 
