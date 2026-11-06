@@ -75,6 +75,8 @@ def test_old_path_batch_cannot_be_resolved_as_root_support():
         )
         with pytest.raises(SourceEvidenceError):
             feature.resolve_root_support_evidence(owner, handle, data, bank, token, 0, paths[0])
+        with pytest.raises(SourceEvidenceError):
+            feature.root_support_inventory_size(owner, handle, data, bank, token)
 
 
 @pytest.mark.parametrize("target", ["image", "ref"])
@@ -513,3 +515,78 @@ def test_empty_mixed_root_completion_still_checks_owner_at_publication():
         with pytest.raises(pdfacts.PdfactsError):
             feature.complete_root_support_evidence(doc, bank, pending, limits=limits)
         assert bank.hits == 1
+
+
+@pytest.mark.parametrize("with_path,expected", [(False, 1), (True, 2)])
+def test_root_support_inventory_size_is_source_issued(with_path, expected):
+    data = mixed_file(with_path)
+    bank = ObservedBudget()
+    limits = source_limits()
+    with (
+        feature.classification_identity(data, bank) as (owner, handle, _),
+        pdfacts.open(data) as doc,
+    ):
+        bind(doc, owner, handle, bank)
+        _, _, pending = feature.capture_root_path_evidence(doc, 0, bank, limits=limits)
+        with pytest.raises(SourceEvidenceError):
+            feature.root_support_inventory_size(owner, handle, data, bank, pending)
+        token = feature.complete_root_support_evidence(doc, bank, pending, limits=limits)
+        assert feature.root_support_inventory_size(owner, handle, data, bank, token) == (
+            0,
+            expected,
+        )
+        for bad in (None, object(), True):
+            with pytest.raises(SourceEvidenceError):
+                feature.root_support_inventory_size(owner, handle, data, bank, bad)
+        with pytest.raises(SourceEvidenceError):
+            feature.root_support_inventory_size(owner, handle, data, ObservedBudget(), token)
+    with pytest.raises(SourceEvidenceError):
+        feature.root_support_inventory_size(owner, handle, data, bank, token)
+
+
+@pytest.mark.parametrize("dimension,required", [("work", 32), ("bytes", 768)])
+@pytest.mark.parametrize("shortfall", [0, 1])
+def test_root_inventory_size_exact_budget_boundary(dimension, required, shortfall):
+    from test_source_evidence import Exhausted
+
+    data = mixed_file()
+    bank = ObservedBudget()
+    limits = source_limits()
+    with (
+        feature.classification_identity(data, bank) as (owner, handle, _),
+        pdfacts.open(data) as doc,
+    ):
+        bind(doc, owner, handle, bank)
+        _, _, pending = feature.capture_root_path_evidence(doc, 0, bank, limits=limits)
+        token = feature.complete_root_support_evidence(doc, bank, pending, limits=limits)
+        limit_name = "work_limit" if dimension == "work" else "byte_limit"
+        before = getattr(bank, dimension)
+        setattr(bank, limit_name, before + required - shortfall)
+        if shortfall:
+            with pytest.raises(Exhausted, match=dimension):
+                feature.root_support_inventory_size(owner, handle, data, bank, token)
+        else:
+            assert feature.root_support_inventory_size(owner, handle, data, bank, token) == (0, 2)
+            assert getattr(bank, dimension) == before + required
+
+
+def test_root_inventory_size_rechecks_owner_after_budget_callback():
+    data = mixed_file()
+    bank = ObservedBudget()
+    limits = source_limits()
+    identity_scope = feature.classification_identity(data, bank)
+    with identity_scope as (owner, handle, _), pdfacts.open(data) as doc:
+        bind(doc, owner, handle, bank)
+        _, _, pending = feature.capture_root_path_evidence(doc, 0, bank, limits=limits)
+        token = feature.complete_root_support_evidence(doc, bank, pending, limits=limits)
+        hits = []
+
+        def revoke(operation, cost):
+            bank.observer = None
+            hits.append((operation, cost))
+            identity_scope.__exit__(None, None, None)
+
+        bank.observer = revoke
+        with pytest.raises(SourceEvidenceError):
+            feature.root_support_inventory_size(owner, handle, data, bank, token)
+        assert hits == [("reserve", 256)]

@@ -8,6 +8,10 @@ may break callers.
 
 ### Added
 
+- Private mixed-root inventory size lookup returns the authenticated page index
+  and root count under the original analysis identity and budget. Pending,
+  absent and path-only tokens are refused; counts grant no geometry authority.
+
 - Private mixed-root completion accepts source-validated empty graphical
   inventories, returning `None` after consuming the pending claim; text-only
   pages do not acquire blankness or writing authority.

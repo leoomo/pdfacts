@@ -228,6 +228,32 @@ def _resolve_path_evidence(
         return entry[1]
 
 
+def _root_support_inventory_size(owner, handle, data, bank, token):
+    """Read the authenticated page and root count, never caller collections."""
+    require_source_runtime()
+    bank.reserve(512)  # Reader frame, count integer, result pair and lock exit.
+    bank.charge(24)
+    if type(token) is not object:
+        raise UnsupportedExactSource("path_evidence_binding")
+    with _identity_read_scope:
+        _record(owner, handle, data, bank)
+        batches = _path_batches.get(owner)
+        batch = None if batches is None else batches.get(token)
+        if (
+            type(batch) is not tuple
+            or len(batch) != 3
+            or batch[0] is not handle
+            or type(batch[2]) is not str
+            or batch[2] != "root-support-v1"
+            or type(batch[1]) is not tuple
+            or not batch[1]
+        ):
+            raise UnsupportedExactSource("path_evidence_binding")
+        # Stored references and entries are frozen by the complete-page issuer.
+        # No callback follows the identity check before the pair is published.
+        return batch[1][0][1][0][0], len(batch[1])
+
+
 def _staged_document(document, document_types, provider_types):
     """Exact module-owned classes precede every exposed object's attribute read."""
     if type(document) is not document_types[0]:

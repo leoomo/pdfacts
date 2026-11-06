@@ -7,6 +7,7 @@ from pdfacts.backends.analysis_identity import (
     _abort_staged_owner,
     _publish_staged_capture,
     _resolve_path_evidence,
+    _root_support_inventory_size,
     _stage_generation,
     _store_path_evidence,
     _store_staged_path_evidence,
@@ -338,6 +339,22 @@ def resolve_path_evidence(owner, handle, data, bank, token, ordinal, path):
 def resolve_root_support_evidence(owner, handle, data, bank, token, root_ordinal, graphic):
     """Resolve original mixed-root support association; no positive write authority."""
     return _resolve_graphic_evidence(owner, handle, data, bank, token, root_ordinal, graphic, True)
+
+
+def root_support_inventory_size(owner, handle, data, bank, token):
+    """Authenticated (page_index, root_count) of a nonempty mixed-root batch.
+
+    This is no geometry or clearance certificate. Callers must still resolve
+    every distinct original graphic and cover every ordinal in this inventory.
+    None, pending claims and path-only tokens are refused, not counted as zero.
+    """
+    require_source_runtime()
+    bank.reserve(256)
+    bank.charge(8)
+    try:
+        return _root_support_inventory_size(owner, handle, data, bank, token)
+    except UnsupportedExactSource as failure:
+        raise SourceEvidenceError(reason=str(failure)) from failure
 
 
 def _resolve_graphic_evidence(owner, handle, data, bank, token, ordinal, path, support):
