@@ -332,7 +332,9 @@ class ContentParser:
             cached = self._cached_scalar(start, self.index, length, byte)
             if cached is not None:
                 return self.token(cached[1], cached[2], start, consumer)
-        self.bank.reserve(256)  # Prepay the scalar-copy fee arithmetic.
+        short_copy = length <= 16
+        if not short_copy:
+            self.bank.reserve(256)  # Short copy-fee arithmetic uses cached integers.
         self.bank.reserve(192 + 4 * length)
         word = raw[start : self.index]
         if is_name:
@@ -350,6 +352,8 @@ class ContentParser:
                 self.names[word] = value
             return self.token("name", value, start, consumer)
         if word in (b"true", b"false", b"null"):
+            if short_copy:
+                self.bank.reserve(256)
             raise UnsupportedExactSource("non_numeric_operand")
         self.bank.reserve(256)  # The bytes iterator is separate from word copies.
         if numeric_word(word):
