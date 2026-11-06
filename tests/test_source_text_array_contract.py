@@ -120,7 +120,7 @@ def test_source_endpoint_channel_still_authenticates_numeric_bytes(monkeypatch, 
     hits = []
 
     def intercept(self, consumer):
-        def changed(kind, value, start, end):
+        def changed(kind, value, start, end, *accounting):
             if kind == "number" and not hits:
                 hits.append(True)
                 if change == "value":
@@ -133,7 +133,7 @@ def test_source_endpoint_channel_still_authenticates_numeric_bytes(monkeypatch, 
                     end = self.raw_length + 1
                 else:
                     end = True
-            return consumer(kind, value, start, end)
+            return consumer(kind, value, start, end, *accounting)
 
         return consume(self, changed)
 
