@@ -706,6 +706,8 @@ def test_the_drawing_types_have_their_fields_and_are_frozen():
         "dash_phase",
         "cap",
         "join",
+        "source_level",
+        "source_clip_count",
     ]
     assert [f.name for f in dataclasses.fields(DrawnImage)] == [
         "matrix",
@@ -714,7 +716,12 @@ def test_the_drawing_types_have_their_fields_and_are_frozen():
         "colour_space",
         "bits_per_pixel",
     ]
-    assert [f.name for f in dataclasses.fields(Drawing)] == ["objects", "stopped", "too_deep"]
+    assert [f.name for f in dataclasses.fields(Drawing)] == [
+        "objects",
+        "stopped",
+        "too_deep",
+        "root_object_types",
+    ]
     assert [f.name for f in dataclasses.fields(AppearanceDrawing)] == [
         "index",
         "appearance_text",

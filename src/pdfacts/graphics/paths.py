@@ -237,6 +237,10 @@ class Path:
     line_cap: LineCap | None | Unknown
     line_join: LineJoin | None | Unknown
     annotation_flags: int | None | Unknown
+    source_width: float | None = None
+    source_matrix: tuple | None = None
+    source_level: int = -1
+    source_clip_count: int | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.ref, GraphicRef):

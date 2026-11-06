@@ -10,6 +10,7 @@ import json
 import math
 import re
 import warnings
+import zlib
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager, suppress
@@ -20,6 +21,11 @@ from types import MappingProxyType
 import pikepdf
 
 from pdfacts.backends.content_text import TextMachine, TextUnread, TooMany
+from pdfacts.backends.exact_stream import (
+    ExactSourceLimit,
+    UnsupportedExactSource,
+    check_source_limit,
+)
 from pdfacts.backends.fonts import Font, FontEntries, FontInvalid, FontNotRead, font_of
 from pdfacts.backends.protocols import (
     Action,
@@ -59,6 +65,7 @@ from pdfacts.backends.protocols import (
     Written,
     WrittenBytes,
 )
+from pdfacts.backends.source_runtime import require_source_runtime
 
 # How far from the end QPDF looks for startxref (measured: it finds one that
 # starts 1054 bytes before the end, not one that starts 1055 bytes before).
@@ -815,6 +822,196 @@ class QpdfDocument:
             # sets is as unreadable (issue #62's rule).
             found = _uses_pattern(lambda: counter._page_content(page), top, self._compressed())
             return None if self._misread() else found
+
+    def exact_source_ledger(self, index: int, bank, limits):
+        """Return pure source records from this document and resource lifetime."""
+        require_source_runtime()
+        try:
+            from pdfacts.backends.exact_numbers import source_ledger
+
+            binding = getattr(self, "_analysis_identity", None)
+            source_hash, page_ref, parts = self.exact_root_stream(index, bank, limits)
+            raw_resources = self.exact_root_resources(index, bank, limits)
+            cache = self.exact_numeric_cache(bank)
+            bank.reserve(256)
+            bank.charge(4)
+            resources = _ExactResources(self, raw_resources, bank, limits)
+            ledger, emissions = source_ledger(
+                parts,
+                bank,
+                resources=resources,
+                with_emissions=True,
+                _numeric_cache=cache,
+                limits=limits,
+            )
+            self.validate_analysis_issuance(binding, bank)
+            bank.reserve(256 + 16 * len(parts))
+            bank.charge(len(parts))
+            return source_hash, page_ref, tuple(part[0] for part in parts), ledger, emissions
+        except pikepdf.PdfError as failure:
+            raise EngineFailure(FailureKind.OTHER, str(failure)) from failure
+
+    def exact_root_resources(self, index: int, bank, limits):
+        """Resolve effective resources within this original document lifetime."""
+        require_source_runtime()
+        from pdfacts.backends.exact_stream import UnsupportedExactSource
+
+        self._check_open()
+        # Both nested conversion context managers and their generators, call
+        # containers, and the first native page proxy precede traversal.
+        bank.reserve(2048)
+        self._check_open()
+        with pikepdf.explicit_conversion():
+            page = self._unwalked.get_object(self._annotated_page(index))
+            # Fixed storage and all range indices are paid before allocation.
+            bank.reserve(128)
+            capacity = limits.max_resource_depth
+            bank.reserve(512 + 64 * capacity)
+            seen = [None] * capacity
+            for index in range(capacity):
+                # One native objgen tuple, its integer components, proxy reads,
+                # and the bounded scan iterator. Do not read objgen twice.
+                bank.reserve(512)
+                bank.charge(8)
+                self._check_open()
+                if not isinstance(page, pikepdf.Dictionary):
+                    raise UnsupportedExactSource("resource_ancestry")
+                identity = page.objgen
+                for previous in seen:
+                    bank.charge()
+                    if previous is None:
+                        break
+                    if previous == identity:
+                        raise UnsupportedExactSource("resource_ancestry")
+                seen[index] = identity
+                self._check_open()
+                if "/Resources" in page:
+                    resources = page["/Resources"]
+                    if not isinstance(resources, pikepdf.Dictionary):
+                        raise UnsupportedExactSource("resource_dictionary")
+                    return resources
+                page = page.get("/Parent")
+                if page is None:
+                    return None
+            raise ExactSourceLimit(
+                "resource_depth", limits.max_resource_depth, limits.max_resource_depth + 1
+            )
+
+    def bind_analysis_identity(self, owner, handle, bank):
+        require_source_runtime()
+        from pdfacts.backends.analysis_identity import resolve_identity
+
+        self._check_open()
+        bank.reserve(256)
+        resolve_identity(owner, handle, self._data, bank)
+        self._analysis_identity = (owner, handle)
+
+    def validate_analysis_issuance(self, expected, bank):
+        require_source_runtime()
+        from pdfacts.backends.analysis_identity import resolve_identity
+        from pdfacts.backends.exact_stream import UnsupportedExactSource
+
+        self._check_open()
+        data = self._data
+        if expected is not None:
+            resolve_identity(*expected, data, bank)
+        self._check_open()
+        if self._data is not data or getattr(self, "_analysis_identity", None) is not expected:
+            raise UnsupportedExactSource("analysis_identity_binding")
+
+    def exact_root_stream(self, index: int, bank, limits):
+        """Finite same-source Contents input; no unbounded decoded read.
+
+        The entire original /Contents array is enumerated in source order.
+        Every member must be an indirect stream; duplicate stream identity is
+        ambiguous and rejected. Each member is decoded under the same bank and
+        the cumulative decoded size stays under the shared exact-source cap.
+        Returns (file digest, page objgen, ((member objgen, decoded bytes), ...)).
+        """
+        require_source_runtime()
+        from hashlib import sha256
+
+        from pdfacts.backends.exact_stream import (
+            UnsupportedExactSource,
+        )
+
+        with pikepdf.explicit_conversion():
+            self._check_open()
+            objgen = self._annotated_page(index)
+            page = self._unwalked.get_object(objgen)
+            contents = page.get("/Contents")
+            if isinstance(contents, pikepdf.Stream):
+                bank.reserve(4096 + 1024)
+                bank.charge(4)
+                self._check_open()
+                members = (contents,)
+            elif isinstance(contents, pikepdf.Array):
+                count = len(contents)
+                if count <= 0:
+                    raise UnsupportedExactSource("contents_array_size")
+                check_source_limit("source_streams", count, limits.max_streams)
+                bank.reserve(4096 + 1024 * count)
+                bank.charge(4 * count)
+                self._check_open()
+                members = tuple(contents)
+            else:
+                raise UnsupportedExactSource("contents_domain")
+            seen = set()
+            for member in members:
+                if not isinstance(member, pikepdf.Stream) or not member.is_indirect:
+                    raise UnsupportedExactSource("contents_array_member_domain")
+                if member.objgen in seen:
+                    raise UnsupportedExactSource("duplicate_stream_identity")
+                seen.add(member.objgen)
+            if self._misread():
+                raise UnsupportedExactSource("source_repaired")
+            bank.charge()
+            binding = getattr(self, "_exact_hash_binding", None)
+            if binding is not None and binding[1] is not self._data:
+                raise UnsupportedExactSource("source_bytes_changed")
+            analysis_identity = getattr(self, "_analysis_identity", None)
+            if analysis_identity is not None:
+                from pdfacts.backends.analysis_identity import resolve_identity
+
+                source_hash = resolve_identity(*analysis_identity, self._data, bank)
+            elif binding is not None and binding[0] is bank:
+                source_hash = binding[2]
+            else:
+                bank.charge(len(self._data))
+                bank.reserve(256)
+                source_hash = sha256(self._data).hexdigest()
+                self._exact_hash_binding = (bank, self._data, source_hash)
+            parts = []
+            total = 0
+            for member in members:
+                raw = _exact_bounded_decoded_stream(self, member, len(self._data), bank, limits)
+                total += len(raw)
+                check_source_limit("cumulative_decoded_size", total, limits.max_decoded_bytes)
+                self._check_open()
+                parts.append((member.objgen, raw))
+            self._check_open()
+            if self._heard():
+                raise UnsupportedExactSource("source_read_warning")
+            result = (source_hash, objgen, tuple(parts))
+            self.validate_analysis_issuance(analysis_identity, bank)
+            return result
+
+    def exact_numeric_cache(self, bank):
+        """Private pure-number cache, owned by this source and analysis bank."""
+        require_source_runtime()
+        from pdfacts.backends.exact_numbers import _ExactNumberCache
+        from pdfacts.backends.exact_stream import UnsupportedExactSource
+
+        self._check_open()
+        binding = getattr(self, "_exact_numeric_binding", None)
+        if binding is not None and binding[1] is not self._data:
+            raise UnsupportedExactSource("source_bytes_changed")
+        if binding is not None and binding[0] is bank:
+            return binding[2]
+        bank.reserve(128)
+        cache = _ExactNumberCache(bank)
+        self._exact_numeric_binding = (bank, self._data, cache)
+        return cache
 
     def page_painted(self, index: int, cap: int) -> tuple[Painted, ...] | None:
         """For each path PDFium makes of the page's content, in its order,
@@ -3984,3 +4181,403 @@ def _user_unit(value: object) -> tuple[float | None, bool]:
     if number is None or number <= 0:
         return None, True
     return number, False
+
+
+# Private finite-source readers keep all native values inside this backend.
+_EXACT_CHUNK = 65536
+_EXACT_FLATE_FILTERS = (pikepdf.Name.FlateDecode, pikepdf.Name.Fl)
+_REQUIRED_IMAGE_KEYS = (
+    "/Subtype",
+    "/Width",
+    "/Height",
+    "/BitsPerComponent",
+    "/ColorSpace",
+    "/Filter",
+    "/Length",
+)
+
+
+def _exact_require(condition, reason):
+    if not condition:
+        raise UnsupportedExactSource(reason)
+
+
+def decode_exact_name(word, bank):
+    """Validate a bounded source name and retain its exact lexical bytes."""
+    require_source_runtime()
+    bank.reserve(128 + 4 * len(word))
+    bank.charge(len(word))
+    try:
+        value = pikepdf.Object.parse(word)
+    except pikepdf.PdfError as error:
+        raise UnsupportedExactSource("name_encoding") from error
+    if not isinstance(value, pikepdf.Name):
+        raise UnsupportedExactSource("name_encoding")
+    # Preserve exact lexical name bytes, including names that are not UTF-8.
+    # A resource operation rehydrates a native Name only inside this backend.
+    return word
+
+
+def _native_exact_name(name, bank):
+    if type(name) is str:
+        return name
+    if type(name) is not bytes:
+        raise UnsupportedExactSource("resource_name")
+    bank.reserve(1024 + 128 * len(name))
+    bank.charge(len(name))
+    try:
+        value = pikepdf.Object.parse(name)
+    except pikepdf.PdfError as error:
+        raise UnsupportedExactSource("name_encoding") from error
+    if not isinstance(value, pikepdf.Name):
+        raise UnsupportedExactSource("name_encoding")
+    return value
+
+
+class _ExactResources:
+    """Same-source operations whose native resource values never escape."""
+
+    __slots__ = ("_provider", "_resources", "_bank", "_limits")
+
+    def __init__(self, provider, resources, bank, limits):
+        self._provider = provider
+        self._resources = resources
+        self._bank = bank
+        self._limits = limits
+
+    def font_encoding(self, name, bank):
+        self._check(bank)
+        return _exact_font_encoding(
+            self._provider, self._resources, _native_exact_name(name, bank), bank, self._limits
+        )
+
+    def marked_property(self, tag, name, bank):
+        self._check(bank)
+        return _exact_validate_marked_property(
+            self._provider,
+            self._resources,
+            _native_exact_name(tag, bank),
+            _native_exact_name(name, bank),
+            bank,
+        )
+
+    def graphics_state(self, name, bank):
+        self._check(bank)
+        return _exact_validate_graphics_state(
+            self._provider, self._resources, _native_exact_name(name, bank), bank
+        )
+
+    def image_metadata(self, name, bank):
+        self._check(bank)
+        return _exact_image_metadata(
+            self._provider, self._resources, _native_exact_name(name, bank), bank
+        )
+
+    def _check(self, bank):
+        if bank is not self._bank:
+            raise UnsupportedExactSource("resource_bank_binding")
+        self._provider._check_open()
+
+
+def _exact_font_encoding(provider, resources, name, bank, limits):
+    with pikepdf.explicit_conversion():
+        bank.charge(8)
+        bank.reserve(1024)
+        provider._check_open()
+        _exact_require(isinstance(resources, pikepdf.Dictionary), "text_resources")
+        fonts = resources.get("/Font")
+        _exact_require(isinstance(fonts, pikepdf.Dictionary), "text_fonts")
+        _exact_require(isinstance(name, (str, pikepdf.Name)), "text_font_name")
+        font = fonts.get(name)
+        _exact_require(isinstance(font, pikepdf.Dictionary), "text_font_missing")
+        _exact_require(font.get("/Type") == pikepdf.Name("/Font"), "text_font_type")
+        _exact_require(
+            isinstance(font.get("/BaseFont"), pikepdf.Name) and font.get("/BaseFont") != "/",
+            "text_base_font",
+        )
+        subtype = font.get("/Subtype")
+        encoding = font.get("/Encoding")
+        if subtype == pikepdf.Name("/Type0"):
+            _exact_require(encoding == pikepdf.Name("/Identity-H"), "text_encoding")
+            descendants = font.get("/DescendantFonts")
+            _exact_require(
+                isinstance(descendants, pikepdf.Array) and len(descendants) == 1, "text_descendants"
+            )
+            child = descendants[0]
+            _exact_require(
+                isinstance(child, pikepdf.Dictionary)
+                and child.get("/Type") == pikepdf.Name("/Font")
+                and child.get("/Subtype") == pikepdf.Name("/CIDFontType2"),
+                "text_descendant_type",
+            )
+            _exact_require(
+                isinstance(child.get("/BaseFont"), pikepdf.Name) and child.get("/BaseFont") != "/",
+                "text_base_font",
+            )
+            return "identity_h"
+        _exact_require(subtype == pikepdf.Name("/Type1"), "text_font_subtype")
+        if encoding == pikepdf.Name("/WinAnsiEncoding"):
+            return "single_byte"
+        _exact_require(isinstance(encoding, pikepdf.Dictionary), "text_encoding")
+        _exact_require(len(encoding) <= 3, "text_encoding_keys")
+        bank.charge(len(encoding))
+        provider._check_open()
+        _exact_require(
+            all(key in encoding for key in ("/Type", "/BaseEncoding", "/Differences")),
+            "text_encoding_keys",
+        )
+        _exact_require(
+            encoding.get("/Type") == pikepdf.Name("/Encoding")
+            and encoding.get("/BaseEncoding") == pikepdf.Name("/WinAnsiEncoding"),
+            "text_encoding_base",
+        )
+        differences = encoding.get("/Differences")
+        _exact_require(isinstance(differences, pikepdf.Array), "text_differences")
+        check_source_limit("font_differences", len(differences), limits.max_font_differences)
+        bank.charge(len(differences))
+        provider._check_open()
+        code = None
+        for item in differences:
+            if isinstance(item, pikepdf.Integer):
+                item = int(item)
+                _exact_require(0 <= item <= 255, "text_difference_code")
+                code = item
+            else:
+                _exact_require(
+                    isinstance(item, pikepdf.Name) and code is not None and code <= 255,
+                    "text_difference_name",
+                )
+                code += 1
+        return "single_byte"
+
+
+def _exact_named_resource(resources, category, name):
+    _exact_require(isinstance(resources, pikepdf.Dictionary), "resource_dictionary")
+    _exact_require(isinstance(name, (str, pikepdf.Name)), "resource_name")
+    group = resources.get(category)
+    _exact_require(isinstance(group, pikepdf.Dictionary), "resource_category")
+    value = group.get(name)
+    _exact_require(isinstance(value, pikepdf.Dictionary), "resource_entry")
+    return value
+
+
+def _exact_keys(value, keys):
+    return len(value) == len(keys) and all(key in value for key in keys)
+
+
+def _exact_validate_marked_property(provider, resources, tag, name, bank):
+    bank.charge(24)
+    bank.reserve(1024)
+    provider._check_open()
+    with pikepdf.explicit_conversion():
+        _exact_require(isinstance(tag, (str, pikepdf.Name)), "marked_tag")
+        value = _exact_named_resource(resources, "/Properties", name)
+        if tag == pikepdf.Name("/Artifact"):
+            _exact_require(_exact_keys(value, ("/O", "/BBox")), "marked_property_schema")
+            _exact_require(value.get("/O") == pikepdf.Name("/Layout"), "marked_owner")
+            bounds = value.get("/BBox")
+            _exact_require(isinstance(bounds, pikepdf.Array) and len(bounds) == 4, "marked_bounds")
+            _exact_require(
+                all(isinstance(item, (pikepdf.Integer, pikepdf.Real)) for item in bounds),
+                "marked_bounds_number",
+            )
+        elif tag == pikepdf.Name("/P"):
+            _exact_require(_exact_keys(value, ("/Lang", "/MCID")), "marked_property_schema")
+            _exact_require(isinstance(value.get("/Lang"), pikepdf.String), "marked_language_type")
+            identifier = value.get("/MCID")
+            _exact_require(
+                isinstance(identifier, pikepdf.Integer) and 0 <= int(identifier) <= 2147483647,
+                "marked_identifier",
+            )
+        elif tag == pikepdf.Name("/Figure"):
+            _exact_require(len(value) == 1 and "/MCID" in value, "marked_property_schema")
+            identifier = value.get("/MCID")
+            _exact_require(
+                isinstance(identifier, pikepdf.Integer) and 0 <= int(identifier) <= 2147483647,
+                "marked_identifier",
+            )
+        elif tag == pikepdf.Name("/Span"):
+            _exact_require(_exact_keys(value, ("/ActualText",)), "marked_property_schema")
+            _exact_require(
+                isinstance(value.get("/ActualText"), pikepdf.String), "marked_actual_text_type"
+            )
+        else:
+            _exact_require(False, "marked_tag")
+
+
+def _exact_validate_graphics_state(provider, resources, name, bank):
+    bank.charge(24)
+    bank.reserve(1024)
+    provider._check_open()
+    with pikepdf.explicit_conversion():
+        value = _exact_named_resource(resources, "/ExtGState", name)
+        keys = ("/Type", "/OP", "/op", "/OPM", "/SA")
+        _exact_require(
+            len(value) <= len(keys) and sum(key in value for key in keys) == len(value),
+            "graphics_state_keys",
+        )
+        _exact_require(value.get("/Type") == pikepdf.Name("/ExtGState"), "graphics_state_type")
+        for key in ("/OP", "/op", "/SA"):
+            if key in value:
+                _exact_require(
+                    isinstance(value.get(key), pikepdf.Boolean), "graphics_state_boolean"
+                )
+        if "/OPM" in value:
+            mode = value.get("/OPM")
+            _exact_require(
+                isinstance(mode, pikepdf.Integer) and int(mode) in (0, 1),
+                "graphics_state_overprint_mode",
+            )
+
+
+def _exact_image_metadata(provider, resources, name, bank):
+    """Return immutable resource identity and the supported native metadata.
+
+    No image decoding or image-stream copying occurs here. The native adapter
+    must reuse the original complete metadata capture, without a second decode.
+    The reservation covers only the additional resource-schema representation.
+    """
+    bank.reserve(8192)
+    bank.charge(64)
+    provider._check_open()
+    with pikepdf.explicit_conversion():
+        _exact_require(isinstance(resources, pikepdf.Dictionary), "image_resources")
+        _exact_require(isinstance(name, (str, pikepdf.Name)), "image_resource_name")
+        objects = resources.get("/XObject")
+        _exact_require(isinstance(objects, pikepdf.Dictionary), "image_resources")
+        image = objects.get(name)
+        _exact_require(isinstance(image, pikepdf.Stream), "image_resource_entry")
+        properties = image.stream_dict
+        key_count = len(properties)
+        _exact_require(7 <= key_count <= 8, "image_resource_schema")
+        # Never enumerate arbitrary PDF keys: materializing an unknown long key
+        # could exceed the fixed metadata reservation before it is rejected.
+        bank.charge(key_count)
+        provider._check_open()
+        for key in _REQUIRED_IMAGE_KEYS:
+            bank.charge()
+            provider._check_open()
+            _exact_require(key in properties, "image_resource_schema")
+        if key_count == 8:
+            _exact_require("/Type" in properties, "image_resource_schema")
+            _exact_require(properties.get("/Type") == pikepdf.Name("/XObject"), "image_type")
+        _exact_require(properties.get("/Subtype") == pikepdf.Name("/Image"), "image_subtype")
+        _exact_require(properties.get("/Filter") == pikepdf.Name("/FlateDecode"), "image_filter")
+        encoded_length = properties.get("/Length")
+        _exact_require(
+            isinstance(encoded_length, pikepdf.Integer) and int(encoded_length) >= 0, "image_length"
+        )
+        width = properties.get("/Width")
+        height = properties.get("/Height")
+        bits = properties.get("/BitsPerComponent")
+        _exact_require(
+            isinstance(width, pikepdf.Integer) and isinstance(height, pikepdf.Integer),
+            "image_dimensions",
+        )
+        width = int(width)
+        height = int(height)
+        _exact_require(0 < width <= 2147483647 and 0 < height <= 2147483647, "image_dimensions")
+        _exact_require(isinstance(bits, pikepdf.Integer) and int(bits) == 8, "image_bits")
+        colour = properties.get("/ColorSpace")
+        if colour == pikepdf.Name("/DeviceGray"):
+            colour_code, native_bits = 1, 8
+        elif colour == pikepdf.Name("/DeviceRGB"):
+            colour_code, native_bits = 2, 24
+        else:
+            _exact_require(
+                isinstance(colour, pikepdf.Array) and len(colour) == 4, "image_colour_space"
+            )
+            _exact_require(
+                colour[0] == pikepdf.Name("/Indexed") and colour[1] == pikepdf.Name("/DeviceRGB"),
+                "image_colour_space",
+            )
+            highest = colour[2]
+            _exact_require(
+                isinstance(highest, pikepdf.Integer) and 0 <= int(highest) <= 255,
+                "image_palette_index",
+            )
+            # No bytes/str conversion. Palette content validity is not authority.
+            _exact_require(isinstance(colour[3], pikepdf.String), "image_palette_type")
+            colour_code, native_bits = 10, 8
+        identity = image.objgen
+        _exact_require(
+            type(identity) is tuple
+            and len(identity) == 2
+            and type(identity[0]) is int
+            and identity[0] > 0
+            and type(identity[1]) is int
+            and identity[1] >= 0,
+            "image_resource_identity",
+        )
+        return identity, width, height, colour_code, native_bits
+
+
+def _exact_bounded_decoded_stream(provider, stream, source_size, bank, limits):
+    # Reserve the whole original-file upper bound, NOT untrusted /Length alone.
+    # QPDF can repair erroneous lengths. Conservative cost remains explicit.
+    if type(source_size) is not int or source_size <= 0:
+        raise UnsupportedExactSource("encoded_source_bound")
+    check_source_limit("source_bytes", source_size, limits.max_source_bytes)
+    bank.charge()
+    provider._check_open()
+    with pikepdf.explicit_conversion():
+        length = stream.get("/Length")
+        filter_value = stream.get("/Filter")
+        decode_parameters = stream.get("/DecodeParms")
+        if isinstance(length, pikepdf.Integer):
+            bank.reserve(64)
+            bank.charge()
+            provider._check_open()
+            length = int(length)
+
+    if not isinstance(length, int) or isinstance(length, bool) or not 0 <= length <= source_size:
+        raise UnsupportedExactSource("encoded_length")
+    if decode_parameters is not None:
+        raise UnsupportedExactSource("decode_parameters")
+    if filter_value is not None and (
+        not isinstance(filter_value, pikepdf.Name) or filter_value not in _EXACT_FLATE_FILTERS
+    ):
+        raise UnsupportedExactSource("stream_filter")
+    bank.reserve(source_size)
+    provider._check_open()
+    raw = stream.read_raw_bytes()
+    if len(raw) > source_size:
+        raise UnsupportedExactSource("encoded_source_disagreement")
+    bank.charge(len(raw))
+    if filter_value is None:
+        check_source_limit("decoded_size", len(raw), limits.max_decoded_bytes)
+        return raw
+    bank.reserve(1024)
+    decoder = zlib.decompressobj()
+    bank.reserve(64)
+    pieces = []
+    size = 0
+    pending = raw
+    while True:
+        limit = min(_EXACT_CHUNK, limits.max_decoded_bytes - size + 1)
+        bank.reserve(limit + 64)
+        bank.charge()
+        try:
+            part = decoder.decompress(pending, limit)
+        except zlib.error as failure:
+            raise UnsupportedExactSource("flate_decode") from failure
+        size += len(part)
+        check_source_limit("decoded_size", size, limits.max_decoded_bytes)
+        pieces.append(part)
+        # zlib tail property may allocate an encoded-byte copy: reserve before read.
+        bank.reserve(len(pending))
+        bank.charge()
+        pending = decoder.unconsumed_tail
+        if pending:
+            continue
+        if decoder.eof:
+            break
+        # Input exhausted before EOS: no flush that could allocate without a bound.
+        raise UnsupportedExactSource("truncated_flate")
+    bank.reserve(len(raw))
+    bank.charge()
+    if decoder.unused_data:
+        raise UnsupportedExactSource("trailing_flate")
+    bank.reserve(size)
+    bank.charge(len(pieces))
+    return b"".join(pieces)

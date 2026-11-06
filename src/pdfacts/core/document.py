@@ -58,6 +58,7 @@ from pdfacts.core.errors import (
 from pdfacts.core.geometry import Matrix, PageGeometry, Rect
 from pdfacts.core.limits import Limits
 from pdfacts.core.refs import PageRef
+from pdfacts.core.source_runtime import require_source_runtime
 from pdfacts.core.values import Unknown, UnknownReason
 
 HEADER = b"%PDF-"
@@ -289,6 +290,27 @@ class FeatureAccess:
         self._check_forms(index)
         return _pdfium_call(lambda: pdfium.page_drawing(index, cap))
 
+    def capture_page_drawing(self, index: int, cap: int | None, bank, limits):
+        """Private same-read root capture, including ordinary image metadata."""
+        require_source_runtime()
+        from pdfacts.backends.exact_stream import ExactSourceLimit, UnsupportedExactSource
+        from pdfacts.core.errors import SourceEvidenceError
+
+        bank.reserve(128)
+        bank.charge()
+        try:
+            pdfium = self._pdfium_ready()
+            self._check_forms(index)
+            return _pdfium_call(lambda: pdfium.capture_page_drawing(index, cap, bank, limits))
+        except ExactSourceLimit as failure:
+            raise LimitExceededError(
+                limit=failure.limit,
+                allowed=failure.allowed,
+                found=failure.found,
+            ) from failure
+        except UnsupportedExactSource as failure:
+            raise SourceEvidenceError(reason=str(failure)) from failure
+
     def appearance_drawings(
         self, index: int, cap: int | None
     ) -> tuple[AppearanceDrawing | None, ...]:
@@ -316,6 +338,120 @@ class FeatureAccess:
     def page_uses_pattern(self, index: int) -> bool | None:
         """Whether QPDF finds a pattern colour set in the page's content."""
         return _qpdf_call(lambda: self._qpdf_ready().page_uses_pattern(index))
+
+    def exact_root_numbers(self, index: int, bank, *, limits, _capture_token=None):
+        """Private bounded same-provider numeric issuer; no application authority."""
+        require_source_runtime()
+        from pdfacts.backends.exact_stream import ExactSourceLimit, UnsupportedExactSource
+        from pdfacts.core.errors import SourceEvidenceError
+
+        bank.reserve(128)
+        bank.charge()
+        try:
+            from pdfacts.backends.exact_numbers import reconcile_root_paths
+
+            provider = self._qpdf_ready()
+            analysis_identity = getattr(provider, "_analysis_identity", None)
+            try:
+                source_hash, page_ref, member_refs, ledger, emissions = (
+                    provider.exact_source_ledger(index, bank, limits)
+                )
+            except EngineFailure as failure:
+                raise EngineError(engine="qpdf", detail=failure.detail) from failure
+            pdfium = self._pdfium_ready()
+            try:
+                native = (
+                    pdfium.exact_root_inventory(index, bank, limits)
+                    if _capture_token is None
+                    else pdfium.consume_root_capture(index, bank, _capture_token, limits)
+                )
+            except EngineFailure as failure:
+                raise EngineError(engine="pdfium", detail=failure.detail) from failure
+            joined = reconcile_root_paths(ledger, native, bank, emissions, limits=limits)
+            bank.reserve(256)
+            result = (source_hash, page_ref, member_refs, joined)
+            try:
+                provider.validate_analysis_issuance(analysis_identity, bank)
+            except EngineFailure as failure:
+                raise EngineError(engine="qpdf", detail=failure.detail) from failure
+            return result
+        except ExactSourceLimit as failure:
+            raise LimitExceededError(
+                limit=failure.limit,
+                allowed=failure.allowed,
+                found=failure.found,
+            ) from failure
+        except UnsupportedExactSource as failure:
+            raise SourceEvidenceError(reason=str(failure)) from failure
+
+    def consume_staged_root_capture(self, index, bank, token, limits):
+        """Consume the same-read native slot before another page can replace it."""
+        require_source_runtime()
+        try:
+            return self._pdfium_ready().consume_root_capture(index, bank, token, limits)
+        except EngineFailure as failure:
+            raise EngineError(engine="pdfium", detail=failure.detail) from failure
+
+    def complete_staged_root_numbers(self, document, pending_token, bank, *, limits):
+        """Claim opaque authority internally; no caller-supplied Drawing is accepted."""
+        require_source_runtime()
+        from pdfacts.backends.analysis_identity import _abort_staged, _claim_staged, _ready_staged
+        from pdfacts.backends.exact_numbers import reconcile_root_paths
+        from pdfacts.backends.exact_stream import ExactSourceLimit, UnsupportedExactSource
+        from pdfacts.core.errors import SourceEvidenceError
+
+        try:
+            bank.reserve(128)
+            bank.charge()
+            # Exactly one cleanup exit is prepaid, whether claim, parsing or graphics fails.
+            bank.reserve(64)
+            node = _claim_staged(
+                document,
+                pending_token,
+                bank,
+                limits,
+                _STAGED_DOCUMENT_TYPES,
+                _STAGED_PROVIDER_TYPES,
+            )
+            generation = node[1][4]
+            try:
+                provider = self._qpdf_ready()
+                if provider is not node[1][2] or self._pdfium_ready() is not node[1][1]:
+                    raise UnsupportedExactSource("staged_source_binding")
+                try:
+                    source_hash, page_ref, member_refs, ledger, emissions = (
+                        provider.exact_source_ledger(node[1][5], bank, limits)
+                    )
+                except EngineFailure as failure:
+                    raise EngineError(engine="qpdf", detail=failure.detail) from failure
+                joined = reconcile_root_paths(ledger, node[2][3], bank, emissions, limits=limits)
+                # Existing exact-result envelope covers result72 plus return-bundle80.
+                bank.reserve(256)
+                result = (source_hash, page_ref, member_refs, joined)
+                try:
+                    provider.validate_analysis_issuance(node[1][3], bank)
+                except EngineFailure as failure:
+                    raise EngineError(engine="qpdf", detail=failure.detail) from failure
+                _ready_staged(
+                    document,
+                    pending_token,
+                    generation,
+                    result,
+                    bank,
+                    limits,
+                    _STAGED_DOCUMENT_TYPES,
+                    _STAGED_PROVIDER_TYPES,
+                )
+                return node[2][0], node[2][1], node[2][2], result, node[1][5]
+            except BaseException:
+                _abort_staged(generation, pending_token)
+                raise
+        except ExactSourceLimit as failure:
+            raise LimitExceededError(
+                limit=failure.limit, allowed=failure.allowed, found=failure.found
+            ) from failure
+        except UnsupportedExactSource as failure:
+            raise SourceEvidenceError(reason=str(failure)) from failure
 
     def page_painted(self, index: int, cap: int) -> tuple[Painted, ...] | None:
         """The colours QPDF reads for each path of the page's content."""
@@ -966,3 +1102,9 @@ def _qpdf_call[T](call: Callable[[], T]) -> T:
         return call()
     except EngineFailure as failure:
         raise EngineError(engine="qpdf", detail=failure.detail) from failure
+
+
+# Fixed concrete witnesses for private source guards, owned by the layer that
+# defines/imports these classes. No per-operation tuple or caller-derived type.
+_STAGED_DOCUMENT_TYPES = (Document, Page, PageRef)
+_STAGED_PROVIDER_TYPES = (PdfiumDocument, QpdfDocument)

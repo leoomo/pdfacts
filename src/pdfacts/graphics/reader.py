@@ -28,6 +28,7 @@ from pdfacts.core.document import Document
 from pdfacts.core.errors import LimitExceededError
 from pdfacts.core.geometry import Matrix, Point, Quad, Rect
 from pdfacts.core.refs import AnnotationRef, GraphicRef
+from pdfacts.core.source_runtime import require_source_runtime
 from pdfacts.core.strings import decode_name
 from pdfacts.core.values import Unknown, UnknownReason
 from pdfacts.graphics.images import ColourSpace, Image
@@ -92,9 +93,30 @@ def images(document: Document, page_index: int) -> tuple[Image, ...] | Unknown:
     return read if isinstance(read, Unknown) else read[1]
 
 
+def paths_with_root_inventory(
+    document: Document, page_index: int, bank, *, limits, _with_native_capture=False
+):
+    """Private same-read provenance capture, without exact-source authority."""
+    require_source_runtime()
+    if bank is None:
+        raise ValueError("root inventory capture requires the analysis budget")
+    return _read(
+        document,
+        page_index,
+        _capture_bank=bank,
+        _capture_limits=limits,
+        _with_native_capture=_with_native_capture,
+    )
+
+
 def _read(
-    document: Document, page_index: int
-) -> tuple[tuple[Path, ...], tuple[Image, ...]] | Unknown:
+    document: Document,
+    page_index: int,
+    *,
+    _capture_bank=None,
+    _capture_limits=None,
+    _with_native_capture=False,
+):
     if not isinstance(document, Document):
         raise TypeError(f"a document of pdfacts, not {type(document).__name__}")
     page = document.pages[page_index]  # the index checks of Document._page
@@ -116,7 +138,13 @@ def _read(
             return Unknown(
                 _DISAGREE, f"QPDF finds {count} annotations on the page, PDFium {theirs}"
             )
-        content = access.page_drawing(page_index, cap)
+        capture_token = None
+        if _with_native_capture:
+            content, capture_token = access.capture_page_drawing(
+                page_index, cap, _capture_bank, _capture_limits
+            )
+        else:
+            content = access.page_drawing(page_index, cap)
         if content.stopped:
             raise LimitExceededError(limit="max_items_per_page", allowed=cap, found=cap + 1)
         left = None if cap is None else cap - len(content.objects)
@@ -144,7 +172,14 @@ def _read(
         }
     if content.too_deep:
         return Unknown(_UNREADABLE, _TOO_DEEP)
-    out = _Out(page_index)
+    root_capture = None
+    if _capture_bank is not None:
+        # Prepay list storage, all pair tuples, final tuple and fixed overhead.
+        count = len(content.objects)
+        _capture_bank.reserve(512 + 128 * count)
+        _capture_bank.charge(2 * count + 1)
+        root_capture = [None] * count
+    out = _Out(page_index, root_capture)
     for obj, colour in zip(
         content.objects, _colours(pattern, painted, content.objects), strict=True
     ):
@@ -158,13 +193,18 @@ def _read(
         )
         if page_unknown is not None:
             return page_unknown
+    if root_capture is not None:
+        if _with_native_capture:
+            return tuple(out.paths), tuple(out.images), tuple(root_capture), capture_token
+        return tuple(out.paths), tuple(out.images), tuple(root_capture)
     return tuple(out.paths), tuple(out.images)
 
 
 class _Out:
     """The facts made so far, and the next drawing index."""
 
-    def __init__(self, page_index: int) -> None:
+    def __init__(self, page_index: int, root_capture=None) -> None:
+        self.root_capture = root_capture
         self.page_index = page_index
         self.paths: list[Path] = []
         self.images: list[Image] = []
@@ -183,9 +223,15 @@ class _Out:
     ) -> None:
         ref = self.ref(annotation)
         if isinstance(obj, DrawnPath):
-            self.paths.append(_path(obj, matrix, ref, flags, colour))
+            path = _path(obj, matrix, ref, flags, colour)
+            self.paths.append(path)
+            if annotation is None and self.root_capture is not None:
+                self.root_capture[ref.drawing_index] = (obj, path)
         else:
-            self.images.append(_image(obj, matrix, ref, flags))
+            image = _image(obj, matrix, ref, flags)
+            self.images.append(image)
+            if annotation is None and self.root_capture is not None:
+                self.root_capture[ref.drawing_index] = (obj, image)
 
     def unknown(self, annotation: AnnotationRef, why: Unknown) -> None:
         """One path and one image standing for an annotation whose graphics are unknown.
@@ -592,6 +638,10 @@ def _path(
         line_cap=cap,
         line_join=join,
         annotation_flags=flags,
+        source_width=obj.width,
+        source_matrix=matrix,
+        source_level=obj.source_level,
+        source_clip_count=obj.source_clip_count,
     )
 
 

@@ -20,6 +20,44 @@ from typing import Protocol
 Box = tuple[float, float, float, float]
 
 
+class OperationBudget(Protocol):
+    """Caller-owned cumulative accounting; exhaustion exceptions propagate."""
+
+    def reserve(self, cost: int) -> None: ...
+
+    def charge(self, cost: int = 1) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class SourceEvidenceLimits:
+    """Explicit caller limits for private source-certificate reads."""
+
+    max_source_bytes: int
+    max_decoded_bytes: int
+    max_content_bytes: int
+    max_streams: int
+    max_instructions: int
+    max_paths: int
+    max_root_objects: int
+    max_path_segments: int
+    max_token_bytes: int
+    max_token_depth: int
+    max_graphics_depth: int
+    max_marked_depth: int
+    max_resource_depth: int
+    max_font_differences: int
+    max_text_array_items: int
+    max_payload_depth: int
+
+    def __post_init__(self):
+        for name in self.__slots__:
+            value = getattr(self, name)
+            if type(value) is not int or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+        if self.max_payload_depth > 32:
+            raise ValueError("max_payload_depth exceeds the bounded payload representation")
+
+
 class FailureKind(StrEnum):
     # The engine could not read the file.
     FORMAT = "format"
@@ -416,6 +454,8 @@ class DrawnPath:
     dash_phase: float | None
     cap: int | None  # FPDF_LINECAP_*
     join: int | None  # FPDF_LINEJOIN_*
+    source_level: int = -1
+    source_clip_count: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -444,6 +484,7 @@ class Drawing:
     # Set when a form lies deeper than PDFium reads forms, 40 levels: it is an
     # object without children, and what it draws is not among the objects.
     too_deep: bool
+    root_object_types: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)

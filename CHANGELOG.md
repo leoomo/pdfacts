@@ -8,6 +8,33 @@ may break callers.
 
 ### Added
 
+- Private mixed-root inventory size lookup returns the authenticated page index
+  and root count under the original analysis identity and budget. Pending,
+  absent and path-only tokens are refused; counts grant no geometry authority.
+
+- Private mixed-root completion accepts source-validated empty graphical
+  inventories, returning `None` after consuming the pending claim; text-only
+  pages do not acquire blankness or writing authority.
+
+- Private mixed-root support completion retains exact image matrix/clip source
+  association alongside paths, using the original single-use capture and budget.
+  Mixed support batches and path-only batches reject cross-use; existing eager
+  and path-only completion contracts are unchanged.
+
+- Private staged root-source capture and completion preserve original graphics
+  objects across page reads under one analysis budget. Pending tokens are
+  single-use, and final publication rejects closed or revoked analyses.
+
+- Private source certification is restricted to its proved CPython3.13.5
+  allocation layout. Other runtimes receive a typed source failure while
+  ordinary library features retain their existing runtime support.
+
+- Private source-association evidence for supported root graphics, with caller-owned
+  cumulative budgets and explicit limits. Source errors cross the feature boundary
+  as `SourceEvidenceError` or the existing limit errors.
+- Optional raw stroke/transform provenance on `Path`, and root capture metadata
+  on backend drawing records. Existing shape and drawing-order rules remain intact.
+
 - `TextRules`, with `V1` (M4a's rules) and `V2`, and `rules` of `glyphs()`:
   `glyphs(document, page_index, rules=TextRules.V2)` gives the codes the
   content shows, read on QPDF's tokens, white space included. `V1` stays the
