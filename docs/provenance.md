@@ -55,6 +55,8 @@ This document is an engineering rule, not legal advice.
 | 2026-11-06 | `backends/finite_content.py` (compact scanner accounting) | official CPython 3.13.5 `Objects/longobject.c` (PSF license) | compact add/subtract return cached small results directly; noncompact subtraction may allocate before normalization; no code copied |
 | 2026-11-06 | `backends/finite_content.py` (common-operator scan) | official CPython 3.13.5 `Python/ceval.c`, `Python/bytecodes.c`, `Objects/tupleobject.c`, `Objects/object.c`, `Objects/bytes_methods.c` and `Objects/clinic/bytesobject.c.h` (PSF license) | cold pair unpacking may create an additional tuple iterator; constant indexing avoids that construction; exact-byte method lookup and comparison create no additional container; no code copied |
 
+| 2026-11-06 | `graphics/source_evidence.py` (tuple and refusal accounting) | official CPython 3.13.5 `Objects/frameobject.c`, `Include/internal/pycore_frame.h`, `Python/traceback.c`, `Objects/exceptions.c` and `Include/cpython/pyerrors.h` (PSF license), read in independent review | materialized frame slots include locals, cells, free variables and stack; traceback and exception structures bound the local refusal inventory; no code copied |
+
 ## Knowledge gathered before the first implementation
 
 Recorded so that later modules can cite it.

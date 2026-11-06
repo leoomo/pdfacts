@@ -63,6 +63,10 @@ may break callers.
 
 ### Changed
 
+- Private evidence tuple traversal uses smaller control prepayments for cached
+  lengths, retains large-tuple costs and prepays bounded local refusal frames
+  independently. Payload validation and native comparisons remain mandatory.
+
 - Short source-scalar copies avoid a redundant fee-formula reservation while
   retaining copy/decoder costs and restoring the original reserved-literal
   refusal allowance. Longer scalars and caller capacities are unchanged.

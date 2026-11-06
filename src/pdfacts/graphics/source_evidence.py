@@ -72,6 +72,8 @@ _IMAGE_SOURCE_FIELDS = (
     "bits_per_pixel",
 )
 _SCALAR_TYPES = (type(None), bool, int, str, bytes)
+# Bounded local exception/frame inventory: docs/design/source-tuple-accounting.md.
+_PAYLOAD_REFUSAL_BYTES = 32768
 _REQUIRED_PATH_FIELDS = (
     "subpaths",
     "fill",
@@ -88,15 +90,19 @@ _REQUIRED_PATH_FIELDS = (
 def _freeze(value, bank, limits, depth=0, matrix_hint=None):
     """Prepay additional representation allocations before constructing them."""
     bank.charge(2)
-    if depth > limits.max_payload_depth:
-        check_source_limit("evidence_payload_depth", depth, limits.max_payload_depth)
+    allowed = limits.max_payload_depth
+    if depth > allowed:
+        bank.reserve(_PAYLOAD_REFUSAL_BYTES)
+        check_source_limit("evidence_payload_depth", depth, allowed)
     if matrix_hint is not None:
         bank.charge(2)
         if value is matrix_hint[0]:
             # The qualified six-Fraction input has height one. Fractions are
             # atomic inputs even though their frozen representations are tuples.
-            if depth >= limits.max_payload_depth:
-                check_source_limit("evidence_payload_depth", depth + 1, limits.max_payload_depth)
+            allowed = limits.max_payload_depth
+            if depth >= allowed:
+                bank.reserve(_PAYLOAD_REFUSAL_BYTES)
+                check_source_limit("evidence_payload_depth", depth + 1, allowed)
             return matrix_hint[1]
     if type(value) in _SCALAR_TYPES:
         return value
@@ -107,13 +113,16 @@ def _freeze(value, bank, limits, depth=0, matrix_hint=None):
         return ("fraction", value.numerator, value.denominator)
     if type(value) is float:
         if not isfinite(value):
+            bank.reserve(_PAYLOAD_REFUSAL_BYTES)
             raise UnsupportedExactSource("path_evidence_nonfinite")
         return value
     if type(value) is not tuple:
+        bank.reserve(_PAYLOAD_REFUSAL_BYTES)
         raise UnsupportedExactSource("path_evidence_payload_domain")
-    bank.reserve(192)
+    bank.reserve(64)
     count = len(value)
     if count > 256:
+        bank.reserve(128)
         bank.reserve(36 * (count - 256))
     bank.charge(count)
     items = None
@@ -143,8 +152,10 @@ def _same_native(left, right, bank):
         return left == right
     if type(left) is not tuple:
         return left == right
-    bank.reserve(192)
+    bank.reserve(64)
     count = len(left)
+    if count > 256:
+        bank.reserve(128)
     if count != len(right):
         return False
     if count > 256:
